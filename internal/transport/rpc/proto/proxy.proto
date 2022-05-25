@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package proxy;
+option go_package = ".;proxy";
+
+service Proxy{
+  rpc DnsResolve(stream DnsRequest) returns (stream DnsResponse) {};
+  rpc Proxy(stream ProxySRC) returns (stream ProxyDST) {};
+}
+
+message ProxySRC{
+  // user id
+  string uuid = 1;
+  // fqdn
+  string fqdn = 2;
+  // port
+  uint32 port = 3;
+  // bytes
+  bytes data = 4;
+}
+
+enum ProxyStatus{
+  Error     = 0;
+  Accepted  = 1;
+  Session   = 3;
+  EOF       = 4;
+}
+
+message ProxyDST{
+  // status
+  ProxyStatus status = 1;
+  // data bytes
+  bytes data = 2; // EOF if failed
+  // bind addr
+  string addr = 3;
+}
+
+message DnsRequest{
+  // user uuid
+  string uuid = 1;
+  // fqdn name
+  string fqdn = 2;
+  // enable ipv6
+  bool ipv6 = 3;
+}
+
+message DnsResponse{
+  // fqdn name
+  string domain = 1;
+  // fqdn resolved result
+  string result = 2;
+}
