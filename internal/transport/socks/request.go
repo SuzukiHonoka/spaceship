@@ -168,8 +168,9 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 	log.Printf("socks: %s:%d -> rpc\n", target, req.DestAddr.Port)
 	localAdder := make(chan string)
 	stopped := make(chan struct{})
+	gconn, client := rpc.NewClient()
 	go func() {
-		err := rpc.NewClient().Proxy(localAdder, conn, req.bufConn, target, req.DestAddr.Port)
+		err := client.Proxy(localAdder, conn, req.bufConn, target, req.DestAddr.Port)
 		if err != nil {
 			log.Printf("rpc proxy failed: %v\n", err)
 		}
@@ -189,9 +190,9 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 	if err := sendReply(conn, successReply, &bind); err != nil {
 		return fmt.Errorf("failed to send reply: %v", err)
 	}
-	log.Printf("proxy local addr: %s\n", local)
+	//log.Printf("proxy local addr: %s\n", local)
 	<-stopped
-	log.Println("proxy local end")
+	//log.Println("proxy local end")
 	//errCh := make(chan error, 2)
 	//go proxy(target, req.bufConn, errCh)
 	//go proxy(conn, target, errCh)
@@ -204,6 +205,7 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 	//		return e
 	//	}
 	//}
+	_ = gconn.Close()
 	return nil
 }
 

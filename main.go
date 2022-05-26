@@ -25,6 +25,7 @@ func main() {
 		util.StopIfError(err)
 		log.Printf("rpc started at %s", c.Listen)
 		log.Fatal(s.Serve(l))
+
 	case config.RoleClient:
 		// client start
 		log.Println("client starting")

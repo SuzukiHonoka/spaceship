@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	server2 "spaceship/internal/config/server"
+	"spaceship/internal/transport"
 	proxy "spaceship/internal/transport/rpc/proto"
 )
 
@@ -21,7 +22,7 @@ func NewServer(users []server2.User) *grpc.Server {
 		panic("users can not be empty")
 	}
 	// create server and register
-	s := grpc.NewServer()
+	s := grpc.NewServer(grpc.ReadBufferSize(0), grpc.WriteBufferSize(0))
 	// setup user map
 	usersMap := make(map[string]bool, len(users))
 	for _, user := range users {
@@ -34,7 +35,8 @@ func NewServer(users []server2.User) *grpc.Server {
 func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 	//log.Println("rpc server incomes")
 	// tx/rx interact counter
-	counter := 0
+	//counter := 0
+	var handshake bool
 	// outer connection
 	var conn net.Conn
 	// block main until canceled
@@ -42,7 +44,7 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 	// read from target and send back to rpc caller
 	go func() {
 		// buffer
-		buf := make([]byte, 4*1024) // 4K
+		buf := make([]byte, transport.BufferSize)
 		// only start if ack succeed
 		status := <-ack
 		if !status {
@@ -63,12 +65,12 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 			log.Printf("read target error: %v\n", err)
 			return
 		}
-		log.Println("reading from target connection started")
+		//log.Println("reading from target connection started")
 		for {
 			select {
 			case <-quit:
 				buf = nil
-				log.Println("grpc receiver target reader stopped")
+				//log.Println("grpc receiver target reader stopped")
 				return
 			default:
 				//log.Println("rpc server: target reading")
@@ -85,7 +87,7 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 					buf = nil
 					// free the main
 					quit <- struct{}{}
-					log.Printf("read target error: %v\n", err)
+					//log.Printf("read target error: %v\n", err)
 					return
 				}
 				//log.Println("target read period finish")
@@ -104,12 +106,14 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 					log.Printf("send reply to client failed: %v\n", err)
 					return
 				}
-				counter++
+				//counter++
 			}
 		}
 	}()
 	// reading from rpc caller
 	go func() {
+		var req *proxy.ProxySRC
+		var err error
 		for {
 			select {
 			case <-quit:
@@ -118,31 +122,33 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 			default:
 				//log.Println("rpc server receiving..")
 				// receive the request and possible error from the stream object
-				req, err := stream.Recv()
+				req, err = stream.Recv()
 				// if there are no more requests, we return
 				if err == io.EOF {
+					req = nil
 					// free the main
 					quit <- struct{}{}
 					return
 				}
 				// handle error from the stream object
 				if err != nil {
-					log.Printf("Error when reading client request stream: %v\n", err)
+					req = nil
 					// free the main
 					quit <- struct{}{}
+					log.Printf("Error when reading client request stream: %v\n", err)
 					return
 				}
-				log.Println("rpc server proxy received ->", req.Fqdn)
 				// check user
 				if _, ok := s.Users[req.Uuid]; !ok {
-					log.Printf("unauthticated uuid: %s", req.Uuid)
 					// free the main
+					req = nil
 					quit <- struct{}{}
+					log.Printf("unauthticated uuid: %s", req.Uuid)
 					return
 				}
 				//log.Println("authentication accepted")
 				// if first ack
-				if counter == 0 {
+				if !handshake {
 					//log.Printf("testing if ok: %s:%d\n", req.Fqdn, req.Port)
 					// finally create the dialer
 					var target string
@@ -158,31 +164,31 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 					conn, err = net.Dial("tcp", target)
 					// dialer dial failed
 					if sendErrorStatusIfError(err, stream) {
-						log.Println("dialer err")
 						// ack failed
 						ack <- false
+						req = nil
 						// free the main
 						quit <- struct{}{}
+						log.Println("dialer err")
 						return
 					}
 					//log.Printf("test ok: %s\n", req.Fqdn)
 					// trigger read
 					ack <- true
-					counter++
+					handshake = true
+					log.Println("rpc server proxy received ->", req.Fqdn)
 				}
 				// after first ack
 				if req.Data == nil {
 					continue
 				}
-				data := req.Data
 				//log.Printf("RX: %s", string(data))
-				n, err := conn.Write(data)
-				if err != nil || n != len(data) {
+				n, err := conn.Write(req.Data)
+				if err != nil || n != len(req.Data) {
 					log.Printf("Error when sending client request to target stream: %v\n", err)
-					<-quit
+					quit <- struct{}{}
 					return
 				}
-				counter++
 			}
 		}
 	}()
