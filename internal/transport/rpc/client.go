@@ -71,7 +71,7 @@ func (c *Client) Proxy(localAddr chan string, dst io.Writer, src io.Reader, fqdn
 		for {
 			select {
 			case <-cancel:
-				log.Println("rpc client finished")
+				//log.Println("rpc client finished")
 				return
 			default:
 				//log.Println("rcp client reading..")
@@ -109,7 +109,7 @@ func (c *Client) Proxy(localAddr chan string, dst io.Writer, src io.Reader, fqdn
 					if errRecv != nil || n != len(res.Data) {
 						cancel <- struct{}{}
 						res = nil
-						log.Printf("send to dst failed: %v\n", err)
+						log.Printf("send to dst failed: %v\n", errRecv)
 					}
 					//log.Println("dst sent")
 				}
