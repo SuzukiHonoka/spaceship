@@ -33,7 +33,8 @@ func NewClient() (*grpc.ClientConn, *Client) {
 	}
 	conn, err := grpc.Dial(ClientConfig.ServerAddr, grpc.WithTransportCredentials(credential))
 	if err != nil {
-		log.Fatalf("Error connect to server failed: %v", err)
+		log.Printf("Error connect to server failed: %v", err)
+		return nil, nil
 	}
 	//defer conn.Close()
 	return conn, &Client{proxy.NewProxyClient(conn)}

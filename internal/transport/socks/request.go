@@ -169,6 +169,13 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 	localAdder := make(chan string)
 	stopped := make(chan struct{})
 	gconn, client := rpc.NewClient()
+	// if grpc connection failed
+	if gconn == nil {
+		if err := sendReply(conn, serverFailure, nil); err != nil {
+			return fmt.Errorf("failed to send reply: %v", err)
+		}
+		return nil
+	}
 	go func() {
 		err := client.Proxy(localAdder, conn, req.bufConn, target, req.DestAddr.Port)
 		if err != nil {
