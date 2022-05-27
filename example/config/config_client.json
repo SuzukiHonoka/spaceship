@@ -1,0 +1,7 @@
+{
+  "role": "client",
+  "server_addr": "127.0.0.1:12345",
+  "uuid": "uuid",
+  "listen_socks": "0.0.0.0:1089",
+  "tls": true
+}

@@ -1,0 +1,9 @@
+{
+  "role": "server",
+  "listen": "0.0.0.0:12345",
+  "users": [
+    {
+      "uuid": "uuid"
+    }
+  ]
+}
