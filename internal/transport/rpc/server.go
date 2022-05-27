@@ -9,6 +9,7 @@ import (
 	server2 "spaceship/internal/config/server"
 	"spaceship/internal/transport"
 	proxy "spaceship/internal/transport/rpc/proto"
+	"time"
 )
 
 type server struct {
@@ -160,7 +161,12 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 							target = fmt.Sprintf("[%s]:%d", req.Fqdn, req.Port)
 						}
 					}
-					conn, err = net.Dial("tcp", target)
+					// use custom dialer with 1 minute timeout
+					d := net.Dialer{
+						Timeout: 3 * time.Minute,
+					}
+					// dial to target
+					conn, err = d.Dial("tcp", target)
 					// dialer dial failed
 					if sendErrorStatusIfError(err, stream) {
 						// ack failed
