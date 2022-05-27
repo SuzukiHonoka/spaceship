@@ -90,7 +90,7 @@ func (c *Client) Proxy(localAddr chan string, dst io.Writer, src io.Reader, fqdn
 					log.Printf("Error when receiving rpc response: %v", errRecv)
 					return
 				}
-				//log.Printf("rpc client on receive: %d\n", res.Status)
+				//log.Printf("rpc client on receive: %d", res.Status)
 				switch res.Status {
 				case proxy.ProxyStatus_EOF:
 					res = nil
@@ -109,7 +109,7 @@ func (c *Client) Proxy(localAddr chan string, dst io.Writer, src io.Reader, fqdn
 					if errRecv != nil || n != len(res.Data) {
 						cancel <- struct{}{}
 						res = nil
-						log.Printf("send to dst failed: %v\n", errRecv)
+						log.Printf("send to dst failed: %v", errRecv)
 					}
 					//log.Println("dst sent")
 				}
@@ -135,7 +135,6 @@ func (c *Client) Proxy(localAddr chan string, dst io.Writer, src io.Reader, fqdn
 					log.Printf("Error when receiving response: %v", err)
 					return
 				}
-				//log.Printf("TX: %s\n", string(buf[:n]))
 				// send to rpc
 				err = stream.Send(&proxy.ProxySRC{
 					Uuid: ClientConfig.UUID,

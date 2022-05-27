@@ -62,7 +62,7 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 			// free the main
 			buf = nil
 			quit <- struct{}{}
-			log.Printf("read target error: %v\n", err)
+			log.Printf("read target error: %v", err)
 			return
 		}
 		//log.Println("reading from target connection started")
@@ -102,7 +102,7 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 					buf = nil
 					// free the main
 					quit <- struct{}{}
-					log.Printf("send reply to client failed: %v\n", err)
+					log.Printf("send reply to client failed: %v", err)
 					return
 				}
 				//counter++
@@ -134,7 +134,7 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 					req = nil
 					// free the main
 					quit <- struct{}{}
-					log.Printf("Error when reading client request stream: %v\n", err)
+					log.Printf("Error when reading client request stream: %v", err)
 					return
 				}
 				// check user
@@ -148,7 +148,7 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 				//log.Println("authentication accepted")
 				// if first ack
 				if !handshake {
-					//log.Printf("testing if ok: %s:%d\n", req.Fqdn, req.Port)
+					//log.Printf("testing if ok: %s:%d", req.Fqdn, req.Port)
 					// finally create the dialer
 					var target string
 					if ip := net.ParseIP(req.Fqdn); ip == nil {
@@ -171,7 +171,7 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 						log.Println("dialer err")
 						return
 					}
-					//log.Printf("test ok: %s\n", req.Fqdn)
+					//log.Printf("test ok: %s", req.Fqdn)
 					// trigger read
 					ack <- true
 					handshake = true
@@ -185,7 +185,7 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 				n, err := conn.Write(req.Data)
 				if err != nil || n != len(req.Data) {
 					quit <- struct{}{}
-					log.Printf("Error when sending client request to target stream: %v\n", err)
+					log.Printf("Error when sending client request to target stream: %v", err)
 					if err = conn.Close(); err != nil {
 						log.Printf("close target connection error: %v", err)
 					}
@@ -201,7 +201,7 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 	})
 	// stop if send rpc failed
 	if err != nil {
-		log.Printf("send reply to client failed: %v\n", err)
+		log.Printf("send reply to client failed: %v", err)
 	}
 	return nil
 }
