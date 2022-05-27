@@ -77,17 +77,16 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 				// read reply to buffer
 				n, err := conn.Read(buf)
 				// if failed
-				if err == io.EOF {
-					buf = nil
-					// free the main
-					quit <- struct{}{}
-					return
-				}
 				if err != nil {
+					// free buffer
 					buf = nil
 					// free the main
 					quit <- struct{}{}
-					//log.Printf("read target error: %v\n", err)
+					log.Printf("read target error: %v", err)
+					// close target connection
+					if err = conn.Close(); err != nil {
+						log.Printf("close target connection error: %v", err)
+					}
 					return
 				}
 				//log.Println("target read period finish")
@@ -185,8 +184,11 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 				//log.Printf("RX: %s", string(data))
 				n, err := conn.Write(req.Data)
 				if err != nil || n != len(req.Data) {
-					log.Printf("Error when sending client request to target stream: %v\n", err)
 					quit <- struct{}{}
+					log.Printf("Error when sending client request to target stream: %v\n", err)
+					if err = conn.Close(); err != nil {
+						log.Printf("close target connection error: %v", err)
+					}
 					return
 				}
 			}
