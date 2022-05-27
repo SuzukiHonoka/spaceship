@@ -6,11 +6,13 @@ import (
 	"os"
 	"spaceship/internal/config/client"
 	"spaceship/internal/config/server"
+	"spaceship/internal/dns"
 	"spaceship/internal/util"
 )
 
 type Config struct {
 	Role
+	*dns.DNS `json:"dns,omitempty"`
 	client.Client
 	server.Server
 }
