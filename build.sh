@@ -9,6 +9,7 @@ for s in "${OS[@]}"; do
       out="${out}.exe"
     fi;
     GOOS=$s GOARCH=$a go build -ldflags "-s -w" -o "$out".
+    chmod +x "$out"
     echo "build for $s $a complete"
   done
 done
