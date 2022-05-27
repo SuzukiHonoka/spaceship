@@ -15,11 +15,18 @@ import (
 const VersionName = "1.0"
 
 func main() {
+	// first prompt
 	fmt.Printf("spaceship v%s ", VersionName)
-	fmt.Println("for personal use only, without any warranty, any illegal action made by using this program is on your own.")
+	fmt.Println("for personal use only, without any warranty, any illegal action made by using this program are on your own.")
+	// load configuration
 	configPath := flag.String("c", "./config.json", "config path")
 	flag.Parse()
 	c := config.Load(*configPath)
+	// set default dns if configured
+	if c.DNS != nil {
+		c.DNS.SetDefault()
+	}
+	// switch role
 	switch c.Role {
 	case config.RoleServer:
 		// server start
@@ -42,5 +49,7 @@ func main() {
 			TLS:         c.TLS,
 		}
 		log.Fatal(s.ListenAndServe("tcp", c.ListenSocks))
+	default:
+		panic("unrecognized role")
 	}
 }
