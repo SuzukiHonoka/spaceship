@@ -1,5 +1,5 @@
 #sh
-OS=("linux" "windows")
+OS=("linux" "windows" "android")
 ARCH=("arm64" "amd64")
 
 for s in "${OS[@]}"; do
@@ -10,6 +10,6 @@ for s in "${OS[@]}"; do
     fi;
     GOOS=$s GOARCH=$a go build -ldflags "-s -w" -o "$out".
     chmod +x "$out"
-    echo "build for $s $a complete"
+    echo "build process for $s $a complete"
   done
 done
