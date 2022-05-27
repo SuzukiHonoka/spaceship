@@ -129,11 +129,6 @@ func (c *Client) Proxy(localAddr chan string, dst io.Writer, src io.Reader, fqdn
 				//log.Println("rpc client sending...")
 				//read from src
 				n, err := src.Read(buf)
-				if err == io.EOF {
-					buf = nil
-					cancel <- struct{}{}
-					return
-				}
 				if err != nil {
 					buf = nil
 					cancel <- struct{}{}
