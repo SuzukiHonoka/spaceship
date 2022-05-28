@@ -23,11 +23,6 @@ func main() {
 	configPath := flag.String("c", "./config.json", "config path")
 	flag.Parse()
 	c := config.Load(*configPath)
-	// check uuid format
-	_, err := uuid.Parse(c.UUID)
-	if err != nil {
-		log.Printf("current uuid setting is not a valid uuid: %v, using simple text as uuid now is accepted but use it at your own risk", err)
-	}
 	// set default dns if configured
 	if c.DNS != nil {
 		c.DNS.SetDefault()
@@ -45,6 +40,11 @@ func main() {
 		log.Fatal(s.Serve(l))
 
 	case config.RoleClient:
+		// check uuid format
+		_, err := uuid.Parse(c.UUID)
+		if err != nil {
+			log.Printf("current uuid setting is not a valid uuid: %v, using simple text as uuid now is accepted but use it at your own risk", err)
+		}
 		// client start
 		log.Println("client starting")
 		s := socks.New(&socks.Config{})
