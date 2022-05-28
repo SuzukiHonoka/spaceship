@@ -13,18 +13,18 @@ Usage of ./spaceship:
   -c string
     	config path (default "./config.json")
 ```
-The spaceship server and client configuration example is now added in repo/example/config
+The spaceship server and client configuration example are now added in repo/example/config
 
 ## Nginx Reserve Proxy Configuration
 ```nginx
 ...
-    location /proxy. {
+    location /proxy. {  
         grpc_read_timeout 3600s;
-	    grpc_pass grpc://127.0.0.1:12345;
+        grpc_pass grpc://127.0.0.1:12345;
     }
 ...
 ```
-* proxy is the curren proto source package name
+* `proxy` is the current proto source package name
 
 ## Safety
 Since it only uses pure grpc with insecure option for now, you should really set up a reserve proxy with TLS for real 
@@ -40,6 +40,6 @@ The program is still under developing, any PR are warmly welcomed.
 - integrate common transfer interface 
 
 ## Legal statement
-This program now only available for the repo members, sharing it to any other one is strongly forbidden.
-Also, while you using the program, you must obey the laws in your current living country.  
-**ANY ILLEGAL MADE BY USING THIS PROGRAM ARE ON YOUR OWN**
+This program now only available for the repo members, sharing it to any other one is strongly forbidden.  
+Also, while you are using the program, you must obey the laws in your current living country.  
+**ANY ILLEGAL ACTION MADE BY USING THIS PROGRAM ARE ON YOUR OWN**
