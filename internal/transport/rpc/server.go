@@ -63,7 +63,7 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 			// free the main
 			buf = nil
 			quit <- struct{}{}
-			log.Printf("read target error: %v", err)
+			log.Printf("send target info error: %v", err)
 			return
 		}
 		//log.Println("reading from target connection started")
@@ -83,7 +83,9 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 					buf = nil
 					// free the main
 					quit <- struct{}{}
-					log.Printf("read target error: %v", err)
+					if err != io.EOF {
+						log.Printf("read target error: %v", err)
+					}
 					// close target connection
 					if err = conn.Close(); err != nil {
 						log.Printf("close target connection error: %v", err)
@@ -124,18 +126,14 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 				// receive the request and possible error from the stream object
 				req, err = stream.Recv()
 				// if there are no more requests, we return
-				if err == io.EOF {
-					req = nil
-					// free the main
-					quit <- struct{}{}
-					return
-				}
 				// handle error from the stream object
 				if err != nil {
 					req = nil
 					// free the main
 					quit <- struct{}{}
-					log.Printf("Error when reading client request stream: %v", err)
+					if err != io.EOF {
+						log.Printf("error when reading client request stream: %v", err)
+					}
 					return
 				}
 				// check user
@@ -191,7 +189,7 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 				n, err := conn.Write(req.Data)
 				if err != nil || n != len(req.Data) {
 					quit <- struct{}{}
-					log.Printf("Error when sending client request to target stream: %v", err)
+					log.Printf("error when sending client request to target stream: %v", err)
 					if err = conn.Close(); err != nil {
 						log.Printf("close target connection error: %v", err)
 					}

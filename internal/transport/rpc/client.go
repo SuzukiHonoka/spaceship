@@ -33,7 +33,7 @@ func NewClient() (*grpc.ClientConn, *Client) {
 	}
 	conn, err := grpc.Dial(ClientConfig.ServerAddr, grpc.WithTransportCredentials(credential))
 	if err != nil {
-		log.Printf("Error connect to server failed: %v", err)
+		log.Printf("connect to server failed: %v", err)
 		return nil, nil
 	}
 	//defer conn.Close()
@@ -78,16 +78,13 @@ func (c *Client) Proxy(localAddr chan string, dst io.Writer, src io.Reader, fqdn
 				// Get response and possible error message from the stream
 				res, errRecv = stream.Recv()
 				// Break for loop if there are no more response messages
-				if errRecv == io.EOF {
-					res = nil
-					cancel <- struct{}{}
-					return
-				}
 				// Handle a possible error
 				if errRecv != nil {
 					res = nil
 					cancel <- struct{}{}
-					log.Printf("Error when receiving rpc response: %v", errRecv)
+					if errRecv != io.EOF {
+						log.Printf("error when receiving rpc response: %v", errRecv)
+					}
 					return
 				}
 				//log.Printf("rpc client on receive: %d", res.Status)
@@ -132,7 +129,9 @@ func (c *Client) Proxy(localAddr chan string, dst io.Writer, src io.Reader, fqdn
 				if err != nil {
 					buf = nil
 					cancel <- struct{}{}
-					log.Printf("Error when receiving response: %v", err)
+					if err != io.EOF {
+						log.Printf("error when receiving socks response: %v", err)
+					}
 					return
 				}
 				// send to rpc
