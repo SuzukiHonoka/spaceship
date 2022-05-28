@@ -1,12 +1,12 @@
 [Unit]
 Description=Spaceship Service
-After=network.target nss-lookup.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 User=root
 ExecStart=/opt/spaceship/spaceship -c /opt/spaceship/config.json
 Restart=on-failure
-RestartPreventExitStatus=23
 
 [Install]
 WantedBy=multi-user.target
