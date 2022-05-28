@@ -13,7 +13,7 @@ type DNS struct {
 }
 
 func (s *DNS) SetDefault() {
-	if s.Type != TypeCommon {
+	if s.Type != "" && s.Type != TypeCommon {
 		panic("not implemented")
 	}
 	net.DefaultResolver = &net.Resolver{
