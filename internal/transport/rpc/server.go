@@ -1,12 +1,11 @@
 package rpc
 
 import (
-	"fmt"
 	"google.golang.org/grpc"
 	"io"
 	"log"
 	"net"
-	server2 "spaceship/internal/config/server"
+	serverConf "spaceship/internal/config/server"
 	"spaceship/internal/transport"
 	proxy "spaceship/internal/transport/rpc/proto"
 	"time"
@@ -17,7 +16,7 @@ type server struct {
 	Users map[string]bool
 }
 
-func NewServer(users []server2.User) *grpc.Server {
+func NewServer(users []serverConf.User) *grpc.Server {
 	// check users
 	if users == nil || len(users) == 0 {
 		panic("users can not be empty")
@@ -35,8 +34,6 @@ func NewServer(users []server2.User) *grpc.Server {
 
 func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 	//log.Println("rpc server incomes")
-	// tx/rx interact counter
-	//counter := 0
 	var handshake bool
 	// outer connection
 	var conn net.Conn
@@ -44,12 +41,9 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 	quit, ack := make(chan interface{}), make(chan bool)
 	// read from target and send back to rpc caller
 	go func() {
-		// buffer
-		buf := make([]byte, transport.BufferSize)
 		// only start if ack succeed
 		status := <-ack
 		if !status {
-			buf = nil
 			log.Println("ack failed")
 			return
 		}
@@ -61,11 +55,12 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 		})
 		if err != nil {
 			// free the main
-			buf = nil
 			quit <- struct{}{}
 			log.Printf("send target info error: %v", err)
 			return
 		}
+		// buffer
+		buf := make([]byte, transport.BufferSize)
 		//log.Println("reading from target connection started")
 		for {
 			select {
@@ -79,8 +74,6 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 				n, err := conn.Read(buf)
 				// if failed
 				if err != nil {
-					// free buffer
-					buf = nil
 					// free the main
 					quit <- struct{}{}
 					if err != io.EOF {
@@ -98,13 +91,11 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 				})
 				// stop if send rpc failed
 				if err != nil {
-					buf = nil
 					// free the main
 					quit <- struct{}{}
 					log.Printf("send reply to client failed: %v", err)
 					return
 				}
-				//counter++
 			}
 		}
 	}()
@@ -124,7 +115,6 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 				// if there are no more requests, we return
 				// handle error from the stream object
 				if err != nil {
-					req = nil
 					// free the main
 					quit <- struct{}{}
 					if err != io.EOF {
@@ -135,7 +125,6 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 				// check user
 				if _, ok := s.Users[req.Uuid]; !ok {
 					// free the main
-					req = nil
 					quit <- struct{}{}
 					log.Printf("unauthticated uuid: %s", req.Uuid)
 					return
@@ -145,27 +134,13 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 				if !handshake {
 					//log.Printf("testing if ok: %s:%d", req.Fqdn, req.Port)
 					// finally create the dialer
-					var target string
-					if ip := net.ParseIP(req.Fqdn); ip == nil {
-						target = fmt.Sprintf("%s:%d", req.Fqdn, req.Port)
-					} else {
-						if ip.To4() != nil {
-							target = fmt.Sprintf("%s:%d", req.Fqdn, req.Port)
-						} else {
-							target = fmt.Sprintf("[%s]:%d", req.Fqdn, req.Port)
-						}
-					}
-					// use custom dialer with 1 minute timeout
-					d := net.Dialer{
-						Timeout: 3 * time.Minute,
-					}
-					// dial to target
-					conn, err = d.Dial("tcp", target)
+					target := transport.GetTargetDst(req.Fqdn, uint16(req.Port))
+					// dial to target with 3 minute timeout
+					conn, err = net.DialTimeout("tcp", target, 3*time.Minute)
 					// dialer dial failed
 					if sendErrorStatusIfError(err, stream) {
 						// ack failed
 						ack <- false
-						req = nil
 						// free the main
 						quit <- struct{}{}
 						log.Println("dialer err")
@@ -183,9 +158,14 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 				}
 				//log.Printf("RX: %s", string(data))
 				n, err := conn.Write(req.Data)
-				if err != nil || n != len(req.Data) {
+				if err != nil {
 					quit <- struct{}{}
 					log.Printf("error when sending client request to target stream: %v", err)
+					return
+				}
+				if n != len(req.Data) {
+					quit <- struct{}{}
+					log.Println("error when sending client request to target stream: not a full write")
 					return
 				}
 			}
