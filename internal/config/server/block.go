@@ -3,6 +3,8 @@ package server
 type BlockType string
 
 const (
+	BlockTypeIp       BlockType = "ip"
+	BlockTypeIps      BlockType = "ips"
 	BlockTypeDomain   BlockType = "domain"
 	BlockTypeDomains  BlockType = "domains"
 	BlockTypeRegex    BlockType = "regex"
