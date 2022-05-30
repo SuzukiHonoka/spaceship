@@ -3,11 +3,9 @@ package rpc
 import (
 	"context"
 	"fmt"
-	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"log"
 	"net"
-	serverConf "spaceship/internal/config/server"
 	"spaceship/internal/transport"
 	proxy "spaceship/internal/transport/rpc/proto"
 	"time"
@@ -15,24 +13,14 @@ import (
 
 type server struct {
 	proxy.UnimplementedProxyServer
-	Ctx   context.Context
-	Users map[uuid.UUID]bool
+	Ctx context.Context
 }
 
-func NewServer(ctx context.Context, users []serverConf.User) *grpc.Server {
-	// check users
-	if users == nil || len(users) == 0 {
-		panic("users can not be empty")
-	}
+func NewServer(ctx context.Context) *grpc.Server {
 	// create server and register
 	// without buffer for less delay
 	s := grpc.NewServer(grpc.ReadBufferSize(0), grpc.WriteBufferSize(0))
-	// setup user map
-	usersMap := make(map[uuid.UUID]bool, len(users))
-	for _, user := range users {
-		usersMap[user.UUID] = true
-	}
-	proxy.RegisterProxyServer(s, &server{Ctx: ctx, Users: usersMap})
+	proxy.RegisterProxyServer(s, &server{Ctx: ctx})
 	return s
 }
 

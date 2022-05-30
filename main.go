@@ -32,9 +32,13 @@ func main() {
 	// switch role
 	switch c.Role {
 	case config.RoleServer:
+		// check users
+		if c.Users == nil || len(c.Users) == 0 {
+			panic("users can not be empty")
+		}
 		// server start
 		log.Println("server starting")
-		s := rpc.NewServer(ctx, c.Users)
+		s := rpc.NewServer(ctx)
 		// listen ingress and serve
 		l, err := net.Listen("tcp", c.Listen)
 		util.StopIfError(err)

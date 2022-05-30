@@ -32,8 +32,10 @@ func Load(path string) Config {
 	err = json.Unmarshal(b, &LoadedConfig)
 	util.StopIfError(err)
 	// uuid table
-	for _, u := range LoadedConfig.Users {
-		transport.UUIDs[u.UUID.String()] = true
+	if LoadedConfig.Users != nil {
+		for _, u := range LoadedConfig.Users {
+			transport.UUIDs[u.UUID.String()] = true
+		}
 	}
 	return LoadedConfig
 }
