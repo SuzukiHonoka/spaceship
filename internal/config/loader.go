@@ -7,6 +7,7 @@ import (
 	"spaceship/internal/config/client"
 	"spaceship/internal/config/server"
 	"spaceship/internal/dns"
+	"spaceship/internal/transport"
 	"spaceship/internal/util"
 )
 
@@ -17,6 +18,8 @@ type Config struct {
 	server.Server
 }
 
+var LoadedConfig Config
+
 func Load(path string) Config {
 	// check if path exist
 	if !util.FileExist(path) {
@@ -26,8 +29,11 @@ func Load(path string) Config {
 	b, err := os.ReadFile(path)
 	util.StopIfError(err)
 	// actual parsing
-	var config Config
-	err = json.Unmarshal(b, &config)
+	err = json.Unmarshal(b, &LoadedConfig)
 	util.StopIfError(err)
-	return config
+	// uuid table
+	for _, u := range LoadedConfig.Users {
+		transport.UUIDs[u.UUID.String()] = true
+	}
+	return LoadedConfig
 }
