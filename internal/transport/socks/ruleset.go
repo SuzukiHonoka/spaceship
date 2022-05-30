@@ -1,10 +1,8 @@
 package socks
 
-import "context"
-
 // RuleSet is used to provide custom rules to allow or prohibit actions
 type RuleSet interface {
-	Allow(ctx context.Context, req *Request) (context.Context, bool)
+	Allow(req *Request) bool
 }
 
 // PermitAll returns a RuleSet which allows all types of connections
@@ -25,15 +23,15 @@ type PermitCommand struct {
 	EnableAssociate bool
 }
 
-func (p *PermitCommand) Allow(ctx context.Context, req *Request) (context.Context, bool) {
+func (p *PermitCommand) Allow(req *Request) bool {
 	switch req.Command {
 	case ConnectCommand:
-		return ctx, p.EnableConnect
+		return p.EnableConnect
 	case BindCommand:
-		return ctx, p.EnableBind
+		return p.EnableBind
 	case AssociateCommand:
-		return ctx, p.EnableAssociate
+		return p.EnableAssociate
 	}
 
-	return ctx, false
+	return false
 }

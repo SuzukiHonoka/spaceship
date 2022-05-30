@@ -115,7 +115,7 @@ func (s *Server) authenticate(conn io.Writer, bufConn io.Reader) (*AuthContext, 
 		return nil, fmt.Errorf("failed to get auth methods: %v", err)
 	}
 	// if credentials not exist
-	if s.config.Credentials == nil {
+	if s.Config.Credentials == nil {
 		return NoAuthAuthenticator{}.Authenticate(bufConn, conn)
 	}
 	// check client whether supported user-password auth

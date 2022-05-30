@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"spaceship/internal/transport"
 	"spaceship/internal/transport/rpc"
 	"strconv"
 )
@@ -32,7 +33,7 @@ const (
 )
 
 var (
-	unrecognizedAddrType = fmt.Errorf("Unrecognized address type")
+	unrecognizedAddrType = fmt.Errorf("unrecognized address type")
 )
 
 // AddrSpec is used to return the target AddrSpec
@@ -67,13 +68,11 @@ type Request struct {
 	Command uint8
 	// AuthContext provided during negotiation
 	AuthContext *AuthContext
-	// AddrSpec of the the network that sent the request
+	// AddrSpec of the network that sent the request
 	RemoteAddr *AddrSpec
 	// AddrSpec of the desired destination
 	DestAddr *AddrSpec
-	// AddrSpec of the actual destination (might be affected by rewrite)
-	realDestAddr *AddrSpec
-	bufConn      io.Reader
+	bufConn  io.Reader
 }
 
 type conn interface {
@@ -112,76 +111,61 @@ func NewRequest(bufConn io.Reader) (*Request, error) {
 
 // handleRequest is used for request processing after authentication
 func (s *Server) handleRequest(req *Request, conn conn) error {
-	ctx := context.Background()
-
-	// Resolve the address if we have a FQDN
-	dest := req.DestAddr
-	if dest.FQDN != "" {
-		ctx_, addr, err := s.config.Resolver[0].Resolve(ctx, dest.FQDN)
-		if err != nil {
-			if err := sendReply(conn, hostUnreachable, nil); err != nil {
-				return fmt.Errorf("Failed to send reply: %v", err)
-			}
-			return fmt.Errorf("Failed to resolve destination '%v': %v", dest.FQDN, err)
-		}
-		ctx = ctx_
-		dest.IP = addr
-	}
-
-	// Apply any address rewrites
-	req.realDestAddr = req.DestAddr
-
 	// Switch on the command
 	switch req.Command {
 	case ConnectCommand:
-		return s.handleConnect(ctx, conn, req)
+		return s.handleConnect(s.Ctx, conn, req)
 	case BindCommand:
-		return s.handleBind(ctx, conn, req)
+		return s.handleBind(s.Ctx, conn, req)
 	case AssociateCommand:
-		return s.handleAssociate(ctx, conn, req)
+		return s.handleAssociate(s.Ctx, conn, req)
 	default:
 		if err := sendReply(conn, commandNotSupported, nil); err != nil {
-			return fmt.Errorf("Failed to send reply: %v", err)
+			return fmt.Errorf("failed to send reply: %v", err)
 		}
-		return fmt.Errorf("Unsupported command: %v", req.Command)
+		return fmt.Errorf("unsupported command: %v", req.Command)
 	}
 }
 
 // handleConnect is used to handle a connect command
 func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) error {
-	// Check if this is allowed
-	if ctx_, ok := s.config.Rules.Allow(ctx, req); !ok {
+	// check if this is allowed
+	if ok := s.Config.Rules.Allow(req); !ok {
 		if err := sendReply(conn, ruleFailure, nil); err != nil {
-			return fmt.Errorf("Failed to send reply: %v", err)
+			return fmt.Errorf("failed to send reply: %v", err)
 		}
-		return fmt.Errorf("Connect to %v blocked by rules", req.DestAddr)
-	} else {
-		ctx = ctx_
+		return fmt.Errorf("connect to %v blocked by rules", req.DestAddr)
 	}
-	// Start proxying
+	// ctx
+	ctx, cancel := context.WithCancel(ctx)
+	// set target dst
 	var target string
 	if req.DestAddr.FQDN != "" {
 		target = req.DestAddr.FQDN
 	} else {
 		target = req.DestAddr.IP.String()
 	}
-	log.Printf("socks: %s:%d -> rpc\n", target, req.DestAddr.Port)
+	log.Printf("socks: %s:%d -> rpc", target, req.DestAddr.Port)
 	localAdder := make(chan string)
-	stopped := make(chan struct{})
-	gconn, client := rpc.NewClient()
+	client := rpc.NewClient()
 	// if grpc connection failed
-	if gconn == nil {
+	if client == nil {
+		cancel()
 		if err := sendReply(conn, serverFailure, nil); err != nil {
 			return fmt.Errorf("failed to send reply: %v", err)
 		}
-		return nil
 	}
+	// start proxy
+	ctx = context.WithValue(ctx, "request", &transport.Request{
+		Fqdn: target,
+		Port: req.DestAddr.Port,
+	})
 	go func() {
-		err := client.Proxy(localAdder, conn, req.bufConn, target, req.DestAddr.Port)
+		err := client.Proxy(ctx, localAdder, conn, req.bufConn)
 		if err != nil {
-			log.Printf("rpc proxy failed: %v\n", err)
+			transport.PrintErrorIfNotEOF(err, "rpc proxy failed")
 		}
-		stopped <- struct{}{}
+		cancel()
 	}()
 	local := <-localAdder
 	if len(local) == 0 {
@@ -198,39 +182,25 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 		return fmt.Errorf("failed to send reply: %v", err)
 	}
 	//log.Printf("proxy local addr: %s\n", local)
-	<-stopped
+	<-ctx.Done()
 	//log.Println("proxy local end")
-	//errCh := make(chan error, 2)
-	//go proxy(target, req.bufConn, errCh)
-	//go proxy(conn, target, errCh)
-	//
-	//// Wait
-	//for i := 0; i < 2; i++ {
-	//	e := <-errCh
-	//	if e != nil {
-	//		// return from this function closes target (and conn).
-	//		return e
-	//	}
-	//}
-	_ = gconn.Close()
+	_ = client.Conn.Close()
 	return nil
 }
 
 // handleBind is used to handle a connect command
 func (s *Server) handleBind(ctx context.Context, conn conn, req *Request) error {
 	// Check if this is allowed
-	if ctx_, ok := s.config.Rules.Allow(ctx, req); !ok {
+	if ok := s.Config.Rules.Allow(req); !ok {
 		if err := sendReply(conn, ruleFailure, nil); err != nil {
-			return fmt.Errorf("Failed to send reply: %v", err)
+			return fmt.Errorf("failed to send reply: %v", err)
 		}
-		return fmt.Errorf("Bind to %v blocked by rules", req.DestAddr)
-	} else {
-		ctx = ctx_
+		return fmt.Errorf("bind to %v blocked by rules", req.DestAddr)
 	}
 
 	// TODO: Support bind
 	if err := sendReply(conn, commandNotSupported, nil); err != nil {
-		return fmt.Errorf("Failed to send reply: %v", err)
+		return fmt.Errorf("failed to send reply: %v", err)
 	}
 	return nil
 }
@@ -238,18 +208,16 @@ func (s *Server) handleBind(ctx context.Context, conn conn, req *Request) error 
 // handleAssociate is used to handle a connect command
 func (s *Server) handleAssociate(ctx context.Context, conn conn, req *Request) error {
 	// Check if this is allowed
-	if ctx_, ok := s.config.Rules.Allow(ctx, req); !ok {
+	if ok := s.Config.Rules.Allow(req); !ok {
 		if err := sendReply(conn, ruleFailure, nil); err != nil {
-			return fmt.Errorf("Failed to send reply: %v", err)
+			return fmt.Errorf("failed to send reply: %v", err)
 		}
-		return fmt.Errorf("Associate to %v blocked by rules", req.DestAddr)
-	} else {
-		ctx = ctx_
+		return fmt.Errorf("associate to %v blocked by rules", req.DestAddr)
 	}
 
 	// TODO: Support associate
 	if err := sendReply(conn, commandNotSupported, nil); err != nil {
-		return fmt.Errorf("Failed to send reply: %v", err)
+		return fmt.Errorf("failed to send reply: %v", err)
 	}
 	return nil
 }
@@ -329,7 +297,7 @@ func sendReply(w io.Writer, resp uint8, addr *AddrSpec) error {
 		addrPort = uint16(addr.Port)
 
 	default:
-		return fmt.Errorf("Failed to format address: %v", addr)
+		return fmt.Errorf("failed to format address: %v", addr)
 	}
 
 	// Format the message
@@ -349,35 +317,4 @@ func sendReply(w io.Writer, resp uint8, addr *AddrSpec) error {
 
 type closeWriter interface {
 	CloseWrite() error
-}
-
-// proxy is used to shuffle data from src to destination, and sends errors
-// down a dedicated channel
-func proxy(dst io.Writer, src io.Reader, errCh chan error) {
-	buf := make([]byte, 4*1024) // 4k
-	for {
-		n, err := src.Read(buf)
-		if err != nil {
-			if err != io.EOF {
-				log.Printf("read src failed: %s\n", err.Error())
-				errCh <- err
-			}
-			return
-		}
-		wn, err := dst.Write(buf[:n])
-		if err != nil {
-			log.Printf("send data to dst failed: %s\n", err)
-			errCh <- err
-			return
-		}
-		if wn != n {
-			log.Printf("[WARN] RX: %d TX: %d not equal, possible data loss\n", n, wn)
-			// todo: re send
-		}
-	}
-	//_, err := io.Copy(dst, src)
-	//if tcpConn, ok := dst.(closeWriter); ok {
-	//	tcpConn.CloseWrite()
-	//}
-	//errCh <- err
 }

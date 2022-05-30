@@ -2,6 +2,7 @@ package socks
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -30,11 +31,12 @@ type Config struct {
 // Server is responsible for accepting connections and handling
 // the details of the SOCKS5 protocol
 type Server struct {
-	config *Config
+	Ctx    context.Context
+	Config *Config
 }
 
 // New creates a new Server and potentially returns an error
-func New(conf *Config) *Server {
+func New(ctx context.Context, conf *Config) *Server {
 	// Ensure we have a DNS resolver
 	if conf.Resolver == nil {
 		conf.Resolver = []DNSResolver{
@@ -46,7 +48,8 @@ func New(conf *Config) *Server {
 		conf.Rules = PermitAll()
 	}
 	server := &Server{
-		config: conf,
+		Ctx:    ctx,
+		Config: conf,
 	}
 	return server
 }
@@ -91,7 +94,7 @@ func (s *Server) ServeConn(conn net.Conn) error {
 	// Authenticate the connection
 	authContext, err := s.authenticate(conn, bufConn)
 	if err != nil {
-		err = fmt.Errorf("Failed to authenticate: %v", err)
+		err = fmt.Errorf("failed to authenticate: %v", err)
 		log.Printf("[ERR] socks: %v", err)
 		return err
 	}
@@ -112,7 +115,7 @@ func (s *Server) ServeConn(conn net.Conn) error {
 
 	// Process the client request
 	if err := s.handleRequest(request, conn); err != nil {
-		err = fmt.Errorf("Failed to handle request: %v", err)
+		err = fmt.Errorf("failed to handle request: %v", err)
 		log.Printf("[ERR] socks: %v", err)
 		return err
 	}
