@@ -3,155 +3,146 @@ package rpc
 import (
 	"context"
 	"crypto/x509"
+	"fmt"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"io"
 	"log"
-	"spaceship/internal/config/client"
+	"spaceship/internal/config"
 	"spaceship/internal/transport"
 	proxy "spaceship/internal/transport/rpc/proto"
 )
 
 type Client struct {
 	proxy.ProxyClient
+	Conn *grpc.ClientConn
 }
 
-var ClientConfig *client.Client
-
-func NewClient() (*grpc.ClientConn, *Client) {
-	if ClientConfig == nil {
-		panic("server not configured yet")
-	}
+func NewClient() *Client {
 	var credential credentials.TransportCredentials
-	if ClientConfig.TLS {
+	if config.LoadedConfig.TLS {
 		pool, _ := x509.SystemCertPool()
 		// error handling omitted
 		credential = credentials.NewClientTLSFromCert(pool, "")
 	} else {
 		credential = insecure.NewCredentials()
 	}
-	conn, err := grpc.Dial(ClientConfig.ServerAddr, grpc.WithTransportCredentials(credential))
+	conn, err := grpc.Dial(config.LoadedConfig.ServerAddr, grpc.WithTransportCredentials(credential))
 	if err != nil {
 		log.Printf("connect to server failed: %v", err)
-		return nil, nil
+		return nil
 	}
 	//defer conn.Close()
-	return conn, &Client{proxy.NewProxyClient(conn)}
+	return &Client{Conn: conn, ProxyClient: proxy.NewProxyClient(conn)}
 }
 
-func (c *Client) Proxy(localAddr chan string, dst io.Writer, src io.Reader, fqdn string, port int) error {
-	// new background work
-	ctx := context.Background()
+type clientForwarder struct {
+	Stream    proxy.Proxy_ProxyClient
+	Writer    io.Writer
+	Reader    io.Reader
+	LocalAddr chan<- string
+}
+
+func (c *clientForwarder) CopySRCtoTarget() error {
+	// buffer
+	buf := make([]byte, transport.BufferSize)
+	for {
+		//log.Println("rpc client sending...")
+		//read from src
+		n, err := c.Reader.Read(buf)
+		if err != nil {
+			return err
+		}
+		// send to rpc
+		err = c.Stream.Send(&proxy.ProxySRC{
+			Id:   config.LoadedConfig.UUID,
+			Data: buf[:n],
+		})
+		if err != nil {
+			return err
+		}
+		//log.Println("rpc client msg forwarded")
+	}
+}
+
+func (c *clientForwarder) CopyTargetToSRC() error {
+	for {
+		//log.Println("rcp client reading..")
+		res, err := c.Stream.Recv()
+		if err != nil {
+			return err
+		}
+		//log.Printf("rpc client on receive: %d", res.Status)
+		switch res.Status {
+		case proxy.ProxyStatus_EOF:
+			return nil
+		case proxy.ProxyStatus_Error:
+			c.LocalAddr <- ""
+			return transport.ErrorServerFailed
+		case proxy.ProxyStatus_Accepted:
+			c.LocalAddr <- res.Addr
+		case proxy.ProxyStatus_Session:
+			//log.Printf("target: %s", string(res.Data))
+			n, err := c.Writer.Write(res.Data)
+			if err != nil {
+				// log.Printf("error when sending client request to target stream: %v", err)
+				return err
+			}
+			if n != len(res.Data) {
+				return fmt.Errorf("received: %d sent: %d loss: %d %w", len(res.Data), n, n/len(res.Data), transport.ErrorPacketLoss)
+			}
+			//log.Println("dst sent")
+		}
+	}
+}
+
+func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer, r io.Reader) error {
+	req, ok := ctx.Value("request").(*transport.Request)
+	if !ok {
+		return transport.ErrorRequestNotFound
+	}
 	// rcp client
 	stream, err := c.ProxyClient.Proxy(ctx)
 	if err != nil {
 		return err
 	}
-	log.Println("sending proxy to rpc:", fqdn)
-	// chan for cancel
-	cancel := make(chan struct{})
-
+	ctx, cancel := context.WithCancel(ctx)
+	log.Printf("sending proxy to rpc: %s", req.Fqdn)
 	// get local addr first
 	err = stream.Send(&proxy.ProxySRC{
-		Uuid: ClientConfig.UUID,
-		Fqdn: fqdn,
-		Port: uint32(port),
+		Id:   config.LoadedConfig.UUID,
+		Fqdn: req.Fqdn,
+		Port: uint32(req.Port),
 	})
-
 	if err != nil {
-		log.Printf("send to dst failed: %v", err)
-		cancel <- struct{}{}
+		cancel()
 		return err
+	}
+	f := clientForwarder{
+		Stream:    stream,
+		Writer:    w,
+		Reader:    r,
+		LocalAddr: localAddr,
 	}
 	// rpc stream receiver
 	go func() {
-		var res *proxy.ProxyDST
-		var errRecv error
-		for {
-			select {
-			case <-cancel:
-				//log.Println("rpc client finished")
-				return
-			default:
-				//log.Println("rcp client reading..")
-				// Get response and possible error message from the stream
-				res, errRecv = stream.Recv()
-				// Break for loop if there are no more response messages
-				// Handle a possible error
-				if errRecv != nil {
-					res = nil
-					cancel <- struct{}{}
-					if errRecv != io.EOF {
-						log.Printf("error when receiving rpc response: %v", errRecv)
-					}
-					return
-				}
-				//log.Printf("rpc client on receive: %d", res.Status)
-				switch res.Status {
-				case proxy.ProxyStatus_EOF:
-					res = nil
-					cancel <- struct{}{}
-					return
-				case proxy.ProxyStatus_Error:
-					localAddr <- ""
-					res = nil
-					cancel <- struct{}{}
-					return
-				case proxy.ProxyStatus_Accepted:
-					localAddr <- res.Addr
-				case proxy.ProxyStatus_Session:
-					//log.Printf("target: %s", string(res.Data))
-					n, errRecv := dst.Write(res.Data)
-					if errRecv != nil || n != len(res.Data) {
-						cancel <- struct{}{}
-						res = nil
-						log.Printf("send to dst failed: %v", errRecv)
-					}
-					//log.Println("dst sent")
-				}
-			}
+		err := f.CopyTargetToSRC()
+		if err != nil {
+			transport.PrintErrorIfNotEOF(err, "error occurred while proxying")
 		}
+		cancel()
 	}()
-
 	// rpc sender
 	go func() {
-		// buffer
-		buf := make([]byte, transport.BufferSize)
-		for {
-			select {
-			case <-cancel:
-				return
-			default:
-				//log.Println("rpc client sending...")
-				//read from src
-				n, err := src.Read(buf)
-				if err != nil {
-					buf = nil
-					cancel <- struct{}{}
-					if err != io.EOF {
-						log.Printf("error when receiving socks response: %v", err)
-					}
-					return
-				}
-				// send to rpc
-				err = stream.Send(&proxy.ProxySRC{
-					Uuid: ClientConfig.UUID,
-					Data: buf[:n],
-				})
-				if err != nil {
-					buf = nil
-					cancel <- struct{}{}
-					log.Printf("send to dst failed: %v", err)
-					return
-				}
-				//log.Println("rpc client msg forwarded")
-			}
+		err := f.CopySRCtoTarget()
+		if err != nil {
+			transport.PrintErrorIfNotEOF(err, "error occurred while proxying")
 		}
-
+		cancel()
 	}()
 	// block main
-	<-cancel
+	<-ctx.Done()
 	_ = stream.CloseSend()
 	return nil
 }

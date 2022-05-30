@@ -10,13 +10,13 @@ service Proxy{
 
 message ProxySRC{
   // user id
-  string uuid = 1;
-  // fqdn
-  string fqdn = 2;
-  // port
-  uint32 port = 3;
+  string id = 1;
   // bytes
-  bytes data = 4;
+  bytes data = 2;
+  // fqdn
+  string fqdn = 3;
+  // port
+  uint32 port = 4;
 }
 
 enum ProxyStatus{
