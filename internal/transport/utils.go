@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -9,7 +10,7 @@ import (
 )
 
 func PrintErrorIfNotEOF(err error, msg string) {
-	if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
+	if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) && !errors.Is(err, context.Canceled) {
 		log.Printf("%s: %v", msg, err)
 	}
 }
