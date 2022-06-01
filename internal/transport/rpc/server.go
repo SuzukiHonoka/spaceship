@@ -135,7 +135,7 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 	go func() {
 		err := f.CopyClientToTarget()
 		if err != nil {
-			transport.PrintErrorIfNotEOF(err, "error occurred while proxying")
+			transport.PrintErrorIfNotCritical(err, "error occurred while proxying")
 		}
 		cancel()
 	}()
@@ -143,7 +143,7 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 	go func() {
 		err := f.CopyTargetToClient()
 		if err != nil {
-			transport.PrintErrorIfNotEOF(err, "error occurred while proxying")
+			transport.PrintErrorIfNotCritical(err, "error occurred while proxying")
 		}
 		cancel()
 	}()

@@ -4,13 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	"io"
 	"log"
 	"net"
 )
 
-func PrintErrorIfNotEOF(err error, msg string) {
-	if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) && !errors.Is(err, context.Canceled) {
+// PrintErrorIfNotCritical prints only error that critical
+func PrintErrorIfNotCritical(err error, msg string) {
+	switch {
+	case errors.Is(err, io.EOF):
+	case errors.Is(err, net.ErrClosed):
+	case errors.Is(err, context.Canceled):
+	default:
 		log.Printf("%s: %v", msg, err)
 	}
 }

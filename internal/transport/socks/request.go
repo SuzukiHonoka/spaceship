@@ -163,7 +163,7 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 	go func() {
 		err := client.Proxy(ctx, localAdder, conn, req.bufConn)
 		if err != nil {
-			transport.PrintErrorIfNotEOF(err, "rpc proxy failed")
+			transport.PrintErrorIfNotCritical(err, "rpc proxy failed")
 		}
 		cancel()
 	}()

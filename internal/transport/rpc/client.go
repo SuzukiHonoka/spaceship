@@ -129,7 +129,7 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 	go func() {
 		err := f.CopyTargetToSRC()
 		if err != nil {
-			transport.PrintErrorIfNotEOF(err, "error occurred while proxying")
+			transport.PrintErrorIfNotCritical(err, "error occurred while proxying")
 		}
 		cancel()
 	}()
@@ -137,7 +137,7 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 	go func() {
 		err := f.CopySRCtoTarget()
 		if err != nil {
-			transport.PrintErrorIfNotEOF(err, "error occurred while proxying")
+			transport.PrintErrorIfNotCritical(err, "error occurred while proxying")
 		}
 		cancel()
 	}()
