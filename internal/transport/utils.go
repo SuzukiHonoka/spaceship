@@ -1,10 +1,10 @@
 package transport
 
 import (
-	"context"
 	"errors"
 	"fmt"
-
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"io"
 	"log"
 	"net"
@@ -13,12 +13,23 @@ import (
 // PrintErrorIfNotCritical prints only error that critical
 func PrintErrorIfNotCritical(err error, msg string) {
 	switch {
+	// native errors
 	case errors.Is(err, io.EOF):
+		return
 	case errors.Is(err, net.ErrClosed):
-	case errors.Is(err, context.Canceled):
+		return
 	default:
-		log.Printf("%s: %v", msg, err)
+		// grpc errors
+		if s, ok := status.FromError(err); ok {
+			switch s.Code() {
+			case codes.Canceled:
+				return
+			case codes.Unavailable:
+				return
+			}
+		}
 	}
+	log.Printf("%s: %v", msg, err)
 }
 
 // GetTargetDst return dst addr and assume parameter won't be nil
