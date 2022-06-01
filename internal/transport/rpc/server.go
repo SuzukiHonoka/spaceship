@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"log"
 	"net"
 	"spaceship/internal/config"
@@ -21,17 +22,18 @@ type server struct {
 func NewServer(ctx context.Context) *grpc.Server {
 	// create server and register
 	// without buffer for less delay
-	var s *grpc.Server
+	var transportOption grpc.ServerOption
 	if config.LoadedConfig.SSL != nil {
 		credential, err := credentials.NewServerTLSFromFile(config.LoadedConfig.SSL.Cert, config.LoadedConfig.SSL.Key)
 		if err != nil {
 			log.Fatalf("failed to setup TLS: %v", err)
 		}
 		log.Println("using secure grpc [http2]")
-		s = grpc.NewServer(grpc.Creds(credential), grpc.ReadBufferSize(0), grpc.WriteBufferSize(0))
+		transportOption = grpc.Creds(credential)
 	} else {
-		s = grpc.NewServer(grpc.ReadBufferSize(0), grpc.WriteBufferSize(0))
+		transportOption = grpc.Creds(insecure.NewCredentials())
 	}
+	s := grpc.NewServer(transportOption, grpc.ReadBufferSize(0), grpc.WriteBufferSize(0))
 	proxy.RegisterProxyServer(s, &server{Ctx: ctx})
 	return s
 }
