@@ -158,7 +158,7 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 		//Addr:   conn.LocalAddr().String(),
 	})
 	if err != nil {
-		log.Printf("send session EOF to client failed: %v", err)
+		transport.PrintErrorIfNotCritical(err, "send session EOF to client failed")
 	}
 	return nil
 }
