@@ -2,6 +2,8 @@
 OS=("linux" "windows" "android")
 ARCH=("arm64" "amd64")
 
+echo "build for ${1}"
+
 for s in "${OS[@]}"; do
   for a in "${ARCH[@]}"; do
     out="spaceship_${s}_${a}"
