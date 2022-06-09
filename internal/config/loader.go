@@ -34,7 +34,7 @@ func Load(path string) Config {
 	// uuid table
 	if LoadedConfig.Users != nil {
 		for _, u := range LoadedConfig.Users {
-			transport.UUIDs[u.UUID.String()] = true
+			transport.UUIDs[u.UUID.String()] = struct{}{}
 		}
 	}
 	return LoadedConfig

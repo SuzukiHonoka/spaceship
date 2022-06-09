@@ -1,3 +1,3 @@
 package transport
 
-var UUIDs = make(map[string]bool)
+var UUIDs = make(map[string]interface{})
