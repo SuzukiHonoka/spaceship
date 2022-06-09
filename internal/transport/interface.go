@@ -1,7 +1,10 @@
 package transport
 
-import "io"
+import (
+	"context"
+	"io"
+)
 
 type Transport interface {
-	Proxy(localAddr chan string, dst io.Writer, src io.Reader, uuid, fqdn string, port int)
+	Proxy(ctx context.Context, localAddr chan<- string, dst io.Writer, src io.Reader)
 }
