@@ -56,7 +56,6 @@ func (c *clientForwarder) CopySRCtoTarget() error {
 		}
 		// send to rpc
 		err = c.Stream.Send(&proxy.ProxySRC{
-			Id:   config.LoadedConfig.UUID,
 			Data: buf[:n],
 		})
 		if err != nil {
