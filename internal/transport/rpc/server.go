@@ -100,13 +100,13 @@ func (c *forwarder) CopyClientToTarget() error {
 		if err != nil {
 			return err
 		}
-		// check user
-		if _, ok := transport.UUIDs[req.Id]; !ok {
-			return fmt.Errorf("unauthticated uuid: %s %w", req.Id, transport.ErrorUserNotFound)
-		}
 		//log.Println("authentication accepted")
 		// if first ack
 		if !handshake {
+			// check user
+			if _, ok := transport.UUIDs[req.Id]; !ok {
+				return fmt.Errorf("unauthticated uuid: %s %w", req.Id, transport.ErrorUserNotFound)
+			}
 			//log.Printf("testing if ok: %s:%d", req.Fqdn, req.Port)
 			// finally create the dialer
 			target := transport.GetTargetDst(req.Fqdn, int(req.Port))
