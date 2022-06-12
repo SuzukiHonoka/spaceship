@@ -13,7 +13,7 @@ import (
 	"spaceship/internal/util"
 )
 
-const VersionName = "1.0"
+const VersionName = "1.1"
 
 func main() {
 	// first prompt
