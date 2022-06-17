@@ -18,6 +18,8 @@ func PrintErrorIfNotCritical(err error, msg string) {
 		return
 	case errors.Is(err, net.ErrClosed):
 		return
+	case errors.Is(err, io.ErrClosedPipe):
+		return
 	default:
 		// grpc errors
 		if s, ok := status.FromError(err); ok {
