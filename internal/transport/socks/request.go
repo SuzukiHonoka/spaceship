@@ -129,13 +129,6 @@ func (s *Server) handleRequest(req *Request, conn conn) error {
 
 // handleConnect is used to handle a connect command
 func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) error {
-	// check if this is allowed
-	if ok := s.Config.Rules.Allow(req); !ok {
-		if err := sendReply(conn, ruleFailure, nil); err != nil {
-			return fmt.Errorf("failed to send reply: %v", err)
-		}
-		return fmt.Errorf("connect to %v blocked by rules", req.DestAddr)
-	}
 	// ctx
 	ctx, cancel := context.WithCancel(ctx)
 	// set target dst
@@ -190,14 +183,6 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 
 // handleBind is used to handle a connect command
 func (s *Server) handleBind(ctx context.Context, conn conn, req *Request) error {
-	// Check if this is allowed
-	if ok := s.Config.Rules.Allow(req); !ok {
-		if err := sendReply(conn, ruleFailure, nil); err != nil {
-			return fmt.Errorf("failed to send reply: %v", err)
-		}
-		return fmt.Errorf("bind to %v blocked by rules", req.DestAddr)
-	}
-
 	// TODO: Support bind
 	if err := sendReply(conn, commandNotSupported, nil); err != nil {
 		return fmt.Errorf("failed to send reply: %v", err)
@@ -207,14 +192,6 @@ func (s *Server) handleBind(ctx context.Context, conn conn, req *Request) error 
 
 // handleAssociate is used to handle a connect command
 func (s *Server) handleAssociate(ctx context.Context, conn conn, req *Request) error {
-	// Check if this is allowed
-	if ok := s.Config.Rules.Allow(req); !ok {
-		if err := sendReply(conn, ruleFailure, nil); err != nil {
-			return fmt.Errorf("failed to send reply: %v", err)
-		}
-		return fmt.Errorf("associate to %v blocked by rules", req.DestAddr)
-	}
-
 	// TODO: Support associate
 	if err := sendReply(conn, commandNotSupported, nil); err != nil {
 		return fmt.Errorf("failed to send reply: %v", err)
@@ -313,8 +290,4 @@ func sendReply(w io.Writer, resp uint8, addr *AddrSpec) error {
 	// Send the message
 	_, err := w.Write(msg)
 	return err
-}
-
-type closeWriter interface {
-	CloseWrite() error
 }

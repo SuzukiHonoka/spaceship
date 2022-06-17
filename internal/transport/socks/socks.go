@@ -18,14 +18,6 @@ type Config struct {
 	// by appending a UserPassAuthenticator to AuthMethods. If not provided,
 	// and AUthMethods is nil, then "auth-less" mode is enabled.
 	Credentials StaticCredentials
-
-	// Resolver can be provided to do custom name resolution.
-	// Defaults to DNSResolver if not provided.
-	Resolver []DNSResolver
-
-	// Rules is provided to enable custom logic around permitting
-	// various commands. If not provided, PermitAll is used.
-	Rules RuleSet
 }
 
 // Server is responsible for accepting connections and handling
@@ -37,16 +29,6 @@ type Server struct {
 
 // New creates a new Server and potentially returns an error
 func New(ctx context.Context, conf *Config) *Server {
-	// Ensure we have a DNS resolver
-	if conf.Resolver == nil {
-		conf.Resolver = []DNSResolver{
-			{},
-		}
-	}
-	// Ensure we have a rule set
-	if conf.Rules == nil {
-		conf.Rules = PermitAll()
-	}
 	server := &Server{
 		Ctx:    ctx,
 		Config: conf,
