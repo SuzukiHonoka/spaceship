@@ -18,6 +18,131 @@ type Forwarder struct {
 	Ctx context.Context
 	transport.Transport
 	Conn net.Conn
+	b    *bytes.Buffer
+}
+
+func ParseReqFromRaw(target string) (method, host, params string, port int, err error) {
+	sequence := strings.Split(target, " ")
+	// proper request format at first line: (HTTP_METHOD TARGET_URL HTTP_VERSION)
+	// -> GET https://www.google.com HTTP/1.1
+	// it should have 3 elements divided by space
+	if len(sequence) != 3 {
+		return method, host, params, port, transport.ErrorBadRequest
+	}
+	var sport string
+	switch sequence[0] {
+	case "CONNECT":
+		// no scheme
+		// CONNECT www.google.com:443 HTTP/1.1
+		host, sport, err = net.SplitHostPort(sequence[1])
+	default:
+		// get remote target url
+		targetRawUrl := sequence[1]
+		// parse URL from raw
+		targetUrl, err := url.Parse(targetRawUrl)
+		// if not a legal url format
+		if err != nil {
+			return method, host, params, port, err
+		}
+		// mark
+		hasScheme := targetUrl.Scheme != ""
+		// divide the host and port
+		host, sport, err = net.SplitHostPort(targetUrl.Host)
+		if hasScheme {
+			// port not found or other error occurred
+			if err != nil {
+				if strings.LastIndex(err.Error(), "missing port in address") != -1 {
+					host = targetUrl.Host
+					// set port by scheme
+					switch targetUrl.Scheme {
+					case "http":
+						sport = "80"
+					case "https":
+						sport = "443"
+					default:
+						err = fmt.Errorf("unkown scheme: %s %w", targetUrl.Scheme, transport.ErrorBadRequest)
+						return method, host, params, port, err
+					}
+				} else {
+					return method, host, params, port, err
+				}
+			}
+			params = GetRawParamsFromUrl(true, sequence[1])
+		} else {
+			params = GetRawParamsFromUrl(false, sequence[1])
+		}
+	}
+	method = sequence[0]
+	port, err = strconv.Atoi(sport)
+	//log.Println("req parsed:", method, host, params, port)
+	return method, host, params, port, nil
+}
+
+func (f *Forwarder) handleProxy(method, rawParams string, reader *bytes.Reader, scanner *bufio.Scanner) error {
+	head := fmt.Sprintf("%s %s %s\n", method, rawParams, "HTTP/1.1")
+	//log.Printf("head: %s", head)
+	_, _ = f.b.WriteString(head)
+	// filter headers
+	for scanner.Scan() {
+		line := scanner.Text()
+		// if headers end
+		if line == "" {
+			// if no payload
+			if !scanner.Scan() {
+				f.b.WriteByte('\n')
+				return nil
+			} else {
+				// payload exist
+				// write back
+				f.b.Write(scanner.Bytes())
+			}
+			break
+		}
+		//log.Println(line)
+		headerName := line[:strings.Index(line, ":")]
+		if !hopHeadersMap.Filter(headerName) {
+			f.b.WriteString(line + "\n")
+		}
+	}
+	// rest of raw data
+	_, _ = reader.WriteTo(f.b)
+	return nil
+}
+
+func (f *Forwarder) handleTunnel(reader *bytes.Reader, scanner *bufio.Scanner) error {
+	// ignore the headers
+	for scanner.Scan() {
+		if scanner.Text() == "" {
+			break
+		}
+	}
+	// rests of raw data
+	_, _ = reader.WriteTo(f.b)
+	return nil
+}
+
+func GetRawParamsFromUrl(scheme bool, url string) (params string) {
+	if scheme {
+		// get params
+		// with scheme -> http://host/params...
+		for count, i := 0, 0; i < len(url); i++ {
+			s := url[i]
+			// ascii code of "/" is 47
+			if s == 47 {
+				count++
+			}
+			if count == 3 {
+				params = url[i:]
+				break
+			}
+		}
+	} else {
+		// get params
+		// without scheme -> host/params...
+		i := strings.IndexByte(url, '/')
+		params = url[i:]
+	}
+	return params
 }
 
 func (f *Forwarder) Forward() error {
@@ -40,107 +165,33 @@ func (f *Forwarder) Forward() error {
 		if err := scanner.Err(); err != nil {
 			return err
 		}
+		return transport.ErrorBadRequest
 	}
 	// match the raw parameter
 	// only in formal request methods and having http prefix in URL
 	first := scanner.Text()
-	sequence := strings.Split(first, " ")
-	// proper request format at first line: (HTTP_METHOD TARGET_URL HTTP_VERSION)
-	// -> GET https://www.google.com HTTP/1.1
-	// it should have 3 elements divided by space
-	if len(sequence) != 3 {
-		return transport.ErrorBadRequest
+	method, host, params, port, err := ParseReqFromRaw(first)
+	if err != nil {
+		return err
 	}
 	// buffer for stored raw messages
 	// len:0 max-cap:4k
-	b := bytes.NewBuffer(make([]byte, 0, 4*1024))
+	f.b = bytes.NewBuffer(make([]byte, 0, 4*1024))
 	// check request method
-	var host, sport string
-	switch sequence[0] {
+	switch method {
 	case "CONNECT":
-		host, sport, err = net.SplitHostPort(sequence[1])
-		// ignore the headers
-		for scanner.Scan() {
-			if scanner.Text() == "" {
-				break
-			}
-		}
-		// rests of raw data
-		_, _ = reader.WriteTo(b)
+		//log.Println("connect")
+		err = f.handleTunnel(reader, scanner)
 	default:
-		// get remote target url
-		targetRawUrl := sequence[1]
-		// parse URL from raw
-		targetUrl, err := url.Parse(targetRawUrl)
-		if err != nil {
-			return err
-		}
-		hasScheme := targetUrl.Scheme != ""
-		host, sport, err = net.SplitHostPort(targetUrl.Host)
-		// port not found or other error occurred
-		if err != nil {
-			// get port by scheme
-			if strings.LastIndex(err.Error(), "missing port in address") != -1 && hasScheme {
-				host = targetUrl.Host
-				// set port by scheme
-				switch targetUrl.Scheme {
-				case "http":
-					sport = "80"
-				case "https":
-					sport = "443"
-				default:
-					return fmt.Errorf("unkown scheme: %s %w", targetUrl.Scheme, transport.ErrorBadRequest)
-				}
-			} else {
-				return err
-			}
-		}
-		// write back first header
-		// with scheme -> http://host/params...
-		// without scheme -> host/params...
-		var rawParams string
-		if hasScheme {
-			var count uint8
-			for i := 0; i < len(targetRawUrl); i++ {
-				if count == 3 {
-					rawParams = targetRawUrl[i:]
-					break
-				}
-				s := targetRawUrl[i]
-				// ascii code of "/" is 47
-				if s == 47 {
-					count++
-				}
-			}
-		} else {
-			i := strings.IndexByte(rawParams, '/')
-			rawParams = targetRawUrl[i:]
-		}
-		_, _ = b.WriteString(fmt.Sprintf("%s /%s %s\n", sequence[0], rawParams, sequence[2]))
-		// filter headers
-		for scanner.Scan() {
-			line := scanner.Text()
-			// if headers end
-			if line == "" {
-				break
-			}
-			//log.Println(line)
-			headerName := line[:strings.Index(line, ":")]
-			if !hopHeadersMap.Filter(headerName) {
-				_, _ = b.WriteString(line + "\n")
-			}
-		}
-		// reset raw data
-		_, _ = reader.WriteTo(b)
-		b.WriteByte('\n')
+		//log.Println("http")
+		err = f.handleProxy(method, params, reader, scanner)
 	}
 	// parse error
 	if err != nil {
 		return err
 	}
-	log.Printf("http: %s:%s -> rpc", host, sport)
+	log.Printf("http: %s:%d -> rpc", host, port)
 	//forward process
-	port, err := strconv.Atoi(sport)
 	localAddr := make(chan string)
 	valuedCtx := context.WithValue(f.Ctx, "request", &transport.Request{
 		Fqdn: host,
@@ -160,11 +211,11 @@ func (f *Forwarder) Forward() error {
 	}()
 	go func() {
 		// buffer rewrite
-		_, err = w.Write(b.Bytes())
+		_, err = w.Write(f.b.Bytes())
 		if err != nil {
 			proxyError <- err
 		}
-		_, err = io.Copy(w, f.Conn)
+		_, err := io.Copy(w, f.Conn)
 		if err != nil {
 			proxyError <- err
 		}
@@ -173,7 +224,7 @@ func (f *Forwarder) Forward() error {
 	//ld := <-localAddr
 	//log.Printf("local addr: %s", ld)
 	if <-localAddr != "" {
-		if sequence[0] == "CONNECT" {
+		if method == "CONNECT" {
 			_, err = f.Conn.Write([]byte("HTTP/1.1 200 Connection established\n\n"))
 			if err != nil {
 				proxyError <- err
