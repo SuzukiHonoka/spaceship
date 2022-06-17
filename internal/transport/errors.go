@@ -8,4 +8,5 @@ var (
 	ErrorRequestNotFound = errors.New("request not found")
 	ErrorTargetACKFailed = errors.New("target ack failed")
 	ErrorServerFailed    = errors.New("server error")
+	ErrorBadRequest      = errors.New("bad request")
 )
