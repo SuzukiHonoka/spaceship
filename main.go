@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"spaceship/internal/config"
+	"spaceship/internal/transport/http"
 	"spaceship/internal/transport/rpc"
 	"spaceship/internal/transport/socks"
 	"spaceship/internal/util"
@@ -44,7 +45,6 @@ func main() {
 		util.StopIfError(err)
 		log.Printf("rpc started at %s", c.Listen)
 		log.Fatal(s.Serve(l))
-
 	case config.RoleClient:
 		// check uuid format
 		_, err := uuid.Parse(c.UUID)
@@ -53,8 +53,22 @@ func main() {
 		}
 		// client start
 		log.Println("client starting")
-		s := socks.New(ctx, &socks.Config{})
-		log.Fatal(s.ListenAndServe("tcp", c.ListenSocks))
+		// socks
+		if c.ListenSocks != "" {
+			go func() {
+				s := socks.New(ctx, &socks.Config{})
+				log.Fatal(s.ListenAndServe("tcp", c.ListenSocks))
+			}()
+		}
+		// http
+		if c.ListenHttp != "" {
+			go func() {
+				h := http.New(ctx)
+				log.Fatal(h.ListenAndServe("tcp", c.ListenHttp))
+			}()
+		}
+		// blocks main
+		select {}
 	default:
 		panic("unrecognized role")
 	}
