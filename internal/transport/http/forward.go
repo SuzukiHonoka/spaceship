@@ -174,7 +174,7 @@ func (f *Forwarder) Forward() error {
 	//log.Printf("local addr: %s", ld)
 	if <-localAddr != "" {
 		if sequence[0] == "CONNECT" {
-			_, err = f.Conn.Write([]byte("HTTP/1.1 200 OK\n\n"))
+			_, err = f.Conn.Write([]byte("HTTP/1.1 200 Connection established\n\n"))
 			if err != nil {
 				proxyError <- err
 			}
