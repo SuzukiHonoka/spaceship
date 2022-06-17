@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net"
+	"spaceship/internal/transport"
 	"spaceship/internal/transport/rpc"
 )
 
@@ -32,9 +33,7 @@ func (s *Server) Serve(l net.Listener) error {
 		}
 		go func() {
 			err := s.ServeConn(conn)
-			if err != nil {
-				log.Printf("error when serving http: %s", err)
-			}
+			transport.PrintErrorIfNotCritical(err, "error when serving http")
 		}()
 	}
 }
