@@ -215,7 +215,7 @@ func (f *Forwarder) Forward() error {
 		if err != nil {
 			proxyError <- err
 		}
-		_, err := io.Copy(w, f.Conn)
+		_, err = io.Copy(w, f.Conn)
 		if err != nil {
 			proxyError <- err
 		}
