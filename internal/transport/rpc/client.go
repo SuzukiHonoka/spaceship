@@ -44,6 +44,10 @@ type clientForwarder struct {
 	LocalAddr chan<- string
 }
 
+func (c *Client) Close() error {
+	return c.Conn.Close()
+}
+
 func (c *clientForwarder) CopySRCtoTarget() error {
 	// buffer
 	buf := make([]byte, transport.BufferSize)
@@ -54,6 +58,7 @@ func (c *clientForwarder) CopySRCtoTarget() error {
 		if err != nil {
 			return err
 		}
+		//fmt.Printf("<----- %s", buf)
 		// send to rpc
 		err = c.Stream.Send(&proxy.ProxySRC{
 			Data: buf[:n],
@@ -73,6 +78,7 @@ func (c *clientForwarder) CopyTargetToSRC() error {
 			return err
 		}
 		//log.Printf("rpc client on receive: %d", res.Status)
+		//fmt.Printf("----> %s", res.Data)
 		switch res.Status {
 		case proxy.ProxyStatus_EOF:
 			return nil
@@ -118,7 +124,7 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 		cancel()
 		return err
 	}
-	f := clientForwarder{
+	f := &clientForwarder{
 		Stream:    stream,
 		Writer:    w,
 		Reader:    r,
