@@ -12,6 +12,9 @@ import (
 
 // PrintErrorIfNotCritical prints only error that critical
 func PrintErrorIfNotCritical(err error, msg string) {
+	if err == nil {
+		return
+	}
 	switch {
 	// native errors
 	case errors.Is(err, io.EOF):
