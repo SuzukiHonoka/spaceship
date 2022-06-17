@@ -6,5 +6,6 @@ import (
 )
 
 type Transport interface {
-	Proxy(ctx context.Context, localAddr chan<- string, dst io.Writer, src io.Reader)
+	Proxy(ctx context.Context, localAddr chan<- string, dst io.Writer, src io.Reader) error
+	Close() error
 }
