@@ -147,11 +147,11 @@ func (f *Forwarder) Forward() error {
 		Port: port,
 	})
 	r, w := io.Pipe()
-	defer func(w *io.PipeWriter) {
+	defer func() {
 		_ = w.Close()
 		_ = r.Close()
 		_ = f.Close()
-	}(w)
+	}()
 	// channel for receive err and wait for
 	proxyError := make(chan error)
 	go func() {
