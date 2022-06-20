@@ -34,9 +34,9 @@ transfer. Like `Nginx + TLS`.
 The program is still under developing, any PR are warmly welcomed.
 
 ## TODO
+- grpc connection poll
 - support doh/dot as dns resolver
 - support traffic routing
-- support http for client inbound
 - integrate common transfer interface 
 
 ## Legal statement
