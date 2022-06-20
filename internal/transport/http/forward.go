@@ -232,7 +232,7 @@ func (f *Forwarder) Forward() error {
 		}
 		//log.Println("ok sent")
 	} else {
-		_, err = f.Conn.Write([]byte("HTTP/1.1 500 Internal Server Error\n\n"))
+		_, err = f.Conn.Write([]byte("HTTP/1.1 503 Service Unavailable\n\n"))
 		if err != nil {
 			proxyError <- err
 		}
