@@ -22,24 +22,24 @@ type Forwarder struct {
 }
 
 func ParseReqFromRaw(target string) (method, host, params string, port int, err error) {
-	sequence := strings.Split(target, " ")
+	method, rest, ok1 := strings.Cut(target, " ")
+	targetRawUri, _, ok2 := strings.Cut(rest, " ")
 	// proper request format at first line: (HTTP_METHOD TARGET_URL HTTP_VERSION)
 	// -> GET https://www.google.com HTTP/1.1
 	// it should have 3 elements divided by space
-	if len(sequence) != 3 {
+	if !ok1 || !ok2 {
 		return method, host, params, port, transport.ErrorBadRequest
 	}
 	var sport string
-	switch sequence[0] {
+	switch method {
 	case "CONNECT":
 		// no scheme
 		// CONNECT www.google.com:443 HTTP/1.1
-		host, sport, err = net.SplitHostPort(sequence[1])
+		log.Println(targetRawUri)
+		host, sport, err = net.SplitHostPort(targetRawUri)
 	default:
-		// get remote target url
-		targetRawUrl := sequence[1]
 		// parse URL from raw
-		targetUrl, err := url.Parse(targetRawUrl)
+		targetUrl, err := url.Parse(targetRawUri)
 		// if not a legal url format
 		if err != nil {
 			return method, host, params, port, err
@@ -67,12 +67,11 @@ func ParseReqFromRaw(target string) (method, host, params string, port int, err 
 					return method, host, params, port, err
 				}
 			}
-			params = GetRawParamsFromUrl(true, sequence[1])
+			params = GetRawParamsFromUrl(true, targetRawUri)
 		} else {
-			params = GetRawParamsFromUrl(false, sequence[1])
+			params = GetRawParamsFromUrl(false, targetRawUri)
 		}
 	}
-	method = sequence[0]
 	port, err = strconv.Atoi(sport)
 	//log.Println("req parsed:", method, host, params, port)
 	return method, host, params, port, nil
