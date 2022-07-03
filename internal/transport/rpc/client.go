@@ -61,7 +61,7 @@ func (c *clientForwarder) CopySRCtoTarget() error {
 		if err != nil {
 			return err
 		}
-		//fmt.Printf("<----- %s", buf)
+		//fmt.Printf("<----- \n%s\n", buf)
 		// send to rpc
 		err = c.Stream.Send(&proxy.ProxySRC{
 			Data: buf[:n],
@@ -81,7 +81,7 @@ func (c *clientForwarder) CopyTargetToSRC() error {
 			return err
 		}
 		//log.Printf("rpc client on receive: %d", res.Status)
-		//fmt.Printf("----> %s", res.Data)
+		//fmt.Printf("----> \n%s\n", res.Data)
 		switch res.Status {
 		case proxy.ProxyStatus_EOF:
 			return nil
