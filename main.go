@@ -53,6 +53,12 @@ func main() {
 		}
 		// client start
 		log.Println("client starting")
+		// initialize pool
+		err = rpc.PoolInit()
+		if err != nil {
+			rpc.ClientPool.Destroy()
+			panic(err)
+		}
 		// socks
 		if c.ListenSocks != "" {
 			go func() {

@@ -177,7 +177,6 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 	//log.Printf("proxy local addr: %s\n", local)
 	<-ctx.Done()
 	//log.Println("proxy local end")
-	_ = client.Conn.Close()
 	return nil
 }
 

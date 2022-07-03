@@ -14,12 +14,13 @@ import (
 	proxy "spaceship/internal/transport/rpc/proto"
 )
 
+var ClientPool *Pool
+
 type Client struct {
 	proxy.ProxyClient
-	Conn *grpc.ClientConn
 }
 
-func NewClient() *Client {
+func PoolInit() error {
 	var credential credentials.TransportCredentials
 	if config.LoadedConfig.TLS {
 		pool, err := x509.SystemCertPool()
@@ -31,13 +32,18 @@ func NewClient() *Client {
 	} else {
 		credential = insecure.NewCredentials()
 	}
-	conn, err := grpc.Dial(config.LoadedConfig.ServerAddr, grpc.WithTransportCredentials(credential))
-	if err != nil {
-		log.Printf("connect to server failed: %v", err)
-		return nil
-	}
+	ClientPool = NewPool(16)
+	err := ClientPool.FullInit(config.LoadedConfig.ServerAddr, grpc.WithTransportCredentials(credential))
+	return err
+}
+
+func NewClient() *Client {
 	//defer conn.Close()
-	return &Client{Conn: conn, ProxyClient: proxy.NewProxyClient(conn)}
+	client, err := ClientPool.GetClient()
+	if err != nil {
+		panic(err)
+	}
+	return &Client{ProxyClient: client}
 }
 
 type clientForwarder struct {
@@ -48,7 +54,7 @@ type clientForwarder struct {
 }
 
 func (c *Client) Close() error {
-	return c.Conn.Close()
+	return nil
 }
 
 func (c *clientForwarder) CopySRCtoTarget() error {

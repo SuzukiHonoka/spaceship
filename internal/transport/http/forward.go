@@ -200,7 +200,6 @@ func (f *Forwarder) Forward() error {
 	defer func() {
 		_ = w.Close()
 		_ = r.Close()
-		_ = f.Close()
 	}()
 	// channel for receive err and wait for
 	proxyError := make(chan error)
