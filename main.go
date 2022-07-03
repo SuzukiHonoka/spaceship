@@ -74,7 +74,10 @@ func main() {
 			}()
 		}
 		// blocks main
-		select {}
+		cancel := make(chan os.Signal, 1)
+		signal.Notify(cancel, syscall.SIGKILL, syscall.SIGTERM, syscall.SIGINT)
+		<-cancel
+		rpc.ClientPool.Destroy()
 	default:
 		panic("unrecognized role")
 	}
