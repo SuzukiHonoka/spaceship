@@ -22,7 +22,10 @@ type Client struct {
 func NewClient() *Client {
 	var credential credentials.TransportCredentials
 	if config.LoadedConfig.TLS {
-		pool, _ := x509.SystemCertPool()
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			panic(err)
+		}
 		// error handling omitted
 		credential = credentials.NewClientTLSFromCert(pool, "")
 	} else {
