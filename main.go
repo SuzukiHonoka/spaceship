@@ -7,11 +7,14 @@ import (
 	"github.com/google/uuid"
 	"log"
 	"net"
+	"os"
+	"os/signal"
 	"spaceship/internal/config"
 	"spaceship/internal/transport/http"
 	"spaceship/internal/transport/rpc"
 	"spaceship/internal/transport/socks"
 	"spaceship/internal/util"
+	"syscall"
 )
 
 const VersionName = "1.2.3"
