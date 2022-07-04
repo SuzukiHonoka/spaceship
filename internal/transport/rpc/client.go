@@ -32,7 +32,7 @@ func PoolInit() error {
 	} else {
 		credential = insecure.NewCredentials()
 	}
-	ClientPool = NewPool(16)
+	ClientPool = NewPool(int(config.LoadedConfig.Mux))
 	err := ClientPool.FullInit(config.LoadedConfig.ServerAddr, grpc.WithTransportCredentials(credential))
 	return err
 }

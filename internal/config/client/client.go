@@ -5,6 +5,6 @@ type Client struct {
 	UUID        string `json:"uuid"` // user id
 	ListenSocks string `json:"listen_socks,omitempty"`
 	ListenHttp  string `json:"listen_http,omitempty"`
-	Mux         int8   `json:"mux,omitempty"`
+	Mux         uint8  `json:"mux"` // 0 -> disabled, n (>0) -> limited connection
 	TLS         bool   `json:"tls"`
 }

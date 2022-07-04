@@ -19,6 +19,9 @@ type Pool struct {
 
 // NewPool returns a new pool instance with fixed size
 func NewPool(size int) *Pool {
+	if size == 0 {
+		size = 1
+	}
 	return &Pool{
 		Position: 0,
 		Size:     size,
@@ -49,17 +52,24 @@ func (p *Pool) Destroy() {
 
 // GetConn gets a grpc connection from the pool, also moves the cluster
 func (p *Pool) GetConn() (*grpc.ClientConn, error) {
-	p.Lock()
-	// move cluster
-	p.Position++
-	// check if overflow
-	if p.Position > p.Size {
-		// looped sequence: start over
-		p.Position = 1
+	// no mux
+	var el *grpc.ClientConn
+	if p.Size == 1 {
+		el = p.Elements[0]
+	} else {
+		// mux
+		p.Lock()
+		// move cluster
+		p.Position++
+		// check if overflow
+		if p.Position > p.Size {
+			// looped sequence: start over
+			p.Position = 1
+		}
+		// get el from actual position inside the slice
+		el = p.Elements[p.Position-1]
+		p.Unlock()
 	}
-	// get el from actual position inside the slice
-	el := p.Elements[p.Position-1]
-	p.Unlock()
 	if el == nil {
 		return nil, fmt.Errorf("connection not initialized at position %d %w", p.Position, transport.ErrorNotInitialized)
 	}
