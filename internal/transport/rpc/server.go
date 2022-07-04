@@ -148,17 +148,13 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 	// target <- client
 	go func() {
 		err := f.CopyClientToTarget()
-		if err != nil {
-			transport.PrintErrorIfNotCritical(err, "error occurred while proxying")
-		}
+		transport.PrintErrorIfNotCritical(err, "error occurred while proxying")
 		cancel()
 	}()
 	// target -> client
 	go func() {
 		err := f.CopyTargetToClient()
-		if err != nil {
-			transport.PrintErrorIfNotCritical(err, "error occurred while proxying")
-		}
+		transport.PrintErrorIfNotCritical(err, "error occurred while proxying")
 		cancel()
 	}()
 	<-ctx.Done()
@@ -171,8 +167,6 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 		Status: proxy.ProxyStatus_EOF,
 		//Addr:   conn.LocalAddr().String(),
 	})
-	if err != nil {
-		transport.PrintErrorIfNotCritical(err, "send session EOF to client failed")
-	}
+	transport.PrintErrorIfNotCritical(err, "send session EOF to client failed")
 	return nil
 }

@@ -47,17 +47,13 @@ func (d Direct) Proxy(ctx context.Context, localAddr chan<- string, dst io.Write
 	// src -> dst
 	go func() {
 		err := streamCopy(src, conn)
-		if err != nil {
-			transport.PrintErrorIfNotCritical(err, "error occurred while proxying")
-		}
+		transport.PrintErrorIfNotCritical(err, "error occurred while proxying")
 		cancel()
 	}()
 	// src <- dst
 	go func() {
 		err := streamCopy(conn, dst)
-		if err != nil {
-			transport.PrintErrorIfNotCritical(err, "error occurred while proxying")
-		}
+		transport.PrintErrorIfNotCritical(err, "error occurred while proxying")
 		cancel()
 	}()
 	<-ctx.Done()
