@@ -8,10 +8,21 @@ package proxy
 
 import (
 	context "context"
+	"fmt"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
 )
+
+var (
+	DnsResolvePath = "/proxy.Proxy/DnsResolve"
+	ProxyPath      = "/proxy.Proxy/Proxy"
+)
+
+func UpdateMethodPath() {
+	DnsResolvePath = fmt.Sprintf("/%s/DnsResolve", Proxy_ServiceDesc.ServiceName)
+	ProxyPath = fmt.Sprintf("/%s/Proxy", Proxy_ServiceDesc.ServiceName)
+}
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
@@ -35,7 +46,7 @@ func NewProxyClient(cc grpc.ClientConnInterface) ProxyClient {
 }
 
 func (c *proxyClient) DnsResolve(ctx context.Context, opts ...grpc.CallOption) (Proxy_DnsResolveClient, error) {
-	stream, err := c.cc.NewStream(ctx, &Proxy_ServiceDesc.Streams[0], "/proxy.Proxy/DnsResolve", opts...)
+	stream, err := c.cc.NewStream(ctx, &Proxy_ServiceDesc.Streams[0], DnsResolvePath, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +77,7 @@ func (x *proxyDnsResolveClient) Recv() (*DnsResponse, error) {
 }
 
 func (c *proxyClient) Proxy(ctx context.Context, opts ...grpc.CallOption) (Proxy_ProxyClient, error) {
-	stream, err := c.cc.NewStream(ctx, &Proxy_ServiceDesc.Streams[1], "/proxy.Proxy/Proxy", opts...)
+	stream, err := c.cc.NewStream(ctx, &Proxy_ServiceDesc.Streams[1], ProxyPath, opts...)
 	if err != nil {
 		return nil, err
 	}

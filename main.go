@@ -12,6 +12,7 @@ import (
 	"spaceship/internal/config"
 	"spaceship/internal/transport/http"
 	"spaceship/internal/transport/rpc"
+	proxy "spaceship/internal/transport/rpc/proto"
 	"spaceship/internal/transport/socks"
 	"spaceship/internal/util"
 	"syscall"
@@ -42,6 +43,11 @@ func main() {
 		}
 		// server start
 		log.Println("server starting")
+		if c.Path != "" {
+			log.Printf("custom service name: %s", c.Path)
+			proxy.Proxy_ServiceDesc.ServiceName = c.Path
+			proxy.UpdateMethodPath()
+		}
 		s := rpc.NewServer(ctx)
 		// listen ingress and serve
 		l, err := net.Listen("tcp", c.Listen)
