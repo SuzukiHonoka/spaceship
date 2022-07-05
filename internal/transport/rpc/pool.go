@@ -3,6 +3,7 @@ package rpc
 import (
 	"fmt"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"log"
 	"spaceship/internal/transport"
 	proxy "spaceship/internal/transport/rpc/proto"
@@ -72,6 +73,15 @@ func (p *Pool) GetConn() (*grpc.ClientConn, error) {
 	}
 	if el == nil {
 		return nil, fmt.Errorf("connection not initialized at position %d %w", p.Position, transport.ErrorNotInitialized)
+	}
+	// check if conn ok
+	switch el.GetState() {
+	case connectivity.Connecting:
+	case connectivity.Ready:
+	default:
+		log.Printf("grpc connection down, attempting to reconnect..")
+		// reconnect
+		el.ResetConnectBackoff()
 	}
 	return el, nil
 }
