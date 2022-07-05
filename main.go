@@ -32,6 +32,11 @@ func main() {
 	if c.DNS != nil {
 		c.DNS.SetDefault()
 	}
+	if c.Path != "" {
+		log.Printf("custom service name: %s", c.Path)
+		proxy.Proxy_ServiceDesc.ServiceName = c.Path
+		proxy.UpdateMethodPath()
+	}
 	// main context
 	ctx := context.Background()
 	// switch role
@@ -43,11 +48,6 @@ func main() {
 		}
 		// server start
 		log.Println("server starting")
-		if c.Path != "" {
-			log.Printf("custom service name: %s", c.Path)
-			proxy.Proxy_ServiceDesc.ServiceName = c.Path
-			proxy.UpdateMethodPath()
-		}
 		s := rpc.NewServer(ctx)
 		// listen ingress and serve
 		l, err := net.Listen("tcp", c.Listen)
