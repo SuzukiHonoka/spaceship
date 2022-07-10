@@ -19,7 +19,7 @@ import (
 	"syscall"
 )
 
-const VersionName = "1.2.5"
+const VersionName = "1.2.6"
 
 func main() {
 	// first prompt
