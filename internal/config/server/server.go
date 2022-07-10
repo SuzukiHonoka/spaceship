@@ -6,4 +6,5 @@ type Server struct {
 	Path   string  `json:"path,omitempty"` // grpc service name
 	Users  []User  `json:"users"`
 	Blocks []Block `json:"blocks,omitempty"`
+	Buffer uint16  `json:"buffer,omitempty"` // transport buffer size in KB
 }

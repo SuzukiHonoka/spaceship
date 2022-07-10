@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"spaceship/internal/config"
+	"spaceship/internal/transport"
 	"spaceship/internal/transport/http"
 	"spaceship/internal/transport/rpc"
 	proxy "spaceship/internal/transport/rpc/proto"
@@ -31,6 +32,10 @@ func main() {
 	// set default dns if configured
 	if c.DNS != nil {
 		c.DNS.SetDefault()
+	}
+	if c.Buffer > 0 {
+		log.Printf("custom buffer size: %dK", c.Buffer)
+		transport.BufferSize = int(c.Buffer) * 1024
 	}
 	if c.Path != "" {
 		log.Printf("custom service name: %s", c.Path)
