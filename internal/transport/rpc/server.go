@@ -78,11 +78,13 @@ func (c *forwarder) CopyTargetToClient() error {
 		//log.Println("target read period finish")
 		// write back
 		//log.Println("rpc server -> client")
-		err = c.Stream.Send(&proxy.ProxyDST{
+		dstData := &proxy.ProxyDST{
 			Status: proxy.ProxyStatus_Session,
 			Data:   buf[:n],
 			//Addr:   conn.LocalAddr().String(),
-		})
+		}
+		err = c.Stream.Send(dstData)
+		dstData = nil
 		// stop if send rpc failed
 		if err != nil {
 			return err

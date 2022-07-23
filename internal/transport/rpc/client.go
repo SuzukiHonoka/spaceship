@@ -69,9 +69,11 @@ func (c *clientForwarder) CopySRCtoTarget() error {
 		}
 		//fmt.Printf("<----- \n%s\n", buf)
 		// send to rpc
-		err = c.Stream.Send(&proxy.ProxySRC{
+		srcData := &proxy.ProxySRC{
 			Data: buf[:n],
-		})
+		}
+		err = c.Stream.Send(srcData)
+		srcData = nil
 		if err != nil {
 			return err
 		}
