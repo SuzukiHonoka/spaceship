@@ -114,7 +114,7 @@ func (c *forwarder) CopyClientToTarget() error {
 			// finally create the dialer
 			target := transport.GetTargetDst(req.Fqdn, int(req.Port))
 			// dial to target with 3 minute timeout
-			c.Conn, err = net.DialTimeout("tcp", target, 3*time.Minute)
+			c.Conn, err = net.DialTimeout(transport.Network, target, 3*time.Minute)
 			// dialer dial failed
 			if sendErrorStatusIfError(err, c.Stream) {
 				// ack failed
