@@ -19,7 +19,8 @@ var (
 	ProxyPath      = "/proxy.Proxy/Proxy"
 )
 
-func UpdateMethodPath() {
+func SetServiceName(name string) {
+	Proxy_ServiceDesc.ServiceName = name
 	DnsResolvePath = fmt.Sprintf("/%s/DnsResolve", Proxy_ServiceDesc.ServiceName)
 	ProxyPath = fmt.Sprintf("/%s/Proxy", Proxy_ServiceDesc.ServiceName)
 }

@@ -35,16 +35,15 @@ func main() {
 	}
 	if c.Buffer > 0 {
 		log.Printf("custom buffer size: %dK", c.Buffer)
-		transport.BufferSize = int(c.Buffer) * 1024
+		transport.SetBufferSize(int(c.Buffer) * 1024)
 	}
 	if c.Path != "" {
 		log.Printf("custom service name: %s", c.Path)
-		proxy.Proxy_ServiceDesc.ServiceName = c.Path
-		proxy.UpdateMethodPath()
+		proxy.SetServiceName(c.Path)
 	}
 	if !c.IPv6 {
 		log.Println("ipv6 is disabled")
-		transport.Network = "tcp4"
+		transport.SetNetwork("tcp4")
 	}
 	// main context
 	ctx := context.Background()
