@@ -7,4 +7,5 @@ type Server struct {
 	Users  []User  `json:"users"`
 	Blocks []Block `json:"blocks,omitempty"`
 	Buffer uint16  `json:"buffer,omitempty"` // transport buffer size in KB
+	IPv6   bool    `json:"ipv6,omitempty"`   // disable(default) or enable ipv6 network in tcp
 }

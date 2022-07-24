@@ -42,6 +42,10 @@ func main() {
 		proxy.Proxy_ServiceDesc.ServiceName = c.Path
 		proxy.UpdateMethodPath()
 	}
+	if !c.IPv6 {
+		log.Println("ipv6 is disabled")
+		transport.Network = "tcp4"
+	}
 	// main context
 	ctx := context.Background()
 	// switch role
