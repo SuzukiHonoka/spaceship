@@ -28,9 +28,10 @@ func NewServer(ctx context.Context) *grpc.Server {
 		if err != nil {
 			log.Fatalf("failed to setup TLS: %v", err)
 		}
-		log.Println("using secure grpc [http2]")
+		log.Println("using secure grpc [h2]")
 		transportOption = grpc.Creds(credential)
 	} else {
+		log.Println("using insecure grpc [h2c]")
 		transportOption = grpc.Creds(insecure.NewCredentials())
 	}
 	s := grpc.NewServer(transportOption, grpc.ReadBufferSize(0), grpc.WriteBufferSize(0))
