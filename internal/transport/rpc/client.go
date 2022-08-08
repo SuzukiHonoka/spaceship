@@ -28,7 +28,7 @@ func PoolInit() error {
 			panic(err)
 		}
 		// error handling omitted
-		credential = credentials.NewClientTLSFromCert(pool, "")
+		credential = credentials.NewClientTLSFromCert(pool, config.LoadedConfig.Host)
 	} else {
 		credential = insecure.NewCredentials()
 	}
