@@ -7,13 +7,15 @@ import (
 	"spaceship/internal/config/client"
 	"spaceship/internal/config/server"
 	"spaceship/internal/dns"
+	"spaceship/internal/logger"
 	"spaceship/internal/transport"
 	"spaceship/internal/util"
 )
 
 type Config struct {
 	Role
-	*dns.DNS `json:"dns,omitempty"`
+	*dns.DNS   `json:"dns,omitempty"`
+	LoggerMode logger.Mode `json:"log,omitempty"`
 	client.Client
 	server.Server
 }

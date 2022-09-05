@@ -29,10 +29,9 @@ func main() {
 	configPath := flag.String("c", "./config.json", "config path")
 	flag.Parse()
 	c := config.Load(*configPath)
+	c.LoggerMode.Set()
 	// set default dns if configured
-	if c.DNS != nil {
-		c.DNS.SetDefault()
-	}
+	c.DNS.SetDefault()
 	if c.Buffer > 0 {
 		log.Printf("custom buffer size: %dK", c.Buffer)
 		transport.SetBufferSize(int(c.Buffer) * 1024)
