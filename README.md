@@ -41,4 +41,4 @@ The program is still under developing, any PR are warmly welcomed.
 ## Legal statement
 This program now only available for the repo members, sharing it to any other one is strongly forbidden.  
 Also, while you are using the program, you must obey the laws in your current living country.  
-**ANY ILLEGAL ACTION MADE BY USING THIS PROGRAM ARE ON YOUR OWN**
+**ANY KIND OF ILLEGAL INTENTION BY USING THIS PROGRAM ARE STRONGLY FORBIDDEN**
