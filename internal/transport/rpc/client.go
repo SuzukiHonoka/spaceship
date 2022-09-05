@@ -8,7 +8,6 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"io"
-	"log"
 	"spaceship/internal/config"
 	"spaceship/internal/transport"
 	proxy "spaceship/internal/transport/rpc/proto"
@@ -124,7 +123,7 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 		return err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	log.Printf("sending proxy to rpc: %s", req.Fqdn)
+	//log.Printf("sending proxy to rpc: %s", req.Fqdn)
 	// get local addr first
 	err = stream.Send(&proxy.ProxySRC{
 		Id:   config.LoadedConfig.UUID,
