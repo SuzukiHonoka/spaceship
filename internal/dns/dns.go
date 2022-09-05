@@ -13,6 +13,10 @@ type DNS struct {
 }
 
 func (s *DNS) SetDefault() {
+	if s == nil {
+		return
+	}
+	// typeCommon in Type is as empty string or "common"
 	if s.Type != "" && s.Type != TypeCommon {
 		panic("not implemented")
 	}
