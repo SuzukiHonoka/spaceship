@@ -29,8 +29,6 @@ func PrintErrorIfNotCritical(err error, msg string) {
 			switch s.Code() {
 			case codes.Canceled:
 				return
-			case codes.Unavailable:
-				return
 			}
 		}
 	}
