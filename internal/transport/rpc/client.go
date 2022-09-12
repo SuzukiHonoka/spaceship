@@ -90,6 +90,19 @@ func (c *clientForwarder) CopyTargetToSRC() error {
 		//log.Printf("rpc client on receive: %d", res.Status)
 		//fmt.Printf("----> \n%s\n", res.Data)
 		switch res.Status {
+		case proxy.ProxyStatus_Session:
+			//log.Printf("target: %s", string(res.Data))
+			n, err := c.Writer.Write(res.Data)
+			if err != nil {
+				// log.Printf("error when sending client request to target stream: %v", err)
+				return err
+			}
+			if n != len(res.Data) {
+				return fmt.Errorf("received: %d sent: %d loss: %d %w", len(res.Data), n, n/len(res.Data), transport.ErrorPacketLoss)
+			}
+			//log.Println("dst sent")
+		case proxy.ProxyStatus_Accepted:
+			c.LocalAddr <- res.Addr
 		case proxy.ProxyStatus_EOF:
 			return nil
 		case proxy.ProxyStatus_Error:
