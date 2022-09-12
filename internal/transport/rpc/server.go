@@ -166,10 +166,9 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 		_ = f.Conn.Close()
 	}
 	// send session end to client
-	err := stream.Send(&proxy.ProxyDST{
+	_ = stream.Send(&proxy.ProxyDST{
 		Status: proxy.ProxyStatus_EOF,
 		//Addr:   conn.LocalAddr().String(),
 	})
-	transport.PrintErrorIfNotCritical(err, "send session EOF to client failed")
 	return nil
 }
