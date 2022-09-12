@@ -108,19 +108,6 @@ func (c *clientForwarder) CopyTargetToSRC() error {
 		case proxy.ProxyStatus_Error:
 			c.LocalAddr <- ""
 			return transport.ErrorServerFailed
-		case proxy.ProxyStatus_Accepted:
-			c.LocalAddr <- res.Addr
-		case proxy.ProxyStatus_Session:
-			//log.Printf("target: %s", string(res.Data))
-			n, err := c.Writer.Write(res.Data)
-			if err != nil {
-				// log.Printf("error when sending client request to target stream: %v", err)
-				return err
-			}
-			if n != len(res.Data) {
-				return fmt.Errorf("received: %d sent: %d loss: %d %w", len(res.Data), n, n/len(res.Data), transport.ErrorPacketLoss)
-			}
-			//log.Println("dst sent")
 		}
 	}
 }
@@ -156,13 +143,13 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 	// rpc stream receiver
 	go func() {
 		err := f.CopyTargetToSRC()
-		transport.PrintErrorIfNotCritical(err, "error occurred while proxying")
+		transport.PrintErrorIfNotCritical(err, "error occurred while src <- target "+req.Fqdn)
 		cancel()
 	}()
 	// rpc sender
 	go func() {
 		err := f.CopySRCtoTarget()
-		transport.PrintErrorIfNotCritical(err, "error occurred while proxying")
+		transport.PrintErrorIfNotCritical(err, "error occurred while src -> target "+req.Fqdn)
 		cancel()
 	}()
 	// block main
