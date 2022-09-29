@@ -20,8 +20,6 @@ type Config struct {
 	server.Server
 }
 
-var LoadedConfig Config
-
 func Load(path string) Config {
 	// check if path exist
 	if !util.FileExist(path) {
