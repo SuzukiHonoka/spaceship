@@ -6,6 +6,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	"log"
 	"net"
 	"spaceship/internal/config"
@@ -34,7 +35,16 @@ func NewServer(ctx context.Context) *grpc.Server {
 		log.Println("using insecure grpc [h2c]")
 		transportOption = grpc.Creds(insecure.NewCredentials())
 	}
-	s := grpc.NewServer(transportOption, grpc.ReadBufferSize(0), grpc.WriteBufferSize(0))
+	opts := []grpc.ServerOption{
+		transportOption,
+		grpc.ReadBufferSize(0),
+		grpc.WriteBufferSize(0),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime: 10 * time.Second,
+		}),
+		grpc.ConnectionTimeout(5 * time.Second),
+	}
+	s := grpc.NewServer(opts...)
 	proxy.RegisterProxyServer(s, &server{Ctx: ctx})
 	return s
 }

@@ -5,12 +5,16 @@ import (
 	"crypto/x509"
 	"fmt"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	"io"
+	"net"
 	"spaceship/internal/config"
 	"spaceship/internal/transport"
 	proxy "spaceship/internal/transport/rpc/proto"
+	"time"
 )
 
 var ClientPool *Pool
@@ -32,7 +36,31 @@ func PoolInit() error {
 		credential = insecure.NewCredentials()
 	}
 	ClientPool = NewPool(int(config.LoadedConfig.Mux))
-	err := ClientPool.FullInit(config.LoadedConfig.ServerAddr, grpc.WithTransportCredentials(credential))
+	opts := []grpc.DialOption{
+		grpc.WithTransportCredentials(credential),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:    10 * time.Second,
+			Timeout: 5 * time.Second,
+		}),
+		grpc.WithConnectParams(grpc.ConnectParams{
+			//value of first 3 fields is from backoff.DefaultConfig
+			Backoff: backoff.Config{
+				BaseDelay:  1.0 * time.Second,
+				Multiplier: 1.6,
+				Jitter:     0.2,
+				MaxDelay:   5 * time.Second,
+			},
+			MinConnectTimeout: 5 * time.Second,
+		}),
+		grpc.WithBlock(),
+		grpc.WithContextDialer(func(ctx context.Context, s string) (net.Conn, error) {
+			return (&net.Dialer{
+				Timeout: 5 * time.Second,
+			}).DialContext(ctx, "tcp", s)
+		}),
+		grpc.WithUserAgent("spaceship/" + config.VersionCode),
+	}
+	err := ClientPool.FullInit(config.LoadedConfig.ServerAddr, opts...)
 	return err
 }
 
