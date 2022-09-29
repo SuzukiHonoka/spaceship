@@ -24,7 +24,6 @@ func NewPool(size int) *Pool {
 		size = 1
 	}
 	return &Pool{
-		Position: 0,
 		Size:     size,
 		Elements: make([]*grpc.ClientConn, size),
 	}
