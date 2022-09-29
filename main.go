@@ -19,11 +19,9 @@ import (
 	"syscall"
 )
 
-const VersionName = "1.3.3"
-
 func main() {
 	// first prompt
-	fmt.Printf("spaceship v%s ", VersionName)
+	fmt.Printf("spaceship v%s ", config.VersionCode)
 	fmt.Println("for personal use only, absolutely without any warranty, any kind of illegal intention by using this program are strongly forbidden.")
 	// load configuration
 	configPath := flag.String("c", "./config.json", "config path")
