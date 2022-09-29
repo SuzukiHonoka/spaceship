@@ -52,7 +52,6 @@ func PoolInit() error {
 			},
 			MinConnectTimeout: 5 * time.Second,
 		}),
-		grpc.WithBlock(),
 		grpc.WithContextDialer(func(ctx context.Context, s string) (net.Conn, error) {
 			return (&net.Dialer{
 				Timeout: 5 * time.Second,
