@@ -30,12 +30,12 @@ func ParseReqFromRaw(target string) (method, host, params string, port int, err 
 	if !ok1 || !ok2 {
 		return method, host, params, port, transport.ErrorBadRequest
 	}
+	//log.Println(method, targetRawUri)
 	var sport string
 	switch method {
 	case "CONNECT":
 		// no scheme
 		// CONNECT www.google.com:443 HTTP/1.1
-		log.Println(targetRawUri)
 		host, sport, err = net.SplitHostPort(targetRawUri)
 	default:
 		// parse URL from raw
@@ -48,29 +48,29 @@ func ParseReqFromRaw(target string) (method, host, params string, port int, err 
 		hasScheme := targetUrl.Scheme != ""
 		// divide the host and port
 		host, sport, err = net.SplitHostPort(targetUrl.Host)
-		if hasScheme {
-			// port not found or other error occurred
-			if err != nil {
-				if strings.LastIndex(err.Error(), "missing port in address") != -1 {
-					host = targetUrl.Host
-					// set port by scheme
-					switch targetUrl.Scheme {
-					case "http":
-						sport = "80"
-					case "https":
-						sport = "443"
-					default:
-						err = fmt.Errorf("unkown scheme: %s %w", targetUrl.Scheme, transport.ErrorBadRequest)
-						return method, host, params, port, err
-					}
-				} else {
+		// will raise error if port not found
+		// 1. http://google.com 2. google.com
+		if err != nil {
+			// other error
+			if strings.LastIndex(err.Error(), "missing port in address") == -1 {
+				return method, host, params, port, err
+			}
+			host = targetUrl.Host
+			if hasScheme {
+				switch targetUrl.Scheme {
+				case "http":
+					sport = "80"
+				case "https":
+					sport = "443"
+				default:
+					err = fmt.Errorf("unkown scheme: %s %w", targetUrl.Scheme, transport.ErrorBadRequest)
 					return method, host, params, port, err
 				}
+			} else {
+				sport = "80"
 			}
-			params = GetRawParamsFromUrl(true, targetRawUri)
-		} else {
-			params = GetRawParamsFromUrl(false, targetRawUri)
 		}
+		params = GetRawParamsFromUrl(hasScheme, targetRawUri)
 	}
 	port, err = strconv.Atoi(sport)
 	//log.Println("req parsed:", method, host, params, port)
@@ -88,11 +88,10 @@ func (f *Forwarder) handleProxy(method, rawParams string, reader *bytes.Reader, 
 		if line == "" {
 			// if no payload
 			if !scanner.Scan() {
-				f.b.WriteByte('\n')
+				f.b.WriteString("\r\n")
 				return nil
 			} else {
-				// payload exist
-				// write back
+				// payload exist -> write back
 				f.b.Write(scanner.Bytes())
 			}
 			break
@@ -100,7 +99,7 @@ func (f *Forwarder) handleProxy(method, rawParams string, reader *bytes.Reader, 
 		//log.Println(line)
 		headerName := line[:strings.Index(line, ":")]
 		if !hopHeadersMap.Filter(headerName) {
-			f.b.WriteString(line + "\n")
+			f.b.WriteString(line + "\r\n")
 		}
 	}
 	// rest of raw data
@@ -179,10 +178,8 @@ func (f *Forwarder) Forward() error {
 	// check request method
 	switch method {
 	case "CONNECT":
-		//log.Println("connect")
 		err = f.handleTunnel(reader, scanner)
 	default:
-		//log.Println("http")
 		err = f.handleProxy(method, params, reader, scanner)
 	}
 	// parse error
@@ -221,18 +218,13 @@ func (f *Forwarder) Forward() error {
 	//log.Println("wait for local addr")
 	//ld := <-localAddr
 	//log.Printf("local addr: %s", ld)
-	if <-localAddr != "" {
-		if method == "CONNECT" {
-			_, err = f.Conn.Write([]byte("HTTP/1.1 200 Connection established\n\n"))
-			if err != nil {
-				proxyError <- err
-			}
-		}
-		//log.Println("ok sent")
-	} else {
-		_, err = f.Conn.Write([]byte("HTTP/1.1 503 Service Unavailable\n\n"))
+	if <-localAddr == "" {
+		_, _ = f.Conn.Write([]byte("HTTP/1.1 503 Service Unavailable\r\n\r\n"))
+	}
+	if method == "CONNECT" {
+		_, err = f.Conn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
 		if err != nil {
-			proxyError <- err
+			return err
 		}
 	}
 	return <-proxyError
