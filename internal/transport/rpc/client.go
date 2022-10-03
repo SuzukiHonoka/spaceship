@@ -144,12 +144,13 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 	if !ok {
 		return transport.ErrorRequestNotFound
 	}
+	ctx, cancel := context.WithCancel(ctx)
 	// rcp client
 	stream, err := c.ProxyClient.Proxy(ctx)
 	if err != nil {
+		cancel()
 		return err
 	}
-	ctx, cancel := context.WithCancel(ctx)
 	//log.Printf("sending proxy to rpc: %s", req.Fqdn)
 	// get local addr first
 	err = stream.Send(&proxy.ProxySRC{
@@ -181,6 +182,5 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 	}()
 	// block main
 	<-ctx.Done()
-	_ = stream.CloseSend()
 	return nil
 }
