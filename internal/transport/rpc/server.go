@@ -7,6 +7,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
+	"io"
 	"log"
 	"net"
 	"spaceship/internal/config"
@@ -22,7 +23,6 @@ type server struct {
 
 func NewServer(ctx context.Context) *grpc.Server {
 	// create server and register
-	// without buffer for less delay
 	var transportOption grpc.ServerOption
 	if config.LoadedConfig.SSL != nil {
 		credential, err := credentials.NewServerTLSFromFile(config.LoadedConfig.SSL.Cert, config.LoadedConfig.SSL.Key)
@@ -37,7 +37,7 @@ func NewServer(ctx context.Context) *grpc.Server {
 	}
 	opts := []grpc.ServerOption{
 		transportOption,
-		grpc.ReadBufferSize(0),
+		grpc.ReadBufferSize(0), // without buffer for less delay
 		grpc.WriteBufferSize(0),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime: 10 * time.Second,
@@ -87,12 +87,10 @@ func (c *forwarder) CopyTargetToClient() error {
 			return err
 		}
 		//log.Println("target read period finish")
-		// write back
 		//log.Println("rpc server -> client")
 		dstData := &proxy.ProxyDST{
 			Status: proxy.ProxyStatus_Session,
 			Data:   buf[:n],
-			//Addr:   conn.LocalAddr().String(),
 		}
 		err = c.Stream.Send(dstData)
 		dstData = nil
@@ -106,7 +104,7 @@ func (c *forwarder) CopyTargetToClient() error {
 func (c *forwarder) CopyClientToTarget() error {
 	var handshake bool
 	for {
-		//log.Println("rpc server receiving..")
+		//log.Println("rpc server receiving...")
 		// receive the request and possible error from the stream object
 		req, err := c.Stream.Recv()
 		// handle error from the stream object
@@ -135,10 +133,11 @@ func (c *forwarder) CopyClientToTarget() error {
 			c.Ack <- true
 			handshake = true
 			log.Println("rpc server proxy received ->", req.Fqdn)
-		}
-		// after first ack
-		if req.Data == nil {
 			continue
+		}
+		// client closed or invalid message
+		if req.Data == nil {
+			return io.EOF
 		}
 		//log.Printf("RX: %s", string(data))
 		n, err := c.Conn.Write(req.Data)
@@ -178,7 +177,6 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 	// send session end to client
 	_ = stream.Send(&proxy.ProxyDST{
 		Status: proxy.ProxyStatus_EOF,
-		//Addr:   conn.LocalAddr().String(),
 	})
 	return nil
 }
