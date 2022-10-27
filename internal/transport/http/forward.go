@@ -201,27 +201,33 @@ func (f *Forwarder) Forward() error {
 	// channel for receive err and wait for
 	proxyError := make(chan error)
 	go func() {
-		err := f.Proxy(valuedCtx, localAddr, f.Conn, r)
+		err = f.Proxy(valuedCtx, localAddr, f.Conn, r)
 		proxyError <- err
 	}()
 	go func() {
-		// buffer rewrite
-		_, err = w.Write(f.b.Bytes())
-		if err != nil {
-			proxyError <- err
+		// buffer rewrite -> reconstructed tcp raw msg
+		if b := f.b.Bytes(); len(b) > 0 {
+			_, err = w.Write(f.b.Bytes())
+			if err != nil {
+				log.Println("write err:", err)
+				proxyError <- err
+			}
 		}
+		//log.Println("src -> target start")
 		_, err = io.Copy(w, f.Conn)
 		if err != nil {
+			log.Println("copy err:", err)
 			proxyError <- err
 		}
+		proxyError <- io.EOF
+		//log.Println("src -> target done")
 	}()
 	//log.Println("wait for local addr")
 	//ld := <-localAddr
 	//log.Printf("local addr: %s", ld)
 	if <-localAddr == "" {
 		_, _ = f.Conn.Write([]byte("HTTP/1.1 503 Service Unavailable\r\n\r\n"))
-	}
-	if method == "CONNECT" {
+	} else if method == "CONNECT" {
 		_, err = f.Conn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
 		if err != nil {
 			return err
