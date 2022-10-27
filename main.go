@@ -10,10 +10,10 @@ import (
 	"os"
 	"os/signal"
 	"spaceship/internal/config"
-	"spaceship/internal/transport"
+	"spaceship/internal/config/manifest"
 	"spaceship/internal/transport/http"
-	"spaceship/internal/transport/rpc"
-	proxy "spaceship/internal/transport/rpc/proto"
+	"spaceship/internal/transport/rpc/client"
+	"spaceship/internal/transport/rpc/server"
 	"spaceship/internal/transport/socks"
 	"spaceship/internal/util"
 	"syscall"
@@ -21,39 +21,21 @@ import (
 
 func main() {
 	// first prompt
-	fmt.Printf("spaceship v%s ", config.VersionCode)
+	fmt.Printf("spaceship v%s ", manifest.VersionCode)
 	fmt.Println("for personal use only, absolutely without any warranty, any kind of illegal intention by using this program are strongly forbidden.")
 	// load configuration
 	configPath := flag.String("c", "./config.json", "config path")
 	flag.Parse()
-	c := config.Load(*configPath)
-	c.LoggerMode.Set()
-	// set default dns if configured
-	c.DNS.SetDefault()
-	if c.Buffer > 0 {
-		log.Printf("custom buffer size: %dK", c.Buffer)
-		transport.SetBufferSize(int(c.Buffer) * 1024)
-	}
-	if c.Path != "" {
-		log.Printf("custom service name: %s", c.Path)
-		proxy.SetServiceName(c.Path)
-	}
-	if !c.IPv6 {
-		log.Println("ipv6 is disabled")
-		transport.SetNetwork("tcp4")
-	}
+	c := config.NewFromConfigFile(*configPath)
+	c.Apply()
 	// main context
 	ctx := context.Background()
 	// switch role
 	switch c.Role {
 	case config.RoleServer:
-		// check users
-		if c.Users == nil || len(c.Users) == 0 {
-			panic("users can not be empty")
-		}
 		// server start
 		log.Println("server starting")
-		s := rpc.NewServer(ctx)
+		s := server.NewServer(ctx, c.Users, c.SSL)
 		// listen ingress and serve
 		l, err := net.Listen("tcp", c.Listen)
 		util.StopIfError(err)
@@ -68,9 +50,9 @@ func main() {
 		// client start
 		log.Println("client starting")
 		// initialize pool
-		err = rpc.PoolInit()
+		err = client.PoolInit(c.ServerAddr, c.Host, c.EnableTLS, c.Mux)
 		if err != nil {
-			rpc.ClientPool.Destroy()
+			client.ConnPool.Destroy()
 			panic(err)
 		}
 		// socks
@@ -91,7 +73,7 @@ func main() {
 		cancel := make(chan os.Signal, 1)
 		signal.Notify(cancel, syscall.SIGKILL, syscall.SIGTERM, syscall.SIGINT)
 		<-cancel
-		rpc.ClientPool.Destroy()
+		client.ConnPool.Destroy()
 	default:
 		panic("unrecognized role")
 	}
