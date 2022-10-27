@@ -15,3 +15,5 @@ type Block struct {
 	BlockType
 	Data []string // string slice of domain || domains || regex || protocol
 }
+
+type Blocks []Block
