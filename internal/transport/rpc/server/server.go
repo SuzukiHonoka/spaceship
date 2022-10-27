@@ -124,8 +124,10 @@ func (c *forwarder) CopyClientToTarget() error {
 			// dial to target with 3 minute timeout
 			c.Conn, err = net.DialTimeout(transport.Network, target, 3*time.Minute)
 			// dialer dial failed
-			if sendErrorStatusIfError(err, c.Stream) {
-				// ack failed
+			if err != nil {
+				_ = c.Stream.Send(&proxy.ProxyDST{
+					Status: proxy.ProxyStatus_Error,
+				})
 				c.Ack <- false
 				return err
 			}
