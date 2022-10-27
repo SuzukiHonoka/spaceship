@@ -1,4 +1,4 @@
-package rpc
+package server
 
 import (
 	"context"
@@ -6,26 +6,31 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/keepalive"
 	"io"
 	"log"
 	"net"
-	"spaceship/internal/config"
+	serverConfig "spaceship/internal/config/server"
 	"spaceship/internal/transport"
+	"spaceship/internal/transport/rpc"
 	proxy "spaceship/internal/transport/rpc/proto"
 	"time"
 )
 
 type server struct {
 	proxy.UnimplementedProxyServer
-	Ctx context.Context
+	Ctx   context.Context
+	Users *serverConfig.Users
 }
 
-func NewServer(ctx context.Context) *grpc.Server {
+func NewServer(ctx context.Context, users *serverConfig.Users, ssl *serverConfig.SSL) *grpc.Server {
+	// check users
+	if users.IsNullOrEmpty() {
+		log.Fatalln("users can not be empty")
+	}
 	// create server and register
 	var transportOption grpc.ServerOption
-	if config.LoadedConfig.SSL != nil {
-		credential, err := credentials.NewServerTLSFromFile(config.LoadedConfig.SSL.Cert, config.LoadedConfig.SSL.Key)
+	if ssl != nil {
+		credential, err := credentials.NewServerTLSFromFile(ssl.Cert, ssl.Key)
 		if err != nil {
 			log.Fatalf("failed to setup TLS: %v", err)
 		}
@@ -35,21 +40,16 @@ func NewServer(ctx context.Context) *grpc.Server {
 		log.Println("using insecure grpc [h2c]")
 		transportOption = grpc.Creds(insecure.NewCredentials())
 	}
-	opts := []grpc.ServerOption{
-		transportOption,
-		grpc.ReadBufferSize(0), // without buffer for less delay
-		grpc.WriteBufferSize(0),
-		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
-			MinTime: 10 * time.Second,
-		}),
-		grpc.ConnectionTimeout(5 * time.Second),
-	}
-	s := grpc.NewServer(opts...)
-	proxy.RegisterProxyServer(s, &server{Ctx: ctx})
+	s := grpc.NewServer(append(rpc.ServerOptions, transportOption)...)
+	proxy.RegisterProxyServer(s, &server{
+		Ctx:   ctx,
+		Users: users,
+	})
 	return s
 }
 
 type forwarder struct {
+	Server *server
 	// stream data by grpc
 	Stream proxy.Proxy_ProxyServer
 	// conn outer connection
@@ -115,7 +115,7 @@ func (c *forwarder) CopyClientToTarget() error {
 		// if first ack
 		if !handshake {
 			// check user
-			if _, ok := transport.UUIDs[req.Id]; !ok {
+			if !c.Server.Users.Match(req.Id) {
 				return fmt.Errorf("unauthticated uuid: %s %w", req.Id, transport.ErrorUserNotFound)
 			}
 			//log.Printf("testing if ok: %s:%d", req.Fqdn, req.Port)
@@ -158,7 +158,11 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 	// block main until canceled
 	ctx, cancel := context.WithCancel(s.Ctx)
 	// forwarder
-	f := &forwarder{Stream: stream, Ack: make(chan bool)}
+	f := &forwarder{
+		Server: s,
+		Stream: stream,
+		Ack:    make(chan bool),
+	}
 	// target <- client
 	go func() {
 		err := f.CopyClientToTarget()

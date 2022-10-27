@@ -5,7 +5,7 @@ import (
 	"log"
 	"net"
 	"spaceship/internal/transport"
-	"spaceship/internal/transport/rpc"
+	"spaceship/internal/transport/rpc/client"
 )
 
 type Server struct {
@@ -44,7 +44,7 @@ func (s *Server) ServeConn(conn net.Conn) error {
 	}(conn)
 	f := &Forwarder{
 		Ctx:       s.Ctx,
-		Transport: rpc.NewClient(),
+		Transport: client.NewClient(),
 		Conn:      conn,
 	}
 	return f.Forward()

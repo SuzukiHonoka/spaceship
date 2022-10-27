@@ -1,71 +1,46 @@
-package rpc
+package client
 
 import (
 	"context"
 	"crypto/x509"
 	"fmt"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/keepalive"
 	"io"
-	"net"
-	"spaceship/internal/config"
 	"spaceship/internal/transport"
+	"spaceship/internal/transport/rpc"
 	proxy "spaceship/internal/transport/rpc/proto"
-	"time"
 )
 
-var ClientPool *Pool
+var UUID string
+
+var ConnPool *Pool
 
 type Client struct {
 	proxy.ProxyClient
 }
 
-func PoolInit() error {
+func PoolInit(server, hostName string, tls bool, mux uint8) error {
 	var credential credentials.TransportCredentials
-	if config.LoadedConfig.TLS {
+	if tls {
 		pool, err := x509.SystemCertPool()
 		if err != nil {
 			panic(err)
 		}
 		// error handling omitted
-		credential = credentials.NewClientTLSFromCert(pool, config.LoadedConfig.Host)
+		credential = credentials.NewClientTLSFromCert(pool, hostName)
 	} else {
 		credential = insecure.NewCredentials()
 	}
-	ClientPool = NewPool(int(config.LoadedConfig.Mux))
-	opts := []grpc.DialOption{
-		grpc.WithTransportCredentials(credential),
-		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:    10 * time.Second,
-			Timeout: 5 * time.Second,
-		}),
-		grpc.WithConnectParams(grpc.ConnectParams{
-			//value of first 3 fields is from backoff.DefaultConfig
-			Backoff: backoff.Config{
-				BaseDelay:  1.0 * time.Second,
-				Multiplier: 1.6,
-				Jitter:     0.2,
-				MaxDelay:   5 * time.Second,
-			},
-			MinConnectTimeout: 5 * time.Second,
-		}),
-		grpc.WithContextDialer(func(ctx context.Context, s string) (net.Conn, error) {
-			return (&net.Dialer{
-				Timeout: 5 * time.Second,
-			}).DialContext(ctx, "tcp", s)
-		}),
-		grpc.WithUserAgent("spaceship/" + config.VersionCode),
-	}
-	err := ClientPool.FullInit(config.LoadedConfig.ServerAddr, opts...)
+	ConnPool = NewPool(int(mux))
+	err := ConnPool.FullInit(server, append(rpc.DialOptions, grpc.WithTransportCredentials(credential))...)
 	return err
 }
 
 func NewClient() *Client {
 	//defer conn.Close()
-	client, err := ClientPool.GetClient()
+	client, err := ConnPool.GetClient()
 	if err != nil {
 		panic(err)
 	}
@@ -87,13 +62,13 @@ func (c *clientForwarder) CopySRCtoTarget() error {
 	// buffer
 	buf := make([]byte, transport.BufferSize)
 	for {
-		//log.Println("rpc client sending...")
+		//log.Println("rpc client reading...")
 		//read from src
 		n, err := c.Reader.Read(buf)
 		if err != nil {
 			return err
 		}
-		//fmt.Printf("<----- \n%s\n", buf)
+		//fmt.Printf("<----- packet size: %d\n%s\n", n, buf)
 		// send to rpc
 		srcData := &proxy.ProxySRC{
 			Data: buf[:n],
@@ -109,7 +84,7 @@ func (c *clientForwarder) CopySRCtoTarget() error {
 
 func (c *clientForwarder) CopyTargetToSRC() error {
 	for {
-		//log.Println("rcp client reading..")
+		//log.Println("rpc server reading..")
 		res, err := c.Stream.Recv()
 		if err != nil {
 			return err
@@ -127,10 +102,11 @@ func (c *clientForwarder) CopyTargetToSRC() error {
 			if n != len(res.Data) {
 				return fmt.Errorf("received: %d sent: %d loss: %d %w", len(res.Data), n, n/len(res.Data), transport.ErrorPacketLoss)
 			}
-			//log.Println("dst sent")
+			//log.Println("rpc server msg forwarded")
 		case proxy.ProxyStatus_Accepted:
 			c.LocalAddr <- res.Addr
 		case proxy.ProxyStatus_EOF:
+			c.LocalAddr <- ""
 			return nil
 		case proxy.ProxyStatus_Error:
 			c.LocalAddr <- ""
@@ -154,7 +130,7 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 	//log.Printf("sending proxy to rpc: %s", req.Fqdn)
 	// get local addr first
 	err = stream.Send(&proxy.ProxySRC{
-		Id:   config.LoadedConfig.UUID,
+		Id:   UUID,
 		Fqdn: req.Fqdn,
 		Port: uint32(req.Port),
 	})
@@ -182,5 +158,6 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 	}()
 	// block main
 	<-ctx.Done()
+	//log.Println("client done")
 	return nil
 }

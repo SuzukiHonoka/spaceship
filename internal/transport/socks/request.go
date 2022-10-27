@@ -7,7 +7,7 @@ import (
 	"log"
 	"net"
 	"spaceship/internal/transport"
-	"spaceship/internal/transport/rpc"
+	"spaceship/internal/transport/rpc/client"
 	"strconv"
 )
 
@@ -140,9 +140,9 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 	}
 	log.Printf("socks: %s:%d -> rpc", target, req.DestAddr.Port)
 	localAdder := make(chan string)
-	client := rpc.NewClient()
+	c := client.NewClient()
 	// if grpc connection failed
-	if client == nil {
+	if c == nil {
 		cancel()
 		if err := sendReply(conn, serverFailure, nil); err != nil {
 			return fmt.Errorf("failed to send reply: %v", err)
@@ -154,7 +154,7 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 		Port: req.DestAddr.Port,
 	})
 	go func() {
-		err := client.Proxy(ctx, localAdder, conn, req.bufConn)
+		err := c.Proxy(ctx, localAdder, conn, req.bufConn)
 		transport.PrintErrorIfNotCritical(err, "rpc proxy failed")
 		cancel()
 	}()
