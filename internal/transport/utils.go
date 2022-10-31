@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 )
 
 // PrintErrorIfNotCritical prints only error that critical
@@ -48,4 +49,17 @@ func GetTargetDst(fqdn string, port int) string {
 		target = fmt.Sprintf("[%s]:%d", fqdn, port)
 	}
 	return target
+}
+
+// SplitHostPort uses net.SplitHostPort but converts port to uint16 format
+func SplitHostPort(s string) (string, uint16, error) {
+	host, sport, err := net.SplitHostPort(s)
+	if err != nil {
+		return "", 0, err
+	}
+	port, err := strconv.Atoi(sport)
+	if err != nil {
+		return "", 0, err
+	}
+	return host, uint16(port), nil
 }
