@@ -147,13 +147,13 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 	// rpc stream receiver
 	go func() {
 		err := f.CopyTargetToSRC()
-		transport.PrintErrorIfNotCritical(err, "error occurred while src <- target "+req.Fqdn)
+		transport.PrintErrorIfNotCritical(err, fmt.Sprintf("rpc: src <- server -> %s", req.Fqdn))
 		cancel()
 	}()
 	// rpc sender
 	go func() {
 		err := f.CopySRCtoTarget()
-		transport.PrintErrorIfNotCritical(err, "error occurred while src -> target "+req.Fqdn)
+		transport.PrintErrorIfNotCritical(err, fmt.Sprintf("rpc: src -> server -> %s", req.Fqdn))
 		cancel()
 	}()
 	// block main
