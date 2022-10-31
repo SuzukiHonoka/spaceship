@@ -63,3 +63,8 @@ func SplitHostPort(s string) (string, uint16, error) {
 	}
 	return host, uint16(port), nil
 }
+
+// ForceClose forces close the closer
+func ForceClose(closer io.Closer) {
+	_ = closer.Close()
+}
