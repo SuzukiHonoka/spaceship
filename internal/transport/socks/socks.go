@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"spaceship/internal/transport"
 )
 
 const (
@@ -66,13 +67,13 @@ func (s *Server) ServeConn(conn net.Conn) error {
 	// Read the version byte
 	version := []byte{0}
 	if _, err := bufConn.Read(version); err != nil {
-		log.Printf("[ERR] socks: Failed to get version byte: %v\n", err)
+		log.Printf("[ERR] socks: Failed to get version byte: %v", err)
 		return err
 	}
 	// Ensure we are compatible
 	if version[0] != socks5Version {
 		err := fmt.Errorf("unsupported socks version: %v", version)
-		log.Printf("[ERR] socks: %v\n", err)
+		log.Printf("[ERR] socks: %v", err)
 		return err
 	}
 	// Authenticate the connection
