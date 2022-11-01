@@ -13,6 +13,7 @@ import (
 	"spaceship/internal/transport"
 	"spaceship/internal/transport/rpc"
 	proxy "spaceship/internal/transport/rpc/proto"
+	"strconv"
 	"time"
 )
 
@@ -166,13 +167,13 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 	// target <- client
 	go func() {
 		err := f.CopyClientToTarget()
-		transport.PrintErrorIfNotCritical(err, "error occurred while client -> target")
+		transport.PrintErrorIfNotCritical(err, "rpc: client -> target error")
 		cancel()
 	}()
 	// target -> client
 	go func() {
 		err := f.CopyTargetToClient()
-		transport.PrintErrorIfNotCritical(err, "error occurred while client <- target")
+		transport.PrintErrorIfNotCritical(err, "rpc: client <- target error")
 		cancel()
 	}()
 	<-ctx.Done()

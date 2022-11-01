@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"spaceship/internal/transport"
+	"strconv"
 	"time"
 )
 
@@ -47,13 +48,13 @@ func (d Direct) Proxy(ctx context.Context, localAddr chan<- string, dst io.Write
 	// src -> dst
 	go func() {
 		err := streamCopy(src, conn)
-		transport.PrintErrorIfNotCritical(err, "error occurred while proxying")
+		transport.PrintErrorIfNotCritical(err, "direct: src -> dst error")
 		cancel()
 	}()
 	// src <- dst
 	go func() {
 		err := streamCopy(conn, dst)
-		transport.PrintErrorIfNotCritical(err, "error occurred while proxying")
+		transport.PrintErrorIfNotCritical(err, "direct: src <- dst error")
 		cancel()
 	}()
 	<-ctx.Done()
