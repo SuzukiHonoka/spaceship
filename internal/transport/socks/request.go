@@ -41,7 +41,7 @@ var (
 type AddrSpec struct {
 	FQDN string
 	IP   net.IP
-	Port int
+	Port uint16
 }
 
 func (a *AddrSpec) String() string {
@@ -55,9 +55,9 @@ func (a *AddrSpec) String() string {
 // address, fallback to FQDN
 func (a AddrSpec) Address() string {
 	if 0 != len(a.IP) {
-		return net.JoinHostPort(a.IP.String(), strconv.Itoa(a.Port))
+		return net.JoinHostPort(a.IP.String(), strconv.Itoa(int(a.Port)))
 	}
-	return net.JoinHostPort(a.FQDN, strconv.Itoa(a.Port))
+	return net.JoinHostPort(a.FQDN, strconv.Itoa(int(a.Port)))
 }
 
 // A Request represents request received by a server
@@ -242,7 +242,7 @@ func readAddrSpec(r io.Reader) (*AddrSpec, error) {
 	if _, err := io.ReadAtLeast(r, port, 2); err != nil {
 		return nil, err
 	}
-	d.Port = (int(port[0]) << 8) | int(port[1])
+	d.Port = uint16((int(port[0]) << 8) | int(port[1]))
 
 	return d, nil
 }
@@ -262,12 +262,12 @@ func sendReply(w io.Writer, resp uint8, addr *AddrSpec) error {
 	case addr.IP.To4() != nil:
 		addrType = ipv4Address
 		addrBody = addr.IP.To4()
-		addrPort = uint16(addr.Port)
+		addrPort = addr.Port
 
 	case addr.IP.To16() != nil:
 		addrType = ipv6Address
 		addrBody = addr.IP.To16()
-		addrPort = uint16(addr.Port)
+		addrPort = addr.Port
 
 	default:
 		return fmt.Errorf("failed to format address: %v", addr)
