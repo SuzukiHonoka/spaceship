@@ -37,8 +37,8 @@ func (d Direct) Proxy(ctx context.Context, localAddr chan<- string, dst io.Write
 		return transport.ErrorRequestNotFound
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	target := transport.GetTargetDst(req.Fqdn, req.Port)
-	conn, err := net.DialTimeout("tcp", target, 3*time.Minute)
+	target := net.JoinHostPort(req.Fqdn, strconv.Itoa(int(req.Port)))
+	conn, err := net.DialTimeout(transport.Network, target, 3*time.Minute)
 	if err != nil {
 		cancel()
 		localAddr <- ""

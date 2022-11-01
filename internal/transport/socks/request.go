@@ -166,9 +166,8 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 		return nil
 	}
 	// Send success
-	ip, port, _ := net.SplitHostPort(local)
-	nport, _ := strconv.Atoi(port)
-	bind := AddrSpec{IP: net.ParseIP(ip), Port: nport}
+	ip, port, _ := transport.SplitHostPort(local)
+	bind := AddrSpec{IP: net.ParseIP(ip), Port: port}
 	if err := sendReply(conn, successReply, &bind); err != nil {
 		return fmt.Errorf("failed to send reply: %v", err)
 	}

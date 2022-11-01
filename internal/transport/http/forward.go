@@ -36,7 +36,7 @@ func ParseReqFromRaw(target string) (method, host, params string, port int, err 
 	case "CONNECT":
 		// no scheme
 		// CONNECT www.google.com:443 HTTP/1.1
-		host, sport, err = net.SplitHostPort(targetRawUri)
+		host, port, err = transport.SplitHostPort(targetRawUri)
 	default:
 		// parse URL from raw
 		targetUrl, err := url.Parse(targetRawUri)
@@ -47,7 +47,7 @@ func ParseReqFromRaw(target string) (method, host, params string, port int, err 
 		// mark
 		hasScheme := targetUrl.Scheme != ""
 		// divide the host and port
-		host, sport, err = net.SplitHostPort(targetUrl.Host)
+		host, port, err = transport.SplitHostPort(targetUrl.Host)
 		// will raise error if port not found
 		// 1. http://google.com 2. google.com
 		if err != nil {

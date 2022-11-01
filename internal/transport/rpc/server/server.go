@@ -120,7 +120,7 @@ func (c *forwarder) CopyClientToTarget() error {
 			}
 			//log.Printf("testing if ok: %s:%d", req.Fqdn, req.Port)
 			// finally create the dialer
-			target := transport.GetTargetDst(req.Fqdn, int(req.Port))
+			target := net.JoinHostPort(req.Fqdn, strconv.Itoa(int(req.Port)))
 			// dial to target with 3 minute timeout
 			c.Conn, err = net.DialTimeout(transport.Network, target, 3*time.Minute)
 			// dialer dial failed

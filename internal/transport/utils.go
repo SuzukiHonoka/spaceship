@@ -2,7 +2,6 @@ package transport
 
 import (
 	"errors"
-	"fmt"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"io"
@@ -34,21 +33,6 @@ func PrintErrorIfNotCritical(err error, msg string) {
 		}
 	}
 	log.Printf("%s: %v", msg, err)
-}
-
-// GetTargetDst return dst addr and assume parameter won't be nil
-func GetTargetDst(fqdn string, port int) string {
-	var target string
-	ip := net.ParseIP(fqdn)
-	switch {
-	case ip == nil:
-		fallthrough
-	case ip.To4() != nil:
-		target = fmt.Sprintf("%s:%d", fqdn, port)
-	case ip.To16() != nil:
-		target = fmt.Sprintf("[%s]:%d", fqdn, port)
-	}
-	return target
 }
 
 // SplitHostPort uses net.SplitHostPort but converts port to uint16 format
