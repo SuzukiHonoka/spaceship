@@ -32,16 +32,13 @@ func (s *Server) Serve(l net.Listener) error {
 			return err
 		}
 		go func() {
-			err := s.ServeConn(conn)
-			transport.PrintErrorIfNotCritical(err, "error when serving http")
+			_ = s.ServeConn(conn)
 		}()
 	}
 }
 
 func (s *Server) ServeConn(conn net.Conn) error {
-	defer func(conn net.Conn) {
-		_ = conn.Close()
-	}(conn)
+	defer transport.ForceClose(conn)
 	f := &Forwarder{
 		Ctx:       s.Ctx,
 		Transport: client.NewClient(),
