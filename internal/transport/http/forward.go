@@ -98,8 +98,11 @@ func (f *Forwarder) handleProxy(method, rawParams string, reader *bytes.Reader, 
 		}
 		//log.Println(line)
 		headerName := line[:strings.Index(line, ":")]
-		if !hopHeadersMap.Filter(headerName) {
-			f.b.WriteString(line + "\r\n")
+		if !hopHeaders.Filter(headerName) {
+			sb = strings.Builder{}
+			sb.WriteString(line)
+			sb.WriteString(CRLF)
+			f.b.WriteString(line + CRLF)
 		}
 	}
 	// rest of raw data
