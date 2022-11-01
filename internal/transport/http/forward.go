@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/url"
 	"spaceship/internal/transport"
-	"strconv"
 	"strings"
 )
 
@@ -21,7 +20,8 @@ type Forwarder struct {
 	b    *bytes.Buffer
 }
 
-func ParseReqFromRaw(target string) (method, host, params string, port int, err error) {
+// ParseReqFromRaw parses request from raw tcp message
+func ParseReqFromRaw(target string) (method, host, params string, port uint16, err error) {
 	method, rest, ok1 := strings.Cut(target, " ")
 	targetRawUri, _, ok2 := strings.Cut(rest, " ")
 	// proper request format at first line: (HTTP_METHOD TARGET_URL HTTP_VERSION)
@@ -31,7 +31,6 @@ func ParseReqFromRaw(target string) (method, host, params string, port int, err 
 		return method, host, params, port, transport.ErrorBadRequest
 	}
 	//log.Println(method, targetRawUri)
-	var sport string
 	switch method {
 	case "CONNECT":
 		// no scheme
@@ -57,28 +56,31 @@ func ParseReqFromRaw(target string) (method, host, params string, port int, err 
 			}
 			host = targetUrl.Host
 			if hasScheme {
-				switch targetUrl.Scheme {
-				case "http":
-					sport = "80"
-				case "https":
-					sport = "443"
-				default:
+				v, ok := ProtocolMap[targetUrl.Scheme]
+				if !ok {
 					err = fmt.Errorf("unkown scheme: %s %w", targetUrl.Scheme, transport.ErrorBadRequest)
 					return method, host, params, port, err
 				}
+				port = v
 			} else {
-				sport = "80"
+				port = 80
 			}
 		}
 		params = GetRawParamsFromUrl(hasScheme, targetRawUri)
 	}
-	port, err = strconv.Atoi(sport)
 	//log.Println("req parsed:", method, host, params, port)
 	return method, host, params, port, nil
 }
 
 func (f *Forwarder) handleProxy(method, rawParams string, reader *bytes.Reader, scanner *bufio.Scanner) error {
-	head := fmt.Sprintf("%s %s %s\n", method, rawParams, "HTTP/1.1")
+	var sb strings.Builder
+	sb.WriteString(method)
+	sb.WriteRune(' ')
+	sb.WriteString(rawParams)
+	sb.WriteRune(' ')
+	sb.WriteString("HTTP/1.1")
+	sb.WriteString(CRLF)
+	head := sb.String()
 	//log.Printf("head: %s", head)
 	_, _ = f.b.WriteString(head)
 	// filter headers
@@ -88,7 +90,7 @@ func (f *Forwarder) handleProxy(method, rawParams string, reader *bytes.Reader, 
 		if line == "" {
 			// if no payload
 			if !scanner.Scan() {
-				f.b.WriteString("\r\n")
+				f.b.WriteString(CRLF)
 				return nil
 			} else {
 				// payload exist -> write back
@@ -164,6 +166,7 @@ func (f *Forwarder) Forward() error {
 	// if we reached the end or any error occurred
 	if !ok {
 		if err := scanner.Err(); err != nil {
+			log.Printf("http: scann first line failed: %s", err)
 			return err
 		}
 		return transport.ErrorBadRequest
@@ -172,7 +175,9 @@ func (f *Forwarder) Forward() error {
 	// only in formal request methods and having http prefix in URL
 	first := scanner.Text()
 	method, host, params, port, err := ParseReqFromRaw(first)
+	// parse error
 	if err != nil {
+		log.Printf("http: parse request failed: %s", err)
 		return err
 	}
 	// buffer for stored raw messages
@@ -185,8 +190,9 @@ func (f *Forwarder) Forward() error {
 	default:
 		err = f.handleProxy(method, params, reader, scanner)
 	}
-	// parse error
+	// handle error
 	if err != nil {
+		log.Printf("http: handle request failed: %s", err)
 		return err
 	}
 	log.Printf("http: %s:%d -> rpc", host, port)
@@ -212,14 +218,14 @@ func (f *Forwarder) Forward() error {
 		if b := f.b.Bytes(); len(b) > 0 {
 			_, err = w.Write(f.b.Bytes())
 			if err != nil {
-				log.Println("write err:", err)
+				log.Println("http: write buffer err:", err)
 				proxyError <- err
 			}
 		}
 		//log.Println("src -> target start")
 		_, err = io.Copy(w, f.Conn)
 		if err != nil {
-			log.Println("copy err:", err)
+			transport.PrintErrorIfNotCritical(err, "http: copy stream error")
 			proxyError <- err
 		}
 		proxyError <- io.EOF
@@ -228,13 +234,20 @@ func (f *Forwarder) Forward() error {
 	//log.Println("wait for local addr")
 	//ld := <-localAddr
 	//log.Printf("local addr: %s", ld)
+	var b bytes.Buffer
 	if <-localAddr == "" {
-		_, _ = f.Conn.Write([]byte("HTTP/1.1 503 Service Unavailable\r\n\r\n"))
+		b.WriteString("HTTP/1.1 503 Service Unavailable")
 	} else if method == "CONNECT" {
-		_, err = f.Conn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
-		if err != nil {
-			return err
-		}
+		b.WriteString("HTTP/1.1 200 Connection established")
+	}
+	// message end
+	for i := 0; i < 2; i++ {
+		b.WriteString(CRLF)
+	}
+	_, err = f.Conn.Write(b.Bytes())
+	if err != nil {
+		transport.PrintErrorIfNotCritical(err, "http: send http status error")
+		return err
 	}
 	return <-proxyError
 }
