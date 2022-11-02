@@ -8,9 +8,11 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"io"
+	"log"
 	"spaceship/internal/transport"
 	"spaceship/internal/transport/rpc"
 	proxy "spaceship/internal/transport/rpc/proto"
+	"time"
 )
 
 var UUID string
@@ -116,15 +118,18 @@ func (c *clientForwarder) CopyTargetToSRC() error {
 }
 
 func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer, r io.Reader) error {
+	defer close(localAddr)
 	req, ok := ctx.Value("request").(*transport.Request)
 	if !ok {
+		localAddr <- ""
 		return transport.ErrorRequestNotFound
 	}
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	// rcp client
 	stream, err := c.ProxyClient.Proxy(ctx)
 	if err != nil {
-		cancel()
+		localAddr <- ""
 		return err
 	}
 	//log.Printf("sending proxy to rpc: %s", req.Fqdn)
@@ -135,14 +140,15 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 		Port: uint32(req.Port),
 	})
 	if err != nil {
-		cancel()
 		return err
 	}
+	watcher := make(chan string)
+	defer close(watcher)
 	f := &clientForwarder{
 		Stream:    stream,
 		Writer:    w,
 		Reader:    r,
-		LocalAddr: localAddr,
+		LocalAddr: watcher,
 	}
 	// rpc stream receiver
 	go func() {
@@ -156,6 +162,16 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 		transport.PrintErrorIfNotCritical(err, fmt.Sprintf("rpc: src -> server -> %s", req.Fqdn))
 		cancel()
 	}()
+	select {
+	case <-time.After(3 * time.Second):
+		//timed out
+		localAddr <- ""
+		log.Printf("rpc: server -> %s timed out", req.Fqdn)
+		return nil
+	case localAddr <- <-watcher:
+		// done
+		//log.Printf("rpc: server -> %s success", req.Fqdn)
+	}
 	// block main
 	<-ctx.Done()
 	//log.Println("client done")
