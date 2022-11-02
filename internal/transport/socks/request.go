@@ -129,8 +129,6 @@ func (s *Server) handleRequest(req *Request, conn conn) error {
 
 // handleConnect is used to handle a connect command
 func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) error {
-	// ctx
-	ctx, cancel := context.WithCancel(ctx)
 	// set target dst
 	var target string
 	if req.DestAddr.FQDN != "" {
@@ -143,7 +141,6 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 	c := client.NewClient()
 	// if grpc connection failed
 	if c == nil {
-		cancel()
 		if err := sendReply(conn, serverFailure, nil); err != nil {
 			return fmt.Errorf("failed to send reply: %v", err)
 		}
@@ -156,10 +153,9 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 	go func() {
 		err := c.Proxy(ctx, localAdder, conn, req.bufConn)
 		transport.PrintErrorIfNotCritical(err, "rpc proxy failed")
-		cancel()
 	}()
 	local := <-localAdder
-	if len(local) == 0 {
+	if local == "" {
 		if err := sendReply(conn, networkUnreachable, nil); err != nil {
 			return fmt.Errorf("failed to send reply: %v", err)
 		}
