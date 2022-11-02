@@ -108,7 +108,6 @@ func (c *clientForwarder) CopyTargetToSRC() error {
 		case proxy.ProxyStatus_Accepted:
 			c.LocalAddr <- res.Addr
 		case proxy.ProxyStatus_EOF:
-			c.LocalAddr <- ""
 			return nil
 		case proxy.ProxyStatus_Error:
 			c.LocalAddr <- ""
