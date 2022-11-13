@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"io"
 	"log"
+	"os"
 	"spaceship/internal/transport"
 	"spaceship/internal/transport/rpc"
 	proxy "spaceship/internal/transport/rpc/proto"
@@ -23,12 +24,27 @@ type Client struct {
 	proxy.ProxyClient
 }
 
-func PoolInit(server, hostName string, tls bool, mux uint8) error {
+func PoolInit(server, hostName string, tls bool, mux uint8, cas []string) error {
 	var credential credentials.TransportCredentials
 	if tls {
 		pool, err := x509.SystemCertPool()
 		if err != nil {
-			panic(err)
+			if len(cas) == 0 {
+				log.Fatalf("You have to add at least a CA since the system cert pool can not be copied: %v", err)
+			}
+			log.Println("copy system cert pool failed, going to use new pool")
+			pool = x509.NewCertPool()
+		}
+		// load custom cas if exist
+		for _, path := range cas {
+			cert, err := os.ReadFile(path)
+			if err != nil {
+				log.Printf("read CA file from path: %s failed: %v", path, err)
+				continue
+			}
+			if pool.AppendCertsFromPEM(cert) {
+				log.Printf("added CA: [%s] to cert pool", path)
+			}
 		}
 		// error handling omitted
 		credential = credentials.NewClientTLSFromCert(pool, hostName)

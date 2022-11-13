@@ -17,6 +17,7 @@ import (
 type Config struct {
 	Role
 	*dns.DNS    `json:"dns,omitempty"`
+	CAs         []string `json:"cas,omitempty"`
 	logger.Mode `json:"log,omitempty"`
 	client.Client
 	server.Server
