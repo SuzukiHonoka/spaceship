@@ -160,6 +160,7 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 		Port: uint32(req.Port),
 	})
 	if err != nil {
+		localAddr <- ""
 		return err
 	}
 	watcher := make(chan string)
