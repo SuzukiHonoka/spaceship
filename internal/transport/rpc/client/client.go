@@ -22,9 +22,10 @@ var ConnPool *Pool
 
 type Client struct {
 	proxy.ProxyClient
+	DoneFunc func() error
 }
 
-func PoolInit(server, hostName string, tls bool, mux uint8, cas []string) error {
+func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 	var credential credentials.TransportCredentials
 	if tls {
 		pool, err := x509.SystemCertPool()
@@ -53,18 +54,18 @@ func PoolInit(server, hostName string, tls bool, mux uint8, cas []string) error 
 	} else {
 		credential = insecure.NewCredentials()
 	}
-	ConnPool = NewPool(int(mux))
-	err := ConnPool.FullInit(server, append(rpc.DialOptions, grpc.WithTransportCredentials(credential))...)
+	ConnPool = NewPool(int(mux), server, append(rpc.DialOptions, grpc.WithTransportCredentials(credential))...)
+	err := ConnPool.Init()
 	return err
 }
 
 func NewClient() *Client {
 	//defer conn.Close()
-	client, err := ConnPool.GetClient()
+	client, doneFunc, err := ConnPool.GetClient()
 	if err != nil {
 		panic(err)
 	}
-	return &Client{ProxyClient: client}
+	return &Client{ProxyClient: client, DoneFunc: doneFunc}
 }
 
 type clientForwarder struct {
@@ -75,7 +76,7 @@ type clientForwarder struct {
 }
 
 func (c *Client) Close() error {
-	return nil
+	return c.DoneFunc()
 }
 
 func (c *clientForwarder) CopySRCtoTarget() error {
