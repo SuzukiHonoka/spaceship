@@ -134,15 +134,18 @@ func (c *clientForwarder) CopyTargetToSRC() error {
 
 func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer, r io.Reader) error {
 	defer close(localAddr)
+	defer func() {
+		_ = c.Close()
+	}()
 	req, ok := ctx.Value("request").(*transport.Request)
 	if !ok {
 		localAddr <- ""
 		return transport.ErrorRequestNotFound
 	}
-	ctx, cancel := context.WithCancel(ctx)
+	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	// rcp client
-	stream, err := c.ProxyClient.Proxy(ctx)
+	stream, err := c.ProxyClient.Proxy(sessionCtx)
 	if err != nil {
 		localAddr <- ""
 		return err
@@ -188,7 +191,10 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 		//log.Printf("rpc: server -> %s success", req.Fqdn)
 	}
 	// block main
-	<-ctx.Done()
+	select {
+	case <-sessionCtx.Done():
+	case <-ctx.Done():
+	}
 	//log.Println("client done")
 	return nil
 }

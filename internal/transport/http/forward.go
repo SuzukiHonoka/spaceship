@@ -198,7 +198,9 @@ func (f *Forwarder) Forward() error {
 	log.Printf("http: %s:%d -> rpc", host, port)
 	//forward process
 	localAddr := make(chan string)
-	valuedCtx := context.WithValue(f.Ctx, "request", &transport.Request{
+	ctx, done := context.WithCancel(f.Ctx)
+	defer done()
+	valuedCtx := context.WithValue(ctx, "request", &transport.Request{
 		Fqdn: host,
 		Port: port,
 	})
