@@ -212,21 +212,20 @@ func (f *Forwarder) Forward() error {
 	// channel for receive err and wait for
 	proxyError := make(chan error)
 	go func() {
-		err = f.Proxy(valuedCtx, localAddr, f.Conn, r)
+		err := f.Proxy(valuedCtx, localAddr, f.Conn, r)
+		transport.PrintErrorIfNotCritical(err, "rpc proxy failed")
 		proxyError <- err
 	}()
 	go func() {
 		// buffer rewrite -> reconstructed tcp raw msg
 		if b := f.b.Bytes(); len(b) > 0 {
-			_, err = w.Write(f.b.Bytes())
-			if err != nil {
+			if _, err := w.Write(f.b.Bytes()); err != nil {
 				log.Println("http: write buffer err:", err)
 				proxyError <- err
 			}
 		}
 		//log.Println("src -> target start")
-		_, err = io.Copy(w, f.Conn)
-		if err != nil {
+		if _, err := io.Copy(w, f.Conn); err != nil {
 			transport.PrintErrorIfNotCritical(err, "http: copy stream error")
 			proxyError <- err
 		}
@@ -246,8 +245,7 @@ func (f *Forwarder) Forward() error {
 	for i := 0; i < 2; i++ {
 		b.WriteString(CRLF)
 	}
-	_, err = f.Conn.Write(b.Bytes())
-	if err != nil {
+	if _, err = f.Conn.Write(b.Bytes()); err != nil {
 		transport.PrintErrorIfNotCritical(err, "http: send http status error")
 		return err
 	}
