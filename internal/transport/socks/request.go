@@ -150,9 +150,12 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 		Fqdn: target,
 		Port: req.DestAddr.Port,
 	})
+	proxyError := make(chan error)
+	//defer close(proxyError)
 	go func() {
 		err := c.Proxy(ctx, localAdder, conn, req.bufConn)
 		transport.PrintErrorIfNotCritical(err, "rpc proxy failed")
+		proxyError <- err
 	}()
 	local := <-localAdder
 	if local == "" {
@@ -168,8 +171,8 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 		return fmt.Errorf("failed to send reply: %v", err)
 	}
 	//log.Printf("proxy local addr: %s\n", local)
-	<-ctx.Done()
 	//log.Println("proxy local end")
+	<-proxyError
 	return nil
 }
 
