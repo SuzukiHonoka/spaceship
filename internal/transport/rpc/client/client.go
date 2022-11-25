@@ -32,7 +32,7 @@ func PoolInit(server, hostName string, tls bool, mux uint8, cas []string) error 
 			if len(cas) == 0 {
 				log.Fatalf("You have to add at least a CA since the system cert pool can not be copied: %v", err)
 			}
-			log.Println("copy system cert pool failed, going to use new pool")
+			log.Println("copy system cert pool failed, creating new empty pool")
 			pool = x509.NewCertPool()
 		}
 		// load custom cas if exist
@@ -43,7 +43,9 @@ func PoolInit(server, hostName string, tls bool, mux uint8, cas []string) error 
 				continue
 			}
 			if pool.AppendCertsFromPEM(cert) {
-				log.Printf("added CA: [%s] to cert pool", path)
+				log.Printf("CA: [%s] added to cert pool", path)
+			} else {
+				log.Printf("CA: [%s] add to cert pool failed", path)
 			}
 		}
 		// error handling omitted
