@@ -12,22 +12,17 @@ import (
 
 var DialOptions = []grpc.DialOption{
 	grpc.WithKeepaliveParams(keepalive.ClientParameters{
-		Time:    10 * time.Second,
-		Timeout: 5 * time.Second,
+		Time:                10 * time.Second,
+		Timeout:             3 * time.Second,
+		PermitWithoutStream: true,
 	}),
 	grpc.WithConnectParams(grpc.ConnectParams{
-		//value of first 3 fields is from backoff.DefaultConfig
-		Backoff: backoff.Config{
-			BaseDelay:  1.0 * time.Second,
-			Multiplier: 1.6,
-			Jitter:     0.2,
-			MaxDelay:   5 * time.Second,
-		},
-		MinConnectTimeout: 5 * time.Second,
+		Backoff:           backoff.DefaultConfig,
+		MinConnectTimeout: 3 * time.Second,
 	}),
 	grpc.WithContextDialer(func(ctx context.Context, s string) (net.Conn, error) {
 		return (&net.Dialer{
-			Timeout: 5 * time.Second,
+			Timeout: 3 * time.Second,
 		}).DialContext(ctx, "tcp", s)
 	}),
 	grpc.WithUserAgent("spaceship/" + manifest.VersionCode),
@@ -38,7 +33,8 @@ var ServerOptions = []grpc.ServerOption{
 	grpc.ReadBufferSize(0),
 	grpc.WriteBufferSize(0),
 	grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
-		MinTime: 10 * time.Second,
+		MinTime:             5 * time.Second,
+		PermitWithoutStream: true,
 	}),
-	grpc.ConnectionTimeout(5 * time.Second),
+	grpc.ConnectionTimeout(3 * time.Second),
 }
