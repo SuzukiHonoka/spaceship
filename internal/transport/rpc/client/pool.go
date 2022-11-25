@@ -1,42 +1,84 @@
 package client
 
 import (
-	"fmt"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"log"
-	"spaceship/internal/transport"
 	proxy "spaceship/internal/transport/rpc/proto"
 	"sync"
+	"sync/atomic"
 )
+
+type ConnWrapper struct {
+	*grpc.ClientConn
+	InUse uint32
+}
+
+func (w *ConnWrapper) Use() {
+	atomic.AddUint32(&w.InUse, 1)
+}
+
+func (w *ConnWrapper) Done() error {
+	atomic.AddUint32(&w.InUse, ^uint32(0))
+	return nil
+}
+
+type ConnWrappers []*ConnWrapper
+
+type Params struct {
+	Addr string
+	Opts []grpc.DialOption
+}
+
+func NewParams(addr string, opts ...grpc.DialOption) *Params {
+	return &Params{
+		Addr: addr,
+		Opts: opts,
+	}
+}
 
 // Pool is a looped sequence, stores the grpc connections for reuse propose
 type Pool struct {
-	Position int                // current cluster position
-	Size     int                // max capacity
-	Elements []*grpc.ClientConn // connections
+	Position int          // current cluster position
+	Size     int          // max capacity
+	Elements ConnWrappers // connections
+	Params   *Params
 	sync.Mutex
 }
 
 // NewPool returns a new pool instance with fixed size
-func NewPool(size int) *Pool {
-	if size == 0 {
-		size = 1
-	}
+func NewPool(size int, addr string, opts ...grpc.DialOption) *Pool {
 	return &Pool{
-		Size:     size,
-		Elements: make([]*grpc.ClientConn, size),
+		Size:   size,
+		Params: NewParams(addr, opts...),
 	}
 }
 
-// FullInit initialize the pool connection at once instead on-demand
-func (p *Pool) FullInit(addr string, opts ...grpc.DialOption) (err error) {
-	log.Printf("grpc connection pool size: %d", p.Size)
+// Dial dials new grpc connection with saved params
+func (p *Pool) Dial() (*ConnWrapper, error) {
+	conn, err := grpc.Dial(p.Params.Addr, p.Params.Opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &ConnWrapper{
+		ClientConn: conn,
+	}, nil
+}
+
+// Init initialize the pool connection at once instead on-demand
+func (p *Pool) Init() error {
+	if p.Size == 0 {
+		log.Println("grpc: dial on demand mode")
+		return nil
+	}
+	log.Printf("grpc: connection pool size: %d", p.Size)
+	p.Elements = make(ConnWrappers, p.Size)
 	for i := 0; i < p.Size; i++ {
-		p.Elements[i], err = grpc.Dial(addr, opts...)
+		conn, err := p.Dial()
 		if err != nil {
 			return err
 		}
+		p.Elements[i] = conn
 	}
 	return nil
 }
@@ -44,35 +86,45 @@ func (p *Pool) FullInit(addr string, opts ...grpc.DialOption) (err error) {
 // Destroy force disconnect all the connections
 func (p *Pool) Destroy() {
 	for _, conn := range p.Elements {
-		if conn != nil {
+		if conn.ClientConn != nil {
 			_ = conn.Close()
 		}
 	}
 }
 
+// GetConnOutSide gets a connection outside the pool
+func (p *Pool) GetConnOutSide() (*ConnWrapper, func() error, error) {
+	conn, err := p.Dial()
+	if err != nil {
+		return nil, nil, err
+	}
+	return conn, conn.Close, nil
+}
+
 // GetConn gets a grpc connection from the pool, also moves the cluster
-func (p *Pool) GetConn() (*grpc.ClientConn, error) {
+func (p *Pool) GetConn() (*ConnWrapper, func() error, error) {
 	// no mux
-	var el *grpc.ClientConn
-	if p.Size == 1 {
-		el = p.Elements[0]
-	} else {
-		// mux
-		p.Lock()
-		// move cluster
-		p.Position++
-		// check if overflow
-		if p.Position > p.Size {
-			// looped sequence: start over
-			p.Position = 1
-		}
-		// get el from actual position inside the slice
-		el = p.Elements[p.Position-1]
-		p.Unlock()
+	if p.Size == 0 {
+		return p.GetConnOutSide()
 	}
+	var el *ConnWrapper
+	// mux
+	p.Lock()
+	// get el from actual position inside the slice
+	el = p.Elements[p.Position]
+	// move cluster
+	p.Position++
+	// check if overflow
+	if p.Position == p.Size-1 {
+		// looped sequence: start over
+		p.Position = 0
+	}
+	p.Unlock()
 	if el == nil {
-		return nil, fmt.Errorf("connection not initialized at position %d %w", p.Position, transport.ErrorNotInitialized)
+		return p.GetConnOutSide()
+		//return nil, nil, fmt.Errorf("connection not initialized at position %d %w", p.Position+1, transport.ErrorNotInitialized)
 	}
+	el.Use()
 	// check if conn ok
 	switch el.GetState() {
 	case connectivity.Connecting:
@@ -82,14 +134,14 @@ func (p *Pool) GetConn() (*grpc.ClientConn, error) {
 		// reconnect
 		el.ResetConnectBackoff()
 	}
-	return el, nil
+	return el, el.Done, nil
 }
 
 // GetClient gets a grpc client from connection
-func (p *Pool) GetClient() (proxy.ProxyClient, error) {
-	conn, err := p.GetConn()
+func (p *Pool) GetClient() (proxy.ProxyClient, func() error, error) {
+	conn, done, err := p.GetConn()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return proxy.NewProxyClient(conn), nil
+	return proxy.NewProxyClient(conn), done, nil
 }
