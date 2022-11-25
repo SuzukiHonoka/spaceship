@@ -50,7 +50,7 @@ func main() {
 		// client start
 		log.Println("client starting")
 		// initialize pool
-		err = client.PoolInit(c.ServerAddr, c.Host, c.EnableTLS, c.Mux, c.CAs)
+		err = client.Init(c.ServerAddr, c.Host, c.EnableTLS, c.Mux, c.CAs)
 		if err != nil {
 			client.ConnPool.Destroy()
 			panic(err)
