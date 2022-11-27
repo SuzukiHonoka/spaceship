@@ -17,7 +17,7 @@ func PrintErrorIfNotCritical(err error, msg string) {
 	}
 	switch {
 	// native errors
-	case errors.Is(err, io.EOF):
+	case err == io.EOF:
 		return
 	case errors.Is(err, net.ErrClosed):
 		return
