@@ -10,19 +10,21 @@ import (
 	"time"
 )
 
+const GeneralTimeout = 3 * time.Second
+
 var DialOptions = []grpc.DialOption{
 	grpc.WithKeepaliveParams(keepalive.ClientParameters{
 		Time:                10 * time.Second,
-		Timeout:             3 * time.Second,
+		Timeout:             GeneralTimeout,
 		PermitWithoutStream: true,
 	}),
 	grpc.WithConnectParams(grpc.ConnectParams{
 		Backoff:           backoff.DefaultConfig,
-		MinConnectTimeout: 3 * time.Second,
+		MinConnectTimeout: GeneralTimeout,
 	}),
 	grpc.WithContextDialer(func(ctx context.Context, s string) (net.Conn, error) {
 		return (&net.Dialer{
-			Timeout: 3 * time.Second,
+			Timeout: GeneralTimeout,
 		}).DialContext(ctx, "tcp", s)
 	}),
 	grpc.WithUserAgent("spaceship/" + manifest.VersionCode),
@@ -36,5 +38,5 @@ var ServerOptions = []grpc.ServerOption{
 		MinTime:             5 * time.Second,
 		PermitWithoutStream: true,
 	}),
-	grpc.ConnectionTimeout(3 * time.Second),
+	grpc.ConnectionTimeout(GeneralTimeout),
 }
