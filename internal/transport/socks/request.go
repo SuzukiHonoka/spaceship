@@ -136,7 +136,7 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 	} else {
 		target = req.DestAddr.IP.String()
 	}
-	log.Printf("socks: %s:%d -> rpc", target, req.DestAddr.Port)
+	log.Printf("socks: %s -> rpc", net.JoinHostPort(target, strconv.Itoa(int(req.DestAddr.Port))))
 	localAdder := make(chan string)
 	c := client.NewClient()
 	// if grpc connection failed
@@ -154,7 +154,6 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 	//defer close(proxyError)
 	go func() {
 		err := c.Proxy(ctx, localAdder, conn, req.bufConn)
-		transport.PrintErrorIfNotCritical(err, "rpc proxy failed")
 		proxyError <- err
 	}()
 	local := <-localAdder
@@ -172,7 +171,10 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 	}
 	//log.Printf("proxy local addr: %s\n", local)
 	//log.Println("proxy local end")
-	<-proxyError
+	err := <-proxyError
+	if err != nil {
+		transport.PrintErrorIfCritical(err, "socks")
+	}
 	return nil
 }
 
