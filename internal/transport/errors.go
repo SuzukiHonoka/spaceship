@@ -9,5 +9,5 @@ var (
 	ErrorTargetACKFailed = errors.New("target ack failed")
 	ErrorServerFailed    = errors.New("server error")
 	ErrorBadRequest      = errors.New("bad request")
-	ErrorNotInitialized  = errors.New("not initialized")
+	ErrorKeepAliveNeeded = errors.New("keep alive needed")
 )
