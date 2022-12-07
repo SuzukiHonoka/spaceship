@@ -10,14 +10,14 @@ import (
 	"strconv"
 )
 
-// PrintErrorIfNotCritical prints only error that critical
-func PrintErrorIfNotCritical(err error, msg string) {
+// PrintErrorIfCritical prints only error that critical
+func PrintErrorIfCritical(err error, msg string) {
 	if err == nil {
 		return
 	}
 	switch {
 	// native errors
-	case err == io.EOF:
+	case errors.Is(err, io.EOF):
 		return
 	case errors.Is(err, net.ErrClosed):
 		return
@@ -25,9 +25,9 @@ func PrintErrorIfNotCritical(err error, msg string) {
 		return
 	default:
 		// grpc errors
-		if s, ok := status.FromError(err); ok {
+		if s, ok := status.FromError(errors.Unwrap(err)); ok {
 			switch s.Code() {
-			case codes.Canceled:
+			case codes.Canceled, codes.Internal:
 				return
 			}
 		}
