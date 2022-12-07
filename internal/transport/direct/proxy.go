@@ -38,23 +38,24 @@ func (d Direct) Proxy(ctx context.Context, localAddr chan<- string, dst io.Write
 		return transport.ErrorRequestNotFound
 	}
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	target := net.JoinHostPort(req.Fqdn, strconv.Itoa(int(req.Port)))
 	conn, err := net.DialTimeout(transport.Network, target, 3*time.Minute)
 	if err != nil {
-		cancel()
 		localAddr <- ""
 		return err
 	}
+	defer transport.ForceClose(conn)
 	// src -> dst
 	go func() {
-		err := streamCopy(src, conn)
-		transport.PrintErrorIfNotCritical(err, "direct: src -> dst error")
+		err := fmt.Errorf("src -> dst error: %w", streamCopy(src, conn))
+		transport.PrintErrorIfCritical(err, "direct")
 		cancel()
 	}()
 	// src <- dst
 	go func() {
-		err := streamCopy(conn, dst)
-		transport.PrintErrorIfNotCritical(err, "direct: src <- dst error")
+		err := fmt.Errorf("src <- dst error: %w", streamCopy(conn, dst))
+		transport.PrintErrorIfCritical(err, "direct")
 		cancel()
 	}()
 	<-ctx.Done()
