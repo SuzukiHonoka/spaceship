@@ -102,27 +102,24 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 		return err
 	}
 	watcher := make(chan string)
-	defer close(watcher)
+	forwardError := make(chan error)
 	f := NewForwarder(ctx, stream, w, r, watcher)
 	// rpc stream receiver
 	go func() {
 		err := f.CopyTargetToSRC()
-		transport.PrintErrorIfNotCritical(err, fmt.Sprintf("rpc: src <- server -> %s", req.Fqdn))
-		cancel()
+		forwardError <- fmt.Errorf("rpc: src <- server -> %s: %w", req.Fqdn, err)
 	}()
 	// rpc sender
 	go func() {
 		err := f.CopySRCtoTarget()
-		transport.PrintErrorIfNotCritical(err, fmt.Sprintf("rpc: src -> server -> %s", req.Fqdn))
-		cancel()
+		forwardError <- fmt.Errorf("rpc: src -> server -> %s: %w", req.Fqdn, err)
 	}()
 	t := time.NewTimer(rpc.GeneralTimeout)
 	select {
 	case <-t.C:
 		//timed out
 		localAddr <- ""
-		log.Printf("rpc: server -> %s timed out", req.Fqdn)
-		return nil
+		return fmt.Errorf("rpc: server -> %s timed out: %w", req.Fqdn, os.ErrDeadlineExceeded)
 	case localAddr <- <-watcher:
 		t.Stop()
 		// done
@@ -130,6 +127,8 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 	}
 	// block main
 	select {
+	case err = <-forwardError:
+		return err
 	case <-sessionCtx.Done():
 	case <-ctx.Done():
 	}
