@@ -79,7 +79,7 @@ func (c *Forwarder) copyTargetToSRC() error {
 	case proxy.ProxyStatus_Accepted:
 		c.LocalAddr <- res.Addr
 	case proxy.ProxyStatus_EOF:
-		return nil
+		return io.EOF
 	case proxy.ProxyStatus_Error:
 		c.LocalAddr <- ""
 		return transport.ErrorServerFailed
