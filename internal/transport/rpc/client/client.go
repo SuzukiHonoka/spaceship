@@ -16,9 +16,10 @@ import (
 	"time"
 )
 
-var UUID string
-
-var ConnPool *Pool
+var (
+	UUID     string
+	ConnPool *Pool
+)
 
 type Client struct {
 	proxy.ProxyClient
