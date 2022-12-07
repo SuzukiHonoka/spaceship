@@ -2,8 +2,10 @@ package http
 
 import (
 	"context"
+	"io"
 	"log"
 	"net"
+	"os"
 	"spaceship/internal/transport"
 	"spaceship/internal/transport/rpc/client"
 )
@@ -32,7 +34,9 @@ func (s *Server) Serve(l net.Listener) error {
 			return err
 		}
 		go func() {
-			_ = s.ServeConn(conn)
+			if err := s.ServeConn(conn); err != nil && err != io.EOF && err != os.ErrDeadlineExceeded {
+				log.Printf("http: %v", err)
+			}
 		}()
 	}
 }
