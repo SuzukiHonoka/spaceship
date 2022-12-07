@@ -9,7 +9,7 @@ import (
 )
 
 type Forwarder struct {
-	Context   context.Context
+	Ctx       context.Context
 	Stream    proxy.Proxy_ProxyClient
 	Writer    io.Writer
 	Reader    io.Reader
@@ -18,7 +18,7 @@ type Forwarder struct {
 
 func NewForwarder(ctx context.Context, s proxy.Proxy_ProxyClient, w io.Writer, r io.Reader, ch chan<- string) *Forwarder {
 	return &Forwarder{
-		Context:   ctx,
+		Ctx:       ctx,
 		Stream:    s,
 		Writer:    w,
 		Reader:    r,
@@ -46,7 +46,7 @@ func (c *Forwarder) copySRCtoTarget(buf []byte) error {
 func (c *Forwarder) CopyTargetToSRC() error {
 	for {
 		select {
-		case <-c.Context.Done():
+		case <-c.Ctx.Done():
 			return nil
 		default:
 			if err := c.copyTargetToSRC(); err != nil {
@@ -94,7 +94,7 @@ func (c *Forwarder) CopySRCtoTarget() error {
 	buf := make([]byte, transport.BufferSize)
 	for {
 		select {
-		case <-c.Context.Done():
+		case <-c.Ctx.Done():
 			return nil
 		default:
 			if err := c.copySRCtoTarget(buf); err != nil {
