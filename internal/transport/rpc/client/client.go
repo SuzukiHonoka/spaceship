@@ -60,6 +60,10 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 	return err
 }
 
+func Destroy() {
+	ConnPool.Destroy()
+}
+
 func NewClient() *Client {
 	client, doneFunc, err := ConnPool.GetClient()
 	if err != nil {

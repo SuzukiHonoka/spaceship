@@ -51,9 +51,10 @@ func main() {
 		log.Println("client starting")
 		// initialize pool
 		err = client.Init(c.ServerAddr, c.Host, c.EnableTLS, c.Mux, c.CAs)
+		defer client.Destroy()
 		if err != nil {
-			client.ConnPool.Destroy()
-			panic(err)
+			log.Printf("Init client failed: %v", err)
+			return
 		}
 		// socks
 		if c.ListenSocks != "" {
@@ -73,7 +74,6 @@ func main() {
 		cancel := make(chan os.Signal, 1)
 		signal.Notify(cancel, syscall.SIGKILL, syscall.SIGTERM, syscall.SIGINT)
 		<-cancel
-		client.ConnPool.Destroy()
 	default:
 		panic("unrecognized role")
 	}
