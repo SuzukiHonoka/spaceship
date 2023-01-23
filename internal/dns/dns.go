@@ -2,7 +2,6 @@ package dns
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"time"
 )
@@ -23,7 +22,7 @@ func (s *DNS) SetDefault() {
 			d := net.Dialer{
 				Timeout: 5 * time.Second,
 			}
-			return d.DialContext(ctx, network, fmt.Sprintf("%s:53", s.Server))
+			return d.DialContext(ctx, network, net.JoinHostPort(s.Server, "53"))
 		},
 	}
 }
