@@ -3,7 +3,9 @@
 
 package main
 
-import "github.com/SuzukiHonoka/spaceship/internal/dns"
+import (
+	"github.com/SuzukiHonoka/spaceship/pkg/dns"
+)
 
 // android may not resolve dns correctly through DefaultResolver
 func init() {

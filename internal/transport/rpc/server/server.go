@@ -3,24 +3,24 @@ package server
 import (
 	"context"
 	"fmt"
-	serverConfig "github.com/SuzukiHonoka/spaceship/internal/config/server"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc"
 	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
+	config "github.com/SuzukiHonoka/spaceship/pkg/config/server"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"log"
 )
 
-var Users *serverConfig.Users
+var Users *config.Users
 
 type server struct {
 	proxy.UnimplementedProxyServer
 	Ctx context.Context
 }
 
-func NewServer(ctx context.Context, users *serverConfig.Users, ssl *serverConfig.SSL) *grpc.Server {
+func NewServer(ctx context.Context, users *config.Users, ssl *config.SSL) *grpc.Server {
 	// check users
 	if users.IsNullOrEmpty() {
 		log.Fatalln("users can not be empty")

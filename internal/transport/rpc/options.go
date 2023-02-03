@@ -2,7 +2,7 @@ package rpc
 
 import (
 	"context"
-	"github.com/SuzukiHonoka/spaceship/internal/config/manifest"
+	"github.com/SuzukiHonoka/spaceship/pkg/config/manifest"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/keepalive"

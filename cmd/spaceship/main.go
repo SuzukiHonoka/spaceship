@@ -4,7 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/api"
-	"github.com/SuzukiHonoka/spaceship/internal/config/manifest"
+	"github.com/SuzukiHonoka/spaceship/pkg/config/manifest"
 )
 
 func Main() {

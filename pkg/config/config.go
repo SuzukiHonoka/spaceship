@@ -2,14 +2,14 @@ package config
 
 import (
 	"encoding/json"
-	"github.com/SuzukiHonoka/spaceship/internal/config/client"
-	"github.com/SuzukiHonoka/spaceship/internal/config/server"
-	"github.com/SuzukiHonoka/spaceship/internal/dns"
-	"github.com/SuzukiHonoka/spaceship/internal/logger"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	rpcClient "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/client"
 	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
 	"github.com/SuzukiHonoka/spaceship/internal/util"
+	"github.com/SuzukiHonoka/spaceship/pkg/config/client"
+	"github.com/SuzukiHonoka/spaceship/pkg/config/server"
+	"github.com/SuzukiHonoka/spaceship/pkg/dns"
+	"github.com/SuzukiHonoka/spaceship/pkg/logger"
 	"log"
 	"os"
 )
