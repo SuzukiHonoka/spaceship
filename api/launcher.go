@@ -61,10 +61,17 @@ func Launch(c *config.MixedConfig) {
 			}()
 		}
 		// blocks main
-		cancel := make(chan os.Signal, 1)
-		signal.Notify(cancel, syscall.SIGKILL, syscall.SIGTERM, syscall.SIGINT)
-		<-cancel
+		waitForCancel()
 	default:
 		panic("unrecognized role")
+	}
+}
+
+func waitForCancel() {
+	sys := make(chan os.Signal, 1)
+	signal.Notify(sys, syscall.SIGKILL, syscall.SIGTERM, syscall.SIGINT)
+	select {
+	case <-sys:
+	case <-sigStop:
 	}
 }
