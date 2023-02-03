@@ -14,17 +14,17 @@ import (
 	"spaceship/internal/util"
 )
 
-type Config struct {
-	Role
-	*dns.DNS    `json:"dns,omitempty"`
-	CAs         []string `json:"cas,omitempty"`
-	logger.Mode `json:"log,omitempty"`
+type MixedConfig struct {
+	Role     `json:"role"`
+	*dns.DNS `json:"dns,omitempty"`
+	CAs      []string    `json:"cas,omitempty"`
+	LogMode  logger.Mode `json:"log,omitempty"`
 	client.Client
 	server.Server
 }
 
-func NewFromConfigFile(path string) *Config {
-	var config Config
+func NewFromConfigFile(path string) *MixedConfig {
+	var config MixedConfig
 	if !util.FileExist(path) {
 		log.Fatalln("config file not exist")
 	}
@@ -35,8 +35,15 @@ func NewFromConfigFile(path string) *Config {
 	return &config
 }
 
-func (c *Config) Apply() {
-	c.Mode.Set()
+func NewFromString(c string) *MixedConfig {
+	var config MixedConfig
+	err := json.Unmarshal([]byte(c), &config)
+	util.StopIfError(err)
+	return &config
+}
+
+func (c *MixedConfig) Apply() {
+	c.LogMode.Set()
 	if c.DNS != nil {
 		c.DNS.SetDefault()
 	}
