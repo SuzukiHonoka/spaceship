@@ -6,24 +6,7 @@ import (
 	"log"
 	proxy "spaceship/internal/transport/rpc/proto"
 	"sync"
-	"sync/atomic"
 )
-
-type ConnWrapper struct {
-	*grpc.ClientConn
-	InUse uint32
-}
-
-func (w *ConnWrapper) Use() {
-	atomic.AddUint32(&w.InUse, 1)
-}
-
-func (w *ConnWrapper) Done() error {
-	atomic.AddUint32(&w.InUse, ^uint32(0))
-	return nil
-}
-
-type ConnWrappers []*ConnWrapper
 
 type Params struct {
 	Addr string
@@ -49,8 +32,9 @@ type Pool struct {
 // NewPool returns a new pool instance with fixed size
 func NewPool(size int, addr string, opts ...grpc.DialOption) *Pool {
 	return &Pool{
-		Size:   size,
-		Params: NewParams(addr, opts...),
+		Size:     size,
+		Params:   NewParams(addr, opts...),
+		Position: 1,
 	}
 }
 
@@ -76,6 +60,7 @@ func (p *Pool) Init() error {
 	for i := 0; i < p.Size; i++ {
 		conn, err := p.Dial()
 		if err != nil {
+			p.Destroy()
 			return err
 		}
 		p.Elements[i] = conn
@@ -115,14 +100,14 @@ func (p *Pool) GetConn() (*ConnWrapper, func() error, error) {
 	// move cluster
 	p.Position++
 	// check if overflow
-	if p.Position == p.Size-1 {
+	if p.Position == p.Size {
 		// looped sequence: start over
-		p.Position = 0
+		p.Position = 1
 	}
 	p.Unlock()
 	if el == nil {
 		return p.GetConnOutSide()
-		//return nil, nil, fmt.Errorf("connection not initialized at position %d %w", p.Position+1, transport.ErrorNotInitialized)
+		//return nil, nil, fmt.Errorf("connection not initialized at position %d %w", p.Position, transport.ErrorNotInitialized)
 	}
 	el.Use()
 	// check if conn ok
@@ -131,7 +116,6 @@ func (p *Pool) GetConn() (*ConnWrapper, func() error, error) {
 	case connectivity.Ready:
 	default:
 		log.Printf("grpc connection down, attempting to reconnect..")
-		// reconnect
 		el.ResetConnectBackoff()
 	}
 	return el, el.Done, nil
