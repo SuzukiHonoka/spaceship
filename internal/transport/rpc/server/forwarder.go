@@ -3,11 +3,11 @@ package server
 import (
 	"context"
 	"fmt"
+	"github.com/SuzukiHonoka/spaceship/internal/transport"
+	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
 	"io"
 	"log"
 	"net"
-	"spaceship/internal/transport"
-	proxy "spaceship/internal/transport/rpc/proto"
 	"strconv"
 	"time"
 )

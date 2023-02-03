@@ -1,6 +1,6 @@
 package api
 
-import "spaceship/internal/config"
+import "github.com/SuzukiHonoka/spaceship/internal/config"
 
 func LaunchFromFile(path string) {
 	m := config.NewFromConfigFile(path)

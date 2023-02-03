@@ -2,17 +2,17 @@ package api
 
 import (
 	"context"
+	"github.com/SuzukiHonoka/spaceship/internal/config"
+	"github.com/SuzukiHonoka/spaceship/internal/transport/http"
+	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc/client"
+	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc/server"
+	"github.com/SuzukiHonoka/spaceship/internal/transport/socks"
+	"github.com/SuzukiHonoka/spaceship/internal/util"
 	"github.com/google/uuid"
 	"log"
 	"net"
 	"os"
 	"os/signal"
-	"spaceship/internal/config"
-	"spaceship/internal/transport/http"
-	"spaceship/internal/transport/rpc/client"
-	"spaceship/internal/transport/rpc/server"
-	"spaceship/internal/transport/socks"
-	"spaceship/internal/util"
 	"syscall"
 )
 

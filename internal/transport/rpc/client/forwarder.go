@@ -3,9 +3,9 @@ package client
 import (
 	"context"
 	"fmt"
+	"github.com/SuzukiHonoka/spaceship/internal/transport"
+	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
 	"io"
-	"spaceship/internal/transport"
-	proxy "spaceship/internal/transport/rpc/proto"
 )
 
 type Forwarder struct {

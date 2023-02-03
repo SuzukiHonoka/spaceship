@@ -3,9 +3,9 @@ package direct
 import (
 	"context"
 	"fmt"
+	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	"io"
 	"net"
-	"spaceship/internal/transport"
 	"strconv"
 	"time"
 )

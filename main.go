@@ -1,7 +1,7 @@
 package main
 
 import (
-	"spaceship/cmd/spaceship"
+	"github.com/SuzukiHonoka/spaceship/cmd/spaceship"
 )
 
 func main() {

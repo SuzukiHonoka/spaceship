@@ -1,4 +1,4 @@
-module spaceship
+module github.com/SuzukiHonoka/spaceship
 
 go 1.19
 

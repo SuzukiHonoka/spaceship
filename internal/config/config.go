@@ -2,16 +2,16 @@ package config
 
 import (
 	"encoding/json"
+	"github.com/SuzukiHonoka/spaceship/internal/config/client"
+	"github.com/SuzukiHonoka/spaceship/internal/config/server"
+	"github.com/SuzukiHonoka/spaceship/internal/dns"
+	"github.com/SuzukiHonoka/spaceship/internal/logger"
+	"github.com/SuzukiHonoka/spaceship/internal/transport"
+	rpcClient "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/client"
+	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
+	"github.com/SuzukiHonoka/spaceship/internal/util"
 	"log"
 	"os"
-	"spaceship/internal/config/client"
-	"spaceship/internal/config/server"
-	"spaceship/internal/dns"
-	"spaceship/internal/logger"
-	"spaceship/internal/transport"
-	rpcClient "spaceship/internal/transport/rpc/client"
-	proxy "spaceship/internal/transport/rpc/proto"
-	"spaceship/internal/util"
 )
 
 type MixedConfig struct {

@@ -4,9 +4,9 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	"log"
 	"net"
-	"spaceship/internal/transport"
 )
 
 const (

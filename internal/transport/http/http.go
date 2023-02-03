@@ -2,12 +2,12 @@ package http
 
 import (
 	"context"
+	"github.com/SuzukiHonoka/spaceship/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc/client"
 	"io"
 	"log"
 	"net"
 	"os"
-	"spaceship/internal/transport"
-	"spaceship/internal/transport/rpc/client"
 )
 
 type Server struct {

@@ -3,11 +3,11 @@ package socks
 import (
 	"context"
 	"fmt"
+	"github.com/SuzukiHonoka/spaceship/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc/client"
 	"io"
 	"log"
 	"net"
-	"spaceship/internal/transport"
-	"spaceship/internal/transport/rpc/client"
 	"strconv"
 )
 

@@ -3,8 +3,8 @@ package spaceship
 import (
 	"flag"
 	"fmt"
-	"spaceship/api"
-	"spaceship/internal/config/manifest"
+	"github.com/SuzukiHonoka/spaceship/api"
+	"github.com/SuzukiHonoka/spaceship/internal/config/manifest"
 )
 
 func Main() {

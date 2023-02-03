@@ -3,14 +3,14 @@ package server
 import (
 	"context"
 	"fmt"
+	serverConfig "github.com/SuzukiHonoka/spaceship/internal/config/server"
+	"github.com/SuzukiHonoka/spaceship/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc"
+	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"log"
-	serverConfig "spaceship/internal/config/server"
-	"spaceship/internal/transport"
-	"spaceship/internal/transport/rpc"
-	proxy "spaceship/internal/transport/rpc/proto"
 )
 
 var Users *serverConfig.Users

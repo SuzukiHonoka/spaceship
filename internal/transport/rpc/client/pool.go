@@ -1,10 +1,10 @@
 package client
 
 import (
+	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"log"
-	proxy "spaceship/internal/transport/rpc/proto"
 	"sync"
 )
 

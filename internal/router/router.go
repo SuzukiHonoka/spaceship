@@ -1,6 +1,6 @@
 package router
 
-import "spaceship/internal/transport"
+import "github.com/SuzukiHonoka/spaceship/internal/transport"
 
 func GetTransportName() string {
 	return ""

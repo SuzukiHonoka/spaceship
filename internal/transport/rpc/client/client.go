@@ -4,15 +4,15 @@ import (
 	"context"
 	"crypto/x509"
 	"fmt"
+	"github.com/SuzukiHonoka/spaceship/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc"
+	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"io"
 	"log"
 	"os"
-	"spaceship/internal/transport"
-	"spaceship/internal/transport/rpc"
-	proxy "spaceship/internal/transport/rpc/proto"
 	"time"
 )
 
