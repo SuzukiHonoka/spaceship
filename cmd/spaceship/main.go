@@ -1,4 +1,4 @@
-package spaceship
+package main
 
 import (
 	"flag"
@@ -7,7 +7,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/pkg/config/manifest"
 )
 
-func Main() {
+func main() {
 	// first prompt
 	fmt.Printf("spaceship v%s ", manifest.VersionCode)
 	fmt.Println("for personal use only, absolutely without any warranty, any kind of illegal intention by using this program are strongly forbidden.")
