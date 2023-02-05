@@ -22,8 +22,8 @@ jobs:
       run:  go mod tidy -v
 
     - name: Build
-      run: mkdir build && cd build && chmod +x ../build.sh && ../build.sh ..
-      
+      run: ./build.sh cmd/spaceship
+
     - name: Upload
       uses: actions/upload-artifact@v3
       with:
