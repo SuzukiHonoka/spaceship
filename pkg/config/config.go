@@ -24,12 +24,12 @@ type MixedConfig struct {
 }
 
 func NewFromConfigFile(path string) *MixedConfig {
-	var config MixedConfig
 	if !util.FileExist(path) {
 		log.Fatalln("config file not exist")
 	}
 	b, err := os.ReadFile(path)
 	util.StopIfError(err)
+	var config MixedConfig
 	err = json.Unmarshal(b, &config)
 	util.StopIfError(err)
 	return &config
