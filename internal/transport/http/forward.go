@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/internal/util"
 	"io"
 	"log"
 	"net"
@@ -294,7 +295,7 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 		}
 		//log.Println("src -> target start")
 		// todo: use our own io copy function with custom buffer and error returning
-		if _, err := io.Copy(w, f.Conn); err != nil {
+		if _, err := util.CopyBuffer(w, f.Conn, nil); err != nil {
 			internalError <- fmt.Errorf("%s: %w", "copy stream error", err)
 		}
 		// client close
