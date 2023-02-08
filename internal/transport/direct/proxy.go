@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/internal/util"
 	"io"
 	"net"
 	"strconv"
@@ -11,25 +12,6 @@ import (
 )
 
 type Direct struct{}
-
-func streamCopy(r io.Reader, w io.Writer) error {
-	buf := make([]byte, transport.BufferSize)
-	for {
-		// read from target
-		n, err := r.Read(buf)
-		if err != nil {
-			return err
-		}
-		// forward data
-		wn, err := w.Write(buf[:n])
-		if err != nil {
-			return err
-		}
-		if wn != n {
-			return fmt.Errorf("forward data to reader failed, received: %d sent: %d loss: %d %w", n, wn, wn/n, transport.ErrorPacketLoss)
-		}
-	}
-}
 
 // Proxy the traffic locally
 func (d Direct) Proxy(ctx context.Context, localAddr chan<- string, dst io.Writer, src io.Reader) error {
@@ -45,18 +27,23 @@ func (d Direct) Proxy(ctx context.Context, localAddr chan<- string, dst io.Write
 		localAddr <- ""
 		return err
 	}
+	localAddr <- conn.LocalAddr().String()
 	defer transport.ForceClose(conn)
 	// src -> dst
 	go func() {
-		err := fmt.Errorf("src -> dst error: %w", streamCopy(src, conn))
-		transport.PrintErrorIfCritical(err, "direct")
-		cancel()
+		if _, err := util.CopyBuffer(conn, src, nil); err != nil {
+			err = fmt.Errorf("src -> dst error: %w", err)
+			transport.PrintErrorIfCritical(err, "direct")
+			cancel()
+		}
 	}()
 	// src <- dst
 	go func() {
-		err := fmt.Errorf("src <- dst error: %w", streamCopy(conn, dst))
-		transport.PrintErrorIfCritical(err, "direct")
-		cancel()
+		if _, err := util.CopyBuffer(dst, conn, nil); err != nil {
+			err = fmt.Errorf("src <- dst error: %w", err)
+			transport.PrintErrorIfCritical(err, "direct")
+			cancel()
+		}
 	}()
 	<-ctx.Done()
 	return nil
