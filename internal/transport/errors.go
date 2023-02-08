@@ -3,7 +3,7 @@ package transport
 import "errors"
 
 var (
-	ErrorPacketLoss      = errors.New("paket loss")
+	ErrorPacketLoss      = errors.New("packet loss")
 	ErrorUserNotFound    = errors.New("user not found")
 	ErrorRequestNotFound = errors.New("request not found")
 	ErrorTargetACKFailed = errors.New("target ack failed")
