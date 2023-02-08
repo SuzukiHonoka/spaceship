@@ -19,9 +19,9 @@ func PrintErrorIfCritical(err error, msg string) {
 	// native errors
 	case errors.Is(err, io.EOF):
 		return
-	case errors.Is(err, net.ErrClosed):
-		return
 	case errors.Is(err, io.ErrClosedPipe):
+		return
+	case errors.Is(err, net.ErrClosed):
 		return
 	default:
 		// grpc errors
