@@ -14,12 +14,12 @@ func (r Routes) GenerateCache() {
 }
 
 func (r Routes) GetRoute(dst string) transport.Transport {
+	if len(r) == 0 {
+		return Proxy.GetTransport()
+	}
 	if route, ok := table.Get(dst); ok {
 		//log.Printf("cache hit: %s -> %s", dst, route)
 		return route.GetTransport()
-	}
-	if len(r) == 0 {
-		return nil
 	}
 	for _, route := range r {
 		if route.Match(dst) {
