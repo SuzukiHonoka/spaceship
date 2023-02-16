@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
-	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc/client"
+	"github.com/SuzukiHonoka/spaceship/internal/transport/router"
 	"io"
 	"log"
 	"net"
@@ -136,24 +136,26 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 	} else {
 		target = req.DestAddr.IP.String()
 	}
-	log.Printf("socks: %s -> rpc", net.JoinHostPort(target, strconv.Itoa(int(req.DestAddr.Port))))
-	localAdder := make(chan string)
-	c := client.NewClient()
+	//c := client.NewClient()
+	route := router.RoutesCache.GetRoute(target)
 	// if grpc connection failed
-	if c == nil {
+	if route == nil {
 		if err := sendReply(conn, serverFailure, nil); err != nil {
 			return fmt.Errorf("failed to send reply: %v", err)
 		}
+		return nil
 	}
+	log.Printf("socks: %s -> %s", net.JoinHostPort(target, strconv.Itoa(int(req.DestAddr.Port))), route)
 	// start proxy
 	ctx = context.WithValue(ctx, "request", &transport.Request{
 		Fqdn: target,
 		Port: req.DestAddr.Port,
 	})
+	localAdder := make(chan string)
 	proxyError := make(chan error)
 	//defer close(proxyError)
 	go func() {
-		err := c.Proxy(ctx, localAdder, conn, req.bufConn)
+		err := route.Proxy(ctx, localAdder, conn, req.bufConn)
 		proxyError <- err
 	}()
 	local := <-localAdder

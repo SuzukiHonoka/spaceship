@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/internal/transport/router"
 	"github.com/SuzukiHonoka/spaceship/internal/util"
 	"io"
 	"log"
@@ -23,8 +24,7 @@ const snifferSize = 4 * 1024
 const sessionTimeout = 3 * time.Minute
 
 type Forwarder struct {
-	Ctx context.Context
-	transport.Transport
+	Ctx  context.Context
 	Conn net.Conn
 	b    *bytes.Buffer
 }
@@ -265,7 +265,6 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 	if err != nil {
 		return fmt.Errorf("handle request failed: %w", err)
 	}
-	log.Printf("http: %s -> rpc", net.JoinHostPort(host, strconv.Itoa(int(port))))
 	//forward process
 	localAddr := make(chan string)
 	ctx, done := context.WithCancel(f.Ctx)
@@ -274,6 +273,12 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 		Fqdn: host,
 		Port: port,
 	})
+	route := router.RoutesCache.GetRoute(host)
+	if route == nil {
+		_, _ = f.Conn.Write([]byte("HTTP/1.1 503 Service Unavailable" + CRLF))
+		return nil
+	}
+	log.Printf("http: %s -> %s", net.JoinHostPort(host, strconv.Itoa(int(port))), route)
 	r, w := io.Pipe()
 	defer func() {
 		_ = w.Close()
@@ -282,7 +287,7 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 	// channel for receive err and wait for
 	proxyError := make(chan error)
 	go func() {
-		err := f.Proxy(valuedCtx, localAddr, f.Conn, r)
+		err := route.Proxy(valuedCtx, localAddr, f.Conn, r)
 		proxyError <- err
 	}()
 	internalError := make(chan error)

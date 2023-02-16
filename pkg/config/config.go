@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/internal/transport/router"
 	rpcClient "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/client"
 	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
 	"github.com/SuzukiHonoka/spaceship/internal/util"
@@ -61,5 +62,9 @@ func (c *MixedConfig) Apply() {
 	}
 	if c.Role == RoleClient {
 		rpcClient.UUID = c.UUID
+	}
+	if c.Routes != nil {
+		router.RoutesCache = *c.Routes
+		router.RoutesCache.GenerateCache()
 	}
 }

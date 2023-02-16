@@ -2,10 +2,10 @@ package api
 
 import (
 	"context"
-	"github.com/SuzukiHonoka/spaceship/internal/transport/http"
+	"github.com/SuzukiHonoka/spaceship/internal/http"
+	"github.com/SuzukiHonoka/spaceship/internal/socks"
 	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc/client"
 	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc/server"
-	"github.com/SuzukiHonoka/spaceship/internal/transport/socks"
 	"github.com/SuzukiHonoka/spaceship/internal/util"
 	"github.com/SuzukiHonoka/spaceship/pkg/config"
 	"github.com/google/uuid"

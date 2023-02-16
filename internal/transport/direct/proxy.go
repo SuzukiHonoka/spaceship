@@ -11,7 +11,15 @@ import (
 	"time"
 )
 
+const TransportName = "direct"
+
+var Transport = Direct{}
+
 type Direct struct{}
+
+func (d Direct) String() string {
+	return TransportName
+}
 
 // Proxy the traffic locally
 func (d Direct) Proxy(ctx context.Context, localAddr chan<- string, dst io.Writer, src io.Reader) error {
@@ -46,5 +54,9 @@ func (d Direct) Proxy(ctx context.Context, localAddr chan<- string, dst io.Write
 		}
 	}()
 	<-ctx.Done()
+	return nil
+}
+
+func (d Direct) Close() error {
 	return nil
 }

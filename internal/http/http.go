@@ -3,7 +3,6 @@ package http
 import (
 	"context"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
-	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc/client"
 	"io"
 	"log"
 	"net"
@@ -44,9 +43,8 @@ func (s *Server) Serve(l net.Listener) error {
 func (s *Server) ServeConn(conn net.Conn) error {
 	defer transport.ForceClose(conn)
 	f := &Forwarder{
-		Ctx:       s.Ctx,
-		Transport: client.NewClient(),
-		Conn:      conn,
+		Ctx:  s.Ctx,
+		Conn: conn,
 	}
 	return f.Forward()
 }

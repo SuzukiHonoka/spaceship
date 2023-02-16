@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+const TransportName = "rpc"
+
 var (
 	UUID     string
 	ConnPool *Pool
@@ -70,6 +72,10 @@ func NewClient() *Client {
 		panic(err)
 	}
 	return &Client{ProxyClient: client, DoneFunc: doneFunc}
+}
+
+func (c *Client) String() string {
+	return TransportName
 }
 
 func (c *Client) Close() error {
