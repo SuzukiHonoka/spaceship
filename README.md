@@ -8,10 +8,10 @@ A program helps you to create a tunnel to the remote network.
 ## Usage
 ```shell
 root@starx:/opt/spaceship# ./spaceship -h
-2022/05/27 21:53:04 spaceship v1.0
-Usage of ./spaceship:
+spaceship v1.4.8 for personal use only, absolutely without any warranty, any kind of illegal intention by using this program are strongly forbidden.
+Usage of spaceship:
   -c string
-    	config path (default "./config.json")
+        config path (default "./config.json")
 ```
 The spaceship server and client configuration example are now added in repo/example/config
 
@@ -19,12 +19,15 @@ The spaceship server and client configuration example are now added in repo/exam
 ```nginx
 ...
     location /proxy. {  
+        grpc_socket_keepalive on;
+        grpc_send_timeout 3600s;
         grpc_read_timeout 3600s;
+        grpc_buffer_size 4k;
         grpc_pass grpc://127.0.0.1:12345;
     }
 ...
 ```
-* `proxy` is the current proto source package name
+Note that `proxy` is the current proto source package name
 
 ## Safety
 Since it only uses pure grpc with insecure option for now, you should really set up a reserve proxy with TLS for real 
@@ -35,10 +38,9 @@ The program is still under developing, any PR are warmly welcomed.
 
 ## TODO
 - support doh/dot as dns resolver
-- support traffic routing
-- integrate common transfer interface 
 
 ## Legal statement
-This program now only available for the repo members, sharing it to any other one is strongly forbidden.  
+This program is provided as it is, absolutely without any warranty, and it's only available for the repo members, 
+sharing it to any other one is strongly forbidden.  
 Also, while you are using the program, you must obey the laws in your current living country.  
 **ANY KIND OF ILLEGAL INTENTION BY USING THIS PROGRAM ARE STRONGLY FORBIDDEN**
