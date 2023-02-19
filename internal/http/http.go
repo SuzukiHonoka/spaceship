@@ -10,27 +10,40 @@ import (
 )
 
 type Server struct {
-	Ctx context.Context
+	Ctx      context.Context
+	Listener net.Listener
 }
 
 func New(ctx context.Context) *Server {
-	return &Server{ctx}
+	return &Server{
+		Ctx: ctx,
+	}
+}
+
+func (s *Server) Close() error {
+	return s.Listener.Close()
 }
 
 func (s *Server) ListenAndServe(network, addr string) error {
 	l, err := net.Listen(network, addr)
 	if err != nil {
-		panic(err)
+		return err
 	}
+	s.Listener = l
 	log.Printf("http started at %s", addr)
-	return s.Serve(l)
+	return s.Serve()
 }
 
-func (s *Server) Serve(l net.Listener) error {
+func (s *Server) Serve() error {
 	for {
-		conn, err := l.Accept()
+		conn, err := s.Listener.Accept()
 		if err != nil {
-			return err
+			select {
+			case <-s.Ctx.Done():
+				return nil
+			default:
+				return err
+			}
 		}
 		go func() {
 			if err := s.ServeConn(conn); err != nil && err != io.EOF && err != os.ErrDeadlineExceeded {

@@ -24,8 +24,9 @@ type Config struct {
 // Server is responsible for accepting connections and handling
 // the details of the SOCKS5 protocol
 type Server struct {
-	Ctx    context.Context
-	Config *Config
+	Ctx      context.Context
+	Config   *Config
+	Listener net.Listener
 }
 
 // New creates a new Server and potentially returns an error
@@ -43,16 +44,26 @@ func (s *Server) ListenAndServe(network, addr string) error {
 	if err != nil {
 		return err
 	}
+	s.Listener = l
 	log.Printf("socks started at %s", addr)
-	return s.Serve(l)
+	return s.Serve()
+}
+
+func (s *Server) Close() error {
+	return s.Listener.Close()
 }
 
 // Serve is used to serve connections from a listener
-func (s *Server) Serve(l net.Listener) error {
+func (s *Server) Serve() error {
 	for {
-		conn, err := l.Accept()
+		conn, err := s.Listener.Accept()
 		if err != nil {
-			return err
+			select {
+			case <-s.Ctx.Done():
+				return nil
+			default:
+				return err
+			}
 		}
 		go func() {
 			_ = s.ServeConn(conn)

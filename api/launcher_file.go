@@ -4,7 +4,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/pkg/config"
 )
 
-func LaunchFromFile(path string) {
+func (l *Launcher) LaunchFromFile(path string) {
 	m := config.NewFromConfigFile(path)
-	Launch(m)
+	l.Launch(m)
 }

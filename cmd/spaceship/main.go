@@ -14,5 +14,5 @@ func main() {
 	// load configuration
 	configPath := flag.String("c", "./config.json", "config path")
 	flag.Parse()
-	api.LaunchFromFile(*configPath)
+	api.NewLauncher().LaunchFromFile(*configPath)
 }
