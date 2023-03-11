@@ -273,8 +273,9 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 		Fqdn: host,
 		Port: port,
 	})
-	route := router.RoutesCache.GetRoute(host)
-	if route == nil {
+	route, err := router.RoutesCache.GetRoute(host)
+	if err != nil {
+		fmt.Printf("http: get route error: %v", err)
 		_, _ = f.Conn.Write([]byte("HTTP/1.1 503 Service Unavailable" + CRLF))
 		return nil
 	}
@@ -328,6 +329,7 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 		// notify proxy session is ended
 		// todo: rpc only check server and client stream copy error
 		if err != nil {
+			_ = f.Conn.Close()
 			transport.PrintErrorIfCritical(err, "http")
 		} else if keepAlive {
 			//log.Println("keep alive")

@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/internal/transport/router"
 	rpcClient "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/client"
@@ -24,29 +25,37 @@ type MixedConfig struct {
 	server.Server
 }
 
-func NewFromConfigFile(path string) *MixedConfig {
+func NewFromConfigFile(path string) (*MixedConfig, error) {
 	if !util.FileExist(path) {
-		log.Fatalln("config file not exist")
+		return nil, errors.New("config file not exist")
 	}
 	b, err := os.ReadFile(path)
-	util.StopIfError(err)
+	if err != nil {
+		return nil, err
+	}
 	var config MixedConfig
 	err = json.Unmarshal(b, &config)
-	util.StopIfError(err)
-	return &config
+	if err != nil {
+		return nil, err
+	}
+	return &config, nil
 }
 
-func NewFromString(c string) *MixedConfig {
+func NewFromString(c string) (*MixedConfig, error) {
 	var config MixedConfig
 	err := json.Unmarshal([]byte(c), &config)
-	util.StopIfError(err)
-	return &config
+	if err != nil {
+		return nil, err
+	}
+	return &config, nil
 }
 
-func (c *MixedConfig) Apply() {
+func (c *MixedConfig) Apply() error {
 	c.LogMode.Set()
 	if c.DNS != nil {
-		c.DNS.SetDefault()
+		if err := c.DNS.SetDefault(); err != nil {
+			return err
+		}
 	}
 	if c.Buffer > 0 {
 		log.Printf("custom buffer size: %dK", c.Buffer)
@@ -61,10 +70,13 @@ func (c *MixedConfig) Apply() {
 		transport.DisableIPv6()
 	}
 	if c.Role == RoleClient {
-		rpcClient.UUID = c.UUID
+		rpcClient.SetUUID(c.UUID)
 	}
 	if c.Routes != nil {
 		router.RoutesCache = *c.Routes
-		router.RoutesCache.GenerateCache()
+		if err := router.RoutesCache.GenerateCache(); err != nil {
+			return err
+		}
 	}
+	return nil
 }

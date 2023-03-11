@@ -24,7 +24,9 @@ func (m Mode) Set() {
 	default:
 		fd, err := os.OpenFile(string(m), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
-			log.Fatalf("Error when opening logfile: %s", err.Error())
+			log.Printf("Error when opening logfile: %v", err)
+			ModeDefault.Set()
+			return
 		}
 		log.Printf("log will be saved to %s", m)
 		log.SetOutput(fd)

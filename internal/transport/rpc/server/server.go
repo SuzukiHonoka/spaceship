@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc"
@@ -20,17 +21,17 @@ type server struct {
 	Ctx context.Context
 }
 
-func NewServer(ctx context.Context, users *config.Users, ssl *config.SSL) *grpc.Server {
+func NewServer(ctx context.Context, users *config.Users, ssl *config.SSL) (*grpc.Server, error) {
 	// check users
 	if users.IsNullOrEmpty() {
-		log.Fatalln("users can not be empty")
+		return nil, errors.New("users can not be empty")
 	}
 	// create server and register
 	var transportOption grpc.ServerOption
 	if ssl != nil {
 		credential, err := credentials.NewServerTLSFromFile(ssl.Cert, ssl.Key)
 		if err != nil {
-			log.Fatalf("failed to setup TLS: %v", err)
+			return nil, fmt.Errorf("failed to setup TLS: %w", err)
 		}
 		log.Println("using secure grpc [h2]")
 		transportOption = grpc.Creds(credential)
@@ -43,11 +44,12 @@ func NewServer(ctx context.Context, users *config.Users, ssl *config.SSL) *grpc.
 	proxy.RegisterProxyServer(s, &server{
 		Ctx: ctx,
 	})
-	return s
+	return s, nil
 }
 
 func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 	//log.Println("rpc server incomes")
+	proxyError := make(chan error)
 	// block main until canceled
 	ctx, cancel := context.WithCancel(s.Ctx)
 	defer cancel()
@@ -55,17 +57,14 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 	f := NewForwarder(ctx, stream)
 	// target <- client
 	go func() {
-		err := fmt.Errorf("client -> target error: %w", f.CopyClientToTarget())
-		transport.PrintErrorIfCritical(err, "rpc")
-		cancel()
+		proxyError <- fmt.Errorf("client -> target error: %w", f.CopyClientToTarget())
 	}()
 	// target -> client
 	go func() {
-		err := fmt.Errorf("client <- target error: %w", f.CopyTargetToClient())
-		transport.PrintErrorIfCritical(err, "rpc")
-		cancel()
+		proxyError <- fmt.Errorf("client <- target error: %w", f.CopyTargetToClient())
 	}()
-	<-ctx.Done()
+	err := <-proxyError
+	transport.PrintErrorIfCritical(err, "rpc")
 	// close target connection
 	_ = f.Close()
 	// send session end to client

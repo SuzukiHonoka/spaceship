@@ -1,19 +1,22 @@
 package router
 
 import (
+	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
-	"log"
 )
 
 type Routes []*Route
 
-func (r Routes) GenerateCache() {
+func (r Routes) GenerateCache() error {
 	for _, route := range r {
-		route.GenerateCache()
+		if err := route.GenerateCache(); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func (r Routes) GetRoute(dst string) transport.Transport {
+func (r Routes) GetRoute(dst string) (transport.Transport, error) {
 	if len(r) == 0 {
 		return Proxy.GetTransport()
 	}
@@ -28,6 +31,5 @@ func (r Routes) GetRoute(dst string) transport.Transport {
 			return route.Destination.GetTransport()
 		}
 	}
-	log.Printf("route not found: %s -> nil", dst)
-	return nil
+	return nil, fmt.Errorf("route not found: %s -> nil", dst)
 }

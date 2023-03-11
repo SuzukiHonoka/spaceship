@@ -19,13 +19,17 @@ import (
 const TransportName = "rpc"
 
 var (
-	UUID     string
-	ConnPool *Pool
+	uuid     string
+	connPool *Pool
 )
 
 type Client struct {
 	proxy.ProxyClient
 	DoneFunc func() error
+}
+
+func SetUUID(uid string) {
+	uuid = uid
 }
 
 func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
@@ -34,7 +38,7 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 		pool, err := x509.SystemCertPool()
 		if err != nil {
 			if len(cas) == 0 {
-				log.Fatalf("You have to add at least a CA since the system cert pool can not be copied: %v", err)
+				return fmt.Errorf("at least one addtional ca not found since the system cert pool can not be copied: %w", err)
 			}
 			log.Println("copy system cert pool failed, creating new empty pool")
 			pool = x509.NewCertPool()
@@ -46,9 +50,7 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 				log.Printf("read CA file from path: %s failed: %v", path, err)
 				continue
 			}
-			if pool.AppendCertsFromPEM(cert) {
-				log.Printf("CA: [%s] added to cert pool", path)
-			} else {
+			if !pool.AppendCertsFromPEM(cert) {
 				log.Printf("CA: [%s] add to cert pool failed", path)
 			}
 		}
@@ -57,21 +59,21 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 	} else {
 		credential = insecure.NewCredentials()
 	}
-	ConnPool = NewPool(int(mux), server, append(rpc.DialOptions, grpc.WithTransportCredentials(credential))...)
-	err := ConnPool.Init()
+	connPool = NewPool(int(mux), server, append(rpc.DialOptions, grpc.WithTransportCredentials(credential))...)
+	err := connPool.Init()
 	return err
 }
 
 func Destroy() {
-	ConnPool.Destroy()
+	connPool.Destroy()
 }
 
-func NewClient() *Client {
-	client, doneFunc, err := ConnPool.GetClient()
+func NewClient() (*Client, error) {
+	client, doneFunc, err := connPool.GetClient()
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return &Client{ProxyClient: client, DoneFunc: doneFunc}
+	return &Client{ProxyClient: client, DoneFunc: doneFunc}, nil
 }
 
 func (c *Client) String() string {
@@ -103,7 +105,7 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 	//log.Printf("sending proxy to rpc: %s", req.Fqdn)
 	// get local addr first
 	err = stream.Send(&proxy.ProxySRC{
-		Id:   UUID,
+		Id:   uuid,
 		Fqdn: req.Fqdn,
 		Port: uint32(req.Port),
 	})

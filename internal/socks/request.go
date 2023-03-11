@@ -137,9 +137,10 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 		target = req.DestAddr.IP.String()
 	}
 	//c := client.NewClient()
-	route := router.RoutesCache.GetRoute(target)
+	route, err := router.RoutesCache.GetRoute(target)
 	// if grpc connection failed
-	if route == nil {
+	if err != nil {
+		fmt.Printf("socks: get route error: %v", err)
 		if err := sendReply(conn, serverFailure, nil); err != nil {
 			return fmt.Errorf("failed to send reply: %v", err)
 		}
@@ -173,7 +174,7 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 	}
 	//log.Printf("proxy local addr: %s\n", local)
 	//log.Println("proxy local end")
-	err := <-proxyError
+	err = <-proxyError
 	if err != nil {
 		transport.PrintErrorIfCritical(err, "socks")
 	}
