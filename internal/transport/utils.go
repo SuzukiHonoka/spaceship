@@ -27,7 +27,7 @@ func PrintErrorIfCritical(err error, msg string) {
 		// grpc errors
 		if s, ok := status.FromError(errors.Unwrap(err)); ok {
 			switch s.Code() {
-			case codes.Internal:
+			case codes.Internal, codes.Canceled:
 				return
 			}
 		}
