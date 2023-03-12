@@ -50,7 +50,10 @@ func (s *Server) ListenAndServe(network, addr string) error {
 }
 
 func (s *Server) Close() error {
-	return s.Listener.Close()
+	if s.Listener != nil {
+		return s.Listener.Close()
+	}
+	return nil
 }
 
 // Serve is used to serve connections from a listener

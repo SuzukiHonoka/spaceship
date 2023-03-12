@@ -329,7 +329,6 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 		// notify proxy session is ended
 		// todo: rpc only check server and client stream copy error
 		if err != nil {
-			_ = f.Conn.Close()
 			transport.PrintErrorIfCritical(err, "http")
 		} else if keepAlive {
 			//log.Println("keep alive")

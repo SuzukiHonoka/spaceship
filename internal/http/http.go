@@ -21,7 +21,10 @@ func New(ctx context.Context) *Server {
 }
 
 func (s *Server) Close() error {
-	return s.Listener.Close()
+	if s.Listener != nil {
+		return s.Listener.Close()
+	}
+	return nil
 }
 
 func (s *Server) ListenAndServe(network, addr string) error {
@@ -59,5 +62,6 @@ func (s *Server) ServeConn(conn net.Conn) error {
 		Ctx:  s.Ctx,
 		Conn: conn,
 	}
+	defer transport.ForceClose(conn)
 	return f.Forward()
 }
