@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/http"
 	"github.com/SuzukiHonoka/spaceship/internal/socks"
@@ -16,8 +15,7 @@ import (
 )
 
 type Launcher struct {
-	sigStop  chan interface{}
-	sigError chan error
+	sigStop chan interface{}
 }
 
 func NewLauncher() *Launcher {
@@ -69,17 +67,19 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 		}
 		defer client.Destroy()
 		// flag
+		var signalArrived bool
 		sigError := make(chan error)
 		// socks
 		if c.ListenSocks != "" {
 			s := socks.New(ctx, &socks.Config{})
 			defer transport.ForceClose(s)
 			go func() {
-				if err := s.ListenAndServe("tcp", c.ListenSocks); err != nil {
-					if err = fmt.Errorf("serve socks failed: %w", err); !errors.Is(err, net.ErrClosed) {
-						log.Println(err)
-					}
-					//sigError <- err
+				err := s.ListenAndServe("tcp", c.ListenSocks)
+				if err != nil {
+					err = fmt.Errorf("serve socks failed: %w", err)
+				}
+				if !signalArrived {
+					sigError <- err
 				}
 			}()
 		}
@@ -88,17 +88,19 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 			h := http.New(ctx)
 			defer transport.ForceClose(h)
 			go func() {
-				if err := h.ListenAndServe("tcp", c.ListenHttp); err != nil {
-					if err = fmt.Errorf("serve http failed: %w", err); !errors.Is(err, net.ErrClosed) {
-						log.Println(err)
-					}
-					//sigError <- err
+				err := h.ListenAndServe("tcp", c.ListenHttp)
+				if err != nil {
+					err = fmt.Errorf("serve http failed: %w", err)
+				}
+				if !signalArrived {
+					sigError <- err
 				}
 			}()
 		}
 		// blocks main
 		go func() {
 			l.waitForCancel()
+			signalArrived = true
 			close(sigError)
 		}()
 		select {
@@ -115,7 +117,7 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 
 func (l *Launcher) Launch(c *config.MixedConfig) bool {
 	if err := l.LaunchWithError(c); err != nil {
-		log.Printf("process failed: %v", err)
+		log.Println(err)
 		return false
 	}
 	return true
