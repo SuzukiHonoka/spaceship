@@ -65,18 +65,31 @@ func (c *MixedConfig) Apply() error {
 		log.Printf("custom service name: %s", c.Path)
 		proxy.SetServiceName(c.Path)
 	}
-	if !c.IPv6 {
-		log.Println("ipv6 disabled")
-		transport.DisableIPv6()
-	}
 	if c.Role == RoleClient {
 		rpcClient.SetUUID(c.UUID)
 	}
 	if c.Routes != nil {
-		router.RoutesCache = *c.Routes
-		if err := router.RoutesCache.GenerateCache(); err != nil {
-			return err
+		router.SetRoutes(*c.Routes)
+	}
+
+	if !c.IPv6 {
+		log.Println("ipv6 disabled")
+		switch c.Role {
+		case RoleServer:
+			transport.DisableIPv6()
+		default:
+			if router.GetCount() == 0 {
+				router.SetRoutes(router.Routes{
+					router.RouteBlockIPv6,
+					router.RouteDefault,
+				})
+			} else {
+				router.AddToFirstRoute(router.RouteBlockIPv6)
+			}
 		}
+	}
+	if err := router.GetRoutes().GenerateCache(); err != nil {
+		return err
 	}
 	return nil
 }
