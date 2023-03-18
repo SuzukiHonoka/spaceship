@@ -263,23 +263,19 @@ func sendReply(w io.Writer, resp uint8, addr *AddrSpec) error {
 	var addrType uint8
 	var addrBody []byte
 	var addrPort uint16
-	switch {
-	case addr == nil:
+	if addr == nil {
 		addrType = ipv4Address
 		addrBody = []byte{0, 0, 0, 0}
 		addrPort = 0
-
-	case addr.IP.To4() != nil:
+	} else if v4 := addr.IP.To4(); v4 != nil {
 		addrType = ipv4Address
-		addrBody = addr.IP.To4()
+		addrBody = v4
 		addrPort = addr.Port
-
-	case addr.IP.To16() != nil:
+	} else if v6 := addr.IP.To16(); v6 != nil {
 		addrType = ipv6Address
-		addrBody = addr.IP.To16()
+		addrBody = v6
 		addrPort = addr.Port
-
-	default:
+	} else {
 		return fmt.Errorf("failed to format address: %v", addr)
 	}
 
