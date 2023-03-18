@@ -3,6 +3,7 @@ package router
 import (
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/internal/transport/blackhole"
 	"github.com/SuzukiHonoka/spaceship/internal/transport/direct"
 	rpcClient "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/client"
 )
@@ -10,18 +11,19 @@ import (
 type Egress string
 
 const (
-	Direct Egress = "direct"
-	Proxy  Egress = "proxy"
-	Block  Egress = "block"
+	EgressDirect Egress = "direct"
+	EgressProxy  Egress = "proxy"
+	EgressBlock  Egress = "block"
 )
 
 func (e Egress) GetTransport() (transport.Transport, error) {
 	switch e {
-	case Direct:
+	case EgressDirect:
 		return direct.Transport, nil
-	case Proxy:
+	case EgressProxy:
 		return rpcClient.NewClient()
-	case Block:
+	case EgressBlock:
+		return blackhole.Transport, nil
 	}
-	return nil, fmt.Errorf("desired transport %s not implemented", e)
+	return nil, fmt.Errorf("desired transport [%s] not implemented", e)
 }
