@@ -143,7 +143,7 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 		target = req.DestAddr.IP.String()
 	}
 	//c := client.NewClient()
-	route, err := router.RoutesCache.GetRoute(target)
+	route, err := router.GetRoutes().GetRoute(target)
 	// if grpc connection failed
 	if err != nil {
 		fmt.Printf("socks: get route error: %v", err)

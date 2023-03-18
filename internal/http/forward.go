@@ -277,7 +277,7 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 		Fqdn: host,
 		Port: port,
 	})
-	route, err := router.RoutesCache.GetRoute(host)
+	route, err := router.GetRoutes().GetRoute(host)
 	if err != nil {
 		log.Printf("http: get route error: %v", err)
 		if _, err = f.Conn.Write(MessageServiceUnavailable); err != nil {
