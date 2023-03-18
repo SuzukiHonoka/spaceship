@@ -10,4 +10,5 @@ var (
 	ErrorServerFailed    = errors.New("server error")
 	ErrorBadRequest      = errors.New("bad request")
 	ErrorKeepAliveNeeded = errors.New("keep alive needed")
+	ErrorIPv6Blocked     = errors.New("ipv6 blocked")
 )

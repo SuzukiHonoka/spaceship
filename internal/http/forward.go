@@ -245,6 +245,11 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 	if err != nil {
 		return fmt.Errorf("parse request failed: %w", err)
 	}
+	if transport.Network == "tcp4" {
+		if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+			return transport.ErrorIPv6Blocked
+		}
+	}
 	// buffer for stored raw messages
 	// len:0 max-cap:4k
 	f.b = bytes.NewBuffer(make([]byte, 0, snifferSize))
