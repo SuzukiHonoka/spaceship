@@ -134,19 +134,13 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 	if req.DestAddr.FQDN != "" {
 		target = req.DestAddr.FQDN
 	} else {
-		if transport.Network == "tcp4" && req.DestAddr.IP.To4() == nil {
-			if err := sendReply(conn, serverFailure, nil); err != nil {
-				return fmt.Errorf("failed to send reply: %v", err)
-			}
-			return transport.ErrorIPv6Blocked
-		}
 		target = req.DestAddr.IP.String()
 	}
 	//c := client.NewClient()
 	route, err := router.GetRoutes().GetRoute(target)
 	// if grpc connection failed
 	if err != nil {
-		fmt.Printf("socks: get route error: %v", err)
+		log.Printf("socks: get route error: %v", err)
 		if err := sendReply(conn, serverFailure, nil); err != nil {
 			return fmt.Errorf("failed to send reply: %v", err)
 		}
