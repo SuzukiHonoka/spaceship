@@ -57,11 +57,13 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 	f := NewForwarder(ctx, stream)
 	// target <- client
 	go func() {
-		proxyError <- fmt.Errorf("client -> target error: %w", f.CopyClientToTarget())
+		err := f.CopyClientToTarget()
+		proxyError <- fmt.Errorf("client -> target error: %w", err)
 	}()
 	// target -> client
 	go func() {
-		proxyError <- fmt.Errorf("client <- target error: %w", f.CopyTargetToClient())
+		err := f.CopyTargetToClient()
+		proxyError <- fmt.Errorf("client <- target error: %w", err)
 	}()
 	err := <-proxyError
 	transport.PrintErrorIfCritical(err, "rpc")
