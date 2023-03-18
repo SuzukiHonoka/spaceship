@@ -279,8 +279,10 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 	})
 	route, err := router.RoutesCache.GetRoute(host)
 	if err != nil {
-		fmt.Printf("http: get route error: %v", err)
-		_, _ = f.Conn.Write([]byte("HTTP/1.1 503 Service Unavailable" + CRLF))
+		log.Printf("http: get route error: %v", err)
+		if _, err = f.Conn.Write(MessageServiceUnavailable); err != nil {
+			return err
+		}
 		return nil
 	}
 	log.Printf("http: %s -> %s", net.JoinHostPort(host, strconv.Itoa(int(port))), route)
@@ -317,14 +319,12 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 	//log.Printf("local addr: %s", ld)
 	var b bytes.Buffer
 	if <-localAddr == "" {
-		b.WriteString("HTTP/1.1 503 Service Unavailable")
+		b.Write(MessageServiceUnavailable)
 	} else if method == "CONNECT" {
-		b.WriteString("HTTP/1.1 200 Connection established")
+		b.Write(MessageConnectionEstablished)
 	}
 	// message end
-	for i := 0; i < 2; i++ {
-		b.WriteString(CRLF)
-	}
+	b.WriteString(CRLF)
 	if _, err = f.Conn.Write(b.Bytes()); err != nil {
 		return fmt.Errorf("send http status error: %w", err)
 	}
