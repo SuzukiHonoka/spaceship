@@ -10,9 +10,23 @@ import (
 	"strings"
 )
 
+var (
+	RouteDefault = &Route{
+		Destination: EgressProxy,
+		MatchType:   TypeDefault,
+	}
+	RouteBlockIPv6 = &Route{
+		Sources: []string{
+			"::/0",
+		},
+		Destination: EgressBlock,
+		MatchType:   TypeCIDR,
+	}
+)
+
 type Route struct {
 	Sources     []string `json:"src"`
-	Path        string   `json:"path,omitempty"`
+	Ext         string   `json:"path,omitempty"`
 	Destination Egress   `json:"dst"`
 	MatchType   Type     `json:"type"`
 	cache       MatchCache
@@ -24,16 +38,16 @@ type MatchCache struct {
 }
 
 func (r *Route) GenerateCache() error {
-	if r.Path != "" {
-		f, err := os.Open(r.Path)
+	if r.Ext != "" {
+		f, err := os.Open(r.Ext)
 		if err != nil {
-			return fmt.Errorf("read from path: %s failed: %w", r.Path, err)
+			return fmt.Errorf("read from path: %s failed: %w", r.Ext, err)
 		}
-		defer transport.ForceClose(f)
 		b := bufio.NewScanner(f)
 		for b.Scan() {
 			r.Sources = append(r.Sources, b.Text())
 		}
+		transport.ForceClose(f)
 	}
 	switch r.MatchType {
 	case TypeDefault:
@@ -91,16 +105,13 @@ func (r *Route) Match(dst string) bool {
 				}
 			}
 		}
-		return false
 	case TypeCIDR:
-		ip := net.ParseIP(dst)
-		if ip == nil {
-			return false
-		}
 		if r.cache.CIDRs != nil {
-			for _, cidr := range r.cache.CIDRs {
-				if cidr.Contains(ip) {
-					return true
+			if ip := net.ParseIP(dst); ip != nil {
+				for _, cidr := range r.cache.CIDRs {
+					if cidr.Contains(ip) {
+						return true
+					}
 				}
 			}
 		}
