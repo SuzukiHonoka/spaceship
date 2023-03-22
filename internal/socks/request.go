@@ -53,7 +53,7 @@ func (a *AddrSpec) String() string {
 
 // Address returns a string suitable to dial; prefer returning IP-based
 // address, fallback to FQDN
-func (a AddrSpec) Address() string {
+func (a *AddrSpec) Address() string {
 	if 0 != len(a.IP) {
 		return net.JoinHostPort(a.IP.String(), strconv.Itoa(int(a.Port)))
 	}
@@ -141,7 +141,7 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 	// if grpc connection failed
 	if err != nil {
 		log.Printf("socks: get route error: %v", err)
-		if err := sendReply(conn, serverFailure, nil); err != nil {
+		if err := sendReply(conn, ruleFailure, nil); err != nil {
 			return fmt.Errorf("failed to send reply: %v", err)
 		}
 		return nil
