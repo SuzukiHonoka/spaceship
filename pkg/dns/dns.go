@@ -13,18 +13,19 @@ type DNS struct {
 }
 
 func (s *DNS) SetDefault() error {
-	// typeCommon in Type is as empty string or "common"
-	if s.Type != "" && s.Type != TypeCommon {
+	switch s.Type {
+	case TypeDefault, TypeCommon:
+		net.DefaultResolver = &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+				d := net.Dialer{
+					Timeout: 3 * time.Second,
+				}
+				return d.DialContext(ctx, network, net.JoinHostPort(s.Server, "53"))
+			},
+		}
+	default:
 		return fmt.Errorf("dns: type %s not implemented, abort setting default", s.Type)
-	}
-	net.DefaultResolver = &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			d := net.Dialer{
-				Timeout: 5 * time.Second,
-			}
-			return d.DialContext(ctx, network, net.JoinHostPort(s.Server, "53"))
-		},
 	}
 	return nil
 }
