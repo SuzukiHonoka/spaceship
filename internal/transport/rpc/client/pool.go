@@ -60,7 +60,6 @@ func (p *Pool) Init() error {
 	for i := 0; i < p.Size; i++ {
 		conn, err := p.Dial()
 		if err != nil {
-			p.Destroy()
 			return err
 		}
 		p.Elements[i] = conn

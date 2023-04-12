@@ -34,8 +34,7 @@ func NewFromConfigFile(path string) (*MixedConfig, error) {
 		return nil, err
 	}
 	var config MixedConfig
-	err = json.Unmarshal(b, &config)
-	if err != nil {
+	if err = json.Unmarshal(b, &config); err != nil {
 		return nil, err
 	}
 	return &config, nil
@@ -43,8 +42,7 @@ func NewFromConfigFile(path string) (*MixedConfig, error) {
 
 func NewFromString(c string) (*MixedConfig, error) {
 	var config MixedConfig
-	err := json.Unmarshal([]byte(c), &config)
-	if err != nil {
+	if err := json.Unmarshal([]byte(c), &config); err != nil {
 		return nil, err
 	}
 	return &config, nil
@@ -77,7 +75,7 @@ func (c *MixedConfig) Apply() error {
 		switch c.Role {
 		case RoleServer:
 			transport.DisableIPv6()
-		default:
+		case RoleClient:
 			if router.GetCount() == 0 {
 				router.SetRoutes(router.Routes{
 					router.RouteBlockIPv6,

@@ -37,7 +37,7 @@ func ParseReqFromRaw(target string) (method, host, params string, port uint16, e
 	// -> GET https://www.google.com HTTP/1.1
 	// it should have 3 elements divided by space
 	if !ok1 || !ok2 {
-		return method, host, params, port, transport.ErrorBadRequest
+		return "", "", "", 0, transport.ErrorBadRequest
 	}
 	//log.Println(method, targetRawUri)
 	switch method {
@@ -51,27 +51,27 @@ func ParseReqFromRaw(target string) (method, host, params string, port uint16, e
 		targetUrl, err = url.Parse(targetRawUri)
 		// if not a legal url format
 		if err != nil {
-			return method, host, params, port, err
+			return method, "", "", 0, err
 		}
 		// mark
 		hasScheme := targetUrl.Scheme != ""
 		// divide the host and port
-		host, port, err = transport.SplitHostPort(targetUrl.Host)
-		// will raise error if port not found
+		// this will raise error if port not found
 		// 1. http://google.com 2. google.com
-		if err != nil {
+		if host, port, err = transport.SplitHostPort(targetUrl.Host); err != nil {
 			// other error
-			if strings.LastIndex(err.Error(), "missing port in address") == -1 {
-				return method, host, params, port, err
+			isNotMissingPortError := strings.LastIndex(err.Error(), "missing port in address") == -1
+			if isNotMissingPortError {
+				return method, "", "", 0, err
 			}
 			host = targetUrl.Host
 			if hasScheme {
-				v, ok := ProtocolMap[targetUrl.Scheme]
-				if !ok {
+				if v, ok := ProtocolMap[targetUrl.Scheme]; ok {
+					port = v
+				} else {
 					err = fmt.Errorf("unkown scheme: %s %w", targetUrl.Scheme, transport.ErrorBadRequest)
 					return method, host, params, port, err
 				}
-				port = v
 			} else {
 				port = 80
 			}
@@ -142,7 +142,6 @@ func (f *Forwarder) handleTunnel(reader *bytes.Reader, scanner *bufio.Scanner) (
 
 func GetRawParamsFromUrl(scheme bool, url string) (string, error) {
 	if scheme {
-		// get params
 		// with scheme -> http://host/params...
 		count, i := 0, 0
 		for ; count < 3 && i < len(url); i++ {
@@ -156,7 +155,6 @@ func GetRawParamsFromUrl(scheme bool, url string) (string, error) {
 		}
 		return url[i-1:], nil
 	}
-	// get params
 	// without scheme -> host/params...
 	i := strings.IndexByte(url, '/')
 	if i == -1 {

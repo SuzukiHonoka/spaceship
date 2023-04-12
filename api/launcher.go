@@ -60,12 +60,12 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 		}
 		// client start
 		log.Println("client starting")
+		// destroy any left connections
+		defer client.Destroy()
 		// initialize pool
-		err = client.Init(c.ServerAddr, c.Host, c.EnableTLS, c.Mux, c.CAs)
-		if err != nil {
+		if err = client.Init(c.ServerAddr, c.Host, c.EnableTLS, c.Mux, c.CAs); err != nil {
 			return fmt.Errorf("init client failed: %w", err)
 		}
-		defer client.Destroy()
 		// flag
 		var signalArrived bool
 		sigError := make(chan error)

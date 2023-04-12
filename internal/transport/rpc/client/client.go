@@ -60,12 +60,14 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 		credential = insecure.NewCredentials()
 	}
 	connPool = NewPool(int(mux), server, append(rpc.DialOptions, grpc.WithTransportCredentials(credential))...)
-	err := connPool.Init()
-	return err
+	return connPool.Init()
 }
 
 func Destroy() {
-	connPool.Destroy()
+	// double check since credential errors might occur
+	if connPool != nil {
+		connPool.Destroy()
+	}
 }
 
 func NewClient() (*Client, error) {
