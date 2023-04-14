@@ -85,7 +85,7 @@ func (p *Pool) GetConnOutSide() (*ConnWrapper, func() error, error) {
 	return conn, conn.Close, nil
 }
 
-// GetConn gets a grpc connection from the pool, also moves the cluster
+// GetConn gets a grpc connection from the pool, also moves the cursor
 func (p *Pool) GetConn() (*ConnWrapper, func() error, error) {
 	// no mux
 	if p.Size == 0 {
