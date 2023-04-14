@@ -4,7 +4,8 @@ import (
 	"context"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
-	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
+	proto "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
+	"golang.org/x/net/proxy"
 	"io"
 	"log"
 	"net"
@@ -13,17 +14,19 @@ import (
 )
 
 type Forwarder struct {
-	Ctx    context.Context
-	Stream proxy.Proxy_ProxyServer
-	Conn   net.Conn
-	Ack    chan interface{}
+	Ctx         context.Context
+	Stream      proto.Proxy_ProxyServer
+	Conn        net.Conn
+	Ack         chan interface{}
+	ProxyDialer proxy.Dialer
 }
 
-func NewForwarder(ctx context.Context, stream proxy.Proxy_ProxyServer) *Forwarder {
+func NewForwarder(ctx context.Context, stream proto.Proxy_ProxyServer, pd proxy.Dialer) *Forwarder {
 	return &Forwarder{
-		Ctx:    ctx,
-		Stream: stream,
-		Ack:    make(chan interface{}),
+		Ctx:         ctx,
+		Stream:      stream,
+		Ack:         make(chan interface{}),
+		ProxyDialer: pd,
 	}
 }
 
@@ -42,8 +45,8 @@ func (c *Forwarder) CopyTargetToClient() error {
 		return transport.ErrorTargetACKFailed
 	}
 	// send local addr to client for nat
-	msgAccept := &proxy.ProxyDST{
-		Status: proxy.ProxyStatus_Accepted,
+	msgAccept := &proto.ProxyDST{
+		Status: proto.ProxyStatus_Accepted,
 		Addr:   c.Conn.LocalAddr().String(),
 	}
 	if err := c.Stream.Send(msgAccept); err != nil {
@@ -72,8 +75,8 @@ func (c *Forwarder) copyTargetToClient(buf []byte) error {
 		return err
 	}
 	//log.Println("rpc server -> client")
-	dstData := &proxy.ProxyDST{
-		Status: proxy.ProxyStatus_Session,
+	dstData := &proto.ProxyDST{
+		Status: proto.ProxyStatus_Session,
 		Data:   buf[:n],
 	}
 	//err = c.Stream.Send(dstData)
@@ -94,10 +97,14 @@ func (c *Forwarder) CopyClientToTarget() error {
 	//log.Printf("prepare for dialing: %s:%d", req.Fqdn, req.Port)
 	target := net.JoinHostPort(req.Fqdn, strconv.Itoa(int(req.Port)))
 	// dial to target with 3 minutes timeout as default
-	c.Conn, err = net.DialTimeout(transport.Network, target, 3*time.Minute)
+	if c.ProxyDialer != nil {
+		c.Conn, err = c.ProxyDialer.Dial(transport.Network, target)
+	} else {
+		c.Conn, err = net.DialTimeout(transport.Network, target, 3*time.Minute)
+	}
 	if err != nil {
-		_ = c.Stream.Send(&proxy.ProxyDST{
-			Status: proxy.ProxyStatus_Error,
+		_ = c.Stream.Send(&proto.ProxyDST{
+			Status: proto.ProxyStatus_Error,
 		})
 		close(c.Ack)
 		return fmt.Errorf("dial target error: %w", err)

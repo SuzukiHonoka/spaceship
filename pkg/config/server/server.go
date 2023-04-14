@@ -8,4 +8,5 @@ type Server struct {
 	Blocks *Blocks `json:"blocks,omitempty"`
 	Buffer uint16  `json:"buffer,omitempty"` // transport buffer size in KB, up to 65535
 	IPv6   bool    `json:"ipv6,omitempty"`   // enable ipv6 in tcp network, disable by default
+	Proxy  string  `json:"proxy,omitempty"`  // extra proxy for dialing
 }

@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc"
-	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
+	proto "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
 	config "github.com/SuzukiHonoka/spaceship/pkg/config/server"
+	"golang.org/x/net/proxy"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -17,11 +18,12 @@ import (
 var Users *config.Users
 
 type server struct {
-	proxy.UnimplementedProxyServer
-	Ctx context.Context
+	proto.UnimplementedProxyServer
+	Ctx         context.Context
+	ProxyDialer proxy.Dialer
 }
 
-func NewServer(ctx context.Context, users *config.Users, ssl *config.SSL) (*grpc.Server, error) {
+func NewServer(ctx context.Context, users *config.Users, ssl *config.SSL, pd proxy.Dialer) (*grpc.Server, error) {
 	// check users
 	if users.IsNullOrEmpty() {
 		return nil, errors.New("users can not be empty")
@@ -41,20 +43,21 @@ func NewServer(ctx context.Context, users *config.Users, ssl *config.SSL) (*grpc
 	}
 	s := grpc.NewServer(append(rpc.ServerOptions, transportOption)...)
 	Users = users
-	proxy.RegisterProxyServer(s, &server{
-		Ctx: ctx,
+	proto.RegisterProxyServer(s, &server{
+		Ctx:         ctx,
+		ProxyDialer: pd,
 	})
 	return s, nil
 }
 
-func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
+func (s *server) Proxy(stream proto.Proxy_ProxyServer) error {
 	//log.Println("rpc server incomes")
 	proxyError := make(chan error)
 	// block main until canceled
 	ctx, cancel := context.WithCancel(s.Ctx)
 	defer cancel()
 	// Forwarder
-	f := NewForwarder(ctx, stream)
+	f := NewForwarder(ctx, stream, s.ProxyDialer)
 	// target <- client
 	go func() {
 		err := f.CopyClientToTarget()
@@ -70,8 +73,8 @@ func (s *server) Proxy(stream proxy.Proxy_ProxyServer) error {
 	// close target connection
 	_ = f.Close()
 	// send session end to client
-	_ = stream.Send(&proxy.ProxyDST{
-		Status: proxy.ProxyStatus_EOF,
+	_ = stream.Send(&proto.ProxyDST{
+		Status: proto.ProxyStatus_EOF,
 	})
 	return nil
 }

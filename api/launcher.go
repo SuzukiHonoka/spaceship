@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"github.com/SuzukiHonoka/spaceship/internal/forward"
 	"github.com/SuzukiHonoka/spaceship/internal/http"
 	"github.com/SuzukiHonoka/spaceship/internal/socks"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
@@ -37,7 +38,15 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 	case config.RoleServer:
 		// server start
 		log.Println("server starting")
-		s, err := server.NewServer(ctx, c.Users, c.SSL)
+		var pd *forward.Forward
+		var err error
+		if c.Proxy != "" {
+			pd, err = forward.NewForward(c.Proxy)
+			if err != nil {
+				return err
+			}
+		}
+		s, err := server.NewServer(ctx, c.Users, c.SSL, pd)
 		if err != nil {
 			return fmt.Errorf("create server failed: %w", err)
 		}
