@@ -11,6 +11,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc/server"
 	"github.com/SuzukiHonoka/spaceship/pkg/config"
 	"github.com/google/uuid"
+	"google.golang.org/grpc"
 	"log"
 	"net"
 )
@@ -38,15 +39,17 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 	case config.RoleServer:
 		// server start
 		log.Println("server starting")
-		var pd *forward.Forward
+		var s *grpc.Server
 		var err error
 		if c.Proxy != "" {
-			pd, err = forward.NewForward(c.Proxy)
+			pd, err := forward.NewForward(c.Proxy)
 			if err != nil {
 				return err
 			}
+			s, err = server.NewServer(ctx, c.Users, c.SSL, pd)
+		} else {
+			s, err = server.NewServer(ctx, c.Users, c.SSL, nil)
 		}
-		s, err := server.NewServer(ctx, c.Users, c.SSL, pd)
 		if err != nil {
 			return fmt.Errorf("create server failed: %w", err)
 		}
