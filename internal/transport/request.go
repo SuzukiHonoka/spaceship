@@ -1,6 +1,6 @@
 package transport
 
 type Request struct {
-	Fqdn string
+	Host string
 	Port uint16
 }

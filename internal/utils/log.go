@@ -1,4 +1,4 @@
-package transport
+package utils
 
 import (
 	"errors"
@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"strconv"
 )
 
 // PrintErrorIfCritical prints only error that critical
@@ -33,22 +32,4 @@ func PrintErrorIfCritical(err error, msg string) {
 		}
 	}
 	log.Printf("%s: %v", msg, err)
-}
-
-// SplitHostPort uses net.SplitHostPort but converts port to uint16 format
-func SplitHostPort(s string) (string, uint16, error) {
-	host, sport, err := net.SplitHostPort(s)
-	if err != nil {
-		return "", 0, err
-	}
-	port, err := strconv.Atoi(sport)
-	if err != nil {
-		return "", 0, err
-	}
-	return host, uint16(port), nil
-}
-
-// ForceClose forces close the closer
-func ForceClose(closer io.Closer) {
-	_ = closer.Close()
 }

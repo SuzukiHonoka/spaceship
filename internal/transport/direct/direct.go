@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
-	"github.com/SuzukiHonoka/spaceship/internal/util"
+	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"io"
 	"net"
 	"strconv"
@@ -21,6 +21,10 @@ func (d Direct) String() string {
 	return TransportName
 }
 
+func (d Direct) Dial(network, addr string) (net.Conn, error) {
+	return net.DialTimeout(network, addr, 3*time.Minute)
+}
+
 // Proxy the traffic locally
 func (d Direct) Proxy(ctx context.Context, localAddr chan<- string, dst io.Writer, src io.Reader) error {
 	req, ok := ctx.Value("request").(*transport.Request)
@@ -29,27 +33,27 @@ func (d Direct) Proxy(ctx context.Context, localAddr chan<- string, dst io.Write
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	target := net.JoinHostPort(req.Fqdn, strconv.Itoa(int(req.Port)))
+	target := net.JoinHostPort(req.Host, strconv.Itoa(int(req.Port)))
 	conn, err := net.DialTimeout(transport.Network, target, 3*time.Minute)
 	if err != nil {
-		localAddr <- ""
+		close(localAddr)
 		return err
 	}
 	localAddr <- conn.LocalAddr().String()
-	defer transport.ForceClose(conn)
+	defer utils.ForceClose(conn)
 	// src -> dst
 	go func() {
-		if _, err := util.CopyBuffer(conn, src, nil); err != nil {
+		if _, err := utils.CopyBuffer(conn, src, nil); err != nil {
 			err = fmt.Errorf("src -> dst error: %w", err)
-			transport.PrintErrorIfCritical(err, "direct")
+			utils.PrintErrorIfCritical(err, "direct")
 			cancel()
 		}
 	}()
 	// src <- dst
 	go func() {
-		if _, err := util.CopyBuffer(dst, conn, nil); err != nil {
+		if _, err := utils.CopyBuffer(dst, conn, nil); err != nil {
 			err = fmt.Errorf("src <- dst error: %w", err)
-			transport.PrintErrorIfCritical(err, "direct")
+			utils.PrintErrorIfCritical(err, "direct")
 			cancel()
 		}
 	}()

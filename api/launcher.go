@@ -3,15 +3,13 @@ package api
 import (
 	"context"
 	"fmt"
-	"github.com/SuzukiHonoka/spaceship/internal/forward"
 	"github.com/SuzukiHonoka/spaceship/internal/http"
 	"github.com/SuzukiHonoka/spaceship/internal/socks"
-	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc/client"
 	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc/server"
+	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"github.com/SuzukiHonoka/spaceship/pkg/config"
 	"github.com/google/uuid"
-	"google.golang.org/grpc"
 	"log"
 	"net"
 )
@@ -39,17 +37,7 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 	case config.RoleServer:
 		// server start
 		log.Println("server starting")
-		var s *grpc.Server
-		var err error
-		if c.Proxy != "" {
-			pd, err := forward.NewForward(c.Proxy)
-			if err != nil {
-				return err
-			}
-			s, err = server.NewServer(ctx, c.Users, c.SSL, pd)
-		} else {
-			s, err = server.NewServer(ctx, c.Users, c.SSL, nil)
-		}
+		s, err := server.NewServer(ctx, c.Users, c.SSL)
 		if err != nil {
 			return fmt.Errorf("create server failed: %w", err)
 		}
@@ -58,7 +46,7 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 		if err != nil {
 			return fmt.Errorf("listen at %s error %w", c.Listen, err)
 		}
-		defer transport.ForceClose(listener)
+		defer utils.ForceClose(listener)
 		log.Printf("rpc started at %s", c.Listen)
 		if err = s.Serve(listener); err != nil {
 			return err
@@ -84,7 +72,7 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 		// socks
 		if c.ListenSocks != "" {
 			s := socks.New(ctx, &socks.Config{})
-			defer transport.ForceClose(s)
+			defer utils.ForceClose(s)
 			go func() {
 				err := s.ListenAndServe("tcp", c.ListenSocks)
 				if err != nil {
@@ -98,7 +86,7 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 		// http
 		if c.ListenHttp != "" {
 			h := http.New(ctx)
-			defer transport.ForceClose(h)
+			defer utils.ForceClose(h)
 			go func() {
 				err := h.ListenAndServe("tcp", c.ListenHttp)
 				if err != nil {

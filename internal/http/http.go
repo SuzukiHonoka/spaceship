@@ -2,7 +2,7 @@ package http
 
 import (
 	"context"
-	"github.com/SuzukiHonoka/spaceship/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"io"
 	"log"
 	"net"
@@ -57,11 +57,11 @@ func (s *Server) Serve() error {
 }
 
 func (s *Server) ServeConn(conn net.Conn) error {
-	defer transport.ForceClose(conn)
+	defer utils.ForceClose(conn)
 	f := &Forwarder{
 		Ctx:  s.Ctx,
 		Conn: conn,
 	}
-	defer transport.ForceClose(conn)
+	defer utils.ForceClose(conn)
 	return f.Forward()
 }

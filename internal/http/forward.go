@@ -6,9 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/SuzukiHonoka/spaceship/internal/router"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
-	"github.com/SuzukiHonoka/spaceship/internal/transport/router"
-	"github.com/SuzukiHonoka/spaceship/internal/util"
+	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"io"
 	"log"
 	"net"
@@ -44,7 +44,7 @@ func ParseReqFromRaw(target string) (method, host, params string, port uint16, e
 	case http.MethodConnect:
 		// no scheme
 		// CONNECT www.google.com:443 HTTP/1.1
-		host, port, err = transport.SplitHostPort(targetRawUri)
+		host, port, err = utils.SplitHostPort(targetRawUri)
 	default:
 		// parse URL from raw
 		var targetUrl *url.URL
@@ -58,7 +58,7 @@ func ParseReqFromRaw(target string) (method, host, params string, port uint16, e
 		// divide the host and port
 		// this will raise error if port not found
 		// 1. http://google.com 2. google.com
-		if host, port, err = transport.SplitHostPort(targetUrl.Host); err != nil {
+		if host, port, err = utils.SplitHostPort(targetUrl.Host); err != nil {
 			// other error
 			isNotMissingPortError := strings.LastIndex(err.Error(), "missing port in address") == -1
 			if isNotMissingPortError {
@@ -70,7 +70,7 @@ func ParseReqFromRaw(target string) (method, host, params string, port uint16, e
 					port = v
 				} else {
 					err = fmt.Errorf("unkown scheme: %s %w", targetUrl.Scheme, transport.ErrorBadRequest)
-					return method, host, params, port, err
+					return method, host, "", 0, err
 				}
 			} else {
 				port = 80
@@ -84,10 +84,10 @@ func ParseReqFromRaw(target string) (method, host, params string, port uint16, e
 
 func (f *Forwarder) handleProxy(method, rawParams string, reader *bytes.Reader, scanner *bufio.Scanner) (err error) {
 	var sb strings.Builder
-	sb.WriteString(method)
-	sb.WriteRune(' ')
-	sb.WriteString(rawParams)
-	sb.WriteRune(' ')
+	for _, seg := range []string{method, rawParams} {
+		sb.WriteString(seg)
+		sb.WriteRune(' ')
+	}
 	sb.WriteString("HTTP/1.1")
 	sb.WriteString(CRLF)
 	head := sb.String()
@@ -272,14 +272,14 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 	ctx, done := context.WithCancel(f.Ctx)
 	defer done()
 	valuedCtx := context.WithValue(ctx, "request", &transport.Request{
-		Fqdn: host,
+		Host: host,
 		Port: port,
 	})
-	route, err := router.GetRoutes().GetRoute(host)
+	route, err := router.GetRoute(host)
 	if err != nil {
-		log.Printf("http: get route error: %v", err)
+		log.Printf("http: get route for [%s] error: %v", host, err)
 		if _, err = f.Conn.Write(MessageServiceUnavailable); err != nil {
-			return err
+			return fmt.Errorf("failed to send reply: %w", err)
 		}
 		return nil
 	}
@@ -305,7 +305,7 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 		}
 		//log.Println("src -> target start")
 		// todo: use our own io copy function with custom buffer and error returning
-		if _, err := util.CopyBuffer(w, f.Conn, nil); err != nil {
+		if _, err := utils.CopyBuffer(w, f.Conn, nil); err != nil {
 			internalError <- fmt.Errorf("%s: %w", "copy stream error", err)
 		}
 		// client close
@@ -316,7 +316,7 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 	//ld := <-localAddr
 	//log.Printf("local addr: %s", ld)
 	var b bytes.Buffer
-	if <-localAddr == "" {
+	if addr, ok := <-localAddr; !ok || addr == "" {
 		b.Write(MessageServiceUnavailable)
 	} else if method == "CONNECT" {
 		b.Write(MessageConnectionEstablished)
@@ -331,7 +331,7 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 		// notify proxy session is ended
 		// todo: rpc only check server and client stream copy error
 		if err != nil {
-			transport.PrintErrorIfCritical(err, "http")
+			utils.PrintErrorIfCritical(err, "http")
 		} else if keepAlive {
 			//log.Println("keep alive")
 			notify <- struct{}{}

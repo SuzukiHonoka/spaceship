@@ -5,15 +5,18 @@ import (
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/internal/transport/blackhole"
 	"github.com/SuzukiHonoka/spaceship/internal/transport/direct"
+	"github.com/SuzukiHonoka/spaceship/internal/transport/forward"
 	rpcClient "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/client"
 )
 
 type Egress string
 
 const (
-	EgressDirect Egress = "direct"
-	EgressProxy  Egress = "proxy"
-	EgressBlock  Egress = "block"
+	EgressDirect    Egress = "direct"
+	EgressProxy     Egress = "proxy"
+	EgressForward   Egress = "forward"
+	EgressBlock     Egress = "block"
+	EgressBlackHole Egress = "blackhole"
 )
 
 func (e Egress) GetTransport() (transport.Transport, error) {
@@ -22,8 +25,12 @@ func (e Egress) GetTransport() (transport.Transport, error) {
 		return direct.Transport, nil
 	case EgressProxy:
 		return rpcClient.NewClient()
-	case EgressBlock:
+	case EgressForward:
+		return forward.Transport, nil
+	case EgressBlackHole:
 		return blackhole.Transport, nil
+	case EgressBlock:
+		return nil, transport.ErrorBlocked
 	}
 	return nil, fmt.Errorf("desired transport [%s] not implemented", e)
 }

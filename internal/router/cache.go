@@ -1,5 +1,7 @@
 package router
 
+import "github.com/SuzukiHonoka/spaceship/internal/transport"
+
 var (
 	routesCache Routes
 	table       = &syncedRoutesTable{
@@ -18,6 +20,14 @@ func AddToFirstRoute(r *Route) {
 
 func AddToLastRoute(r *Route) {
 	routesCache = append(routesCache, r)
+}
+
+func GetRoute(dst string) (transport.Transport, error) {
+	return routesCache.GetRoute(dst)
+}
+
+func GenerateCache() error {
+	return routesCache.GenerateCache()
 }
 
 func GetRoutes() Routes {

@@ -1,4 +1,4 @@
-package util
+package utils
 
 import (
 	"errors"
@@ -61,4 +61,9 @@ func CopyBuffer(dst io.Writer, src io.Reader, buf []byte) (written int64, err er
 		}
 	}
 	return written, err
+}
+
+// ForceClose forces close the closer
+func ForceClose(closer io.Closer) {
+	_ = closer.Close()
 }

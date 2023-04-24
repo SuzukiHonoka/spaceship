@@ -12,11 +12,12 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"io"
 	"log"
+	"net"
 	"os"
 	"time"
 )
 
-const TransportName = "rpc"
+const TransportName = "proxy"
 
 var (
 	uuid     string
@@ -70,6 +71,10 @@ func Destroy() {
 	}
 }
 
+func (c *Client) Dial(network, addr string) (net.Conn, error) {
+	return nil, fmt.Errorf("%s: dial not implemented", c.String())
+}
+
 func NewClient() (*Client, error) {
 	client, doneFunc, err := connPool.GetClient()
 	if err != nil {
@@ -104,11 +109,11 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 		localAddr <- ""
 		return err
 	}
-	//log.Printf("sending proxy to rpc: %s", req.Fqdn)
+	//log.Printf("sending proxy to rpc: %s", req.Host)
 	// get local addr first
 	err = stream.Send(&proxy.ProxySRC{
 		Id:   uuid,
-		Fqdn: req.Fqdn,
+		Fqdn: req.Host,
 		Port: uint32(req.Port),
 	})
 	if err != nil {
@@ -121,23 +126,23 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 	// rpc stream receiver
 	go func() {
 		err := f.CopyTargetToSRC()
-		forwardError <- fmt.Errorf("rpc: src <- server -> %s: %w", req.Fqdn, err)
+		forwardError <- fmt.Errorf("rpc: src <- server -> %s: %w", req.Host, err)
 	}()
 	// rpc sender
 	go func() {
 		err := f.CopySRCtoTarget()
-		forwardError <- fmt.Errorf("rpc: src -> server -> %s: %w", req.Fqdn, err)
+		forwardError <- fmt.Errorf("rpc: src -> server -> %s: %w", req.Host, err)
 	}()
 	t := time.NewTimer(rpc.GeneralTimeout)
 	select {
 	case <-t.C:
 		//timed out
 		localAddr <- ""
-		return fmt.Errorf("rpc: server -> %s timed out: %w", req.Fqdn, os.ErrDeadlineExceeded)
+		return fmt.Errorf("rpc: server -> %s timed out: %w", req.Host, os.ErrDeadlineExceeded)
 	case localAddr <- <-watcher:
 		t.Stop()
 		// done
-		//log.Printf("rpc: server -> %s success", req.Fqdn)
+		//log.Printf("rpc: server -> %s success", req.Host)
 	}
 	// block main
 	select {

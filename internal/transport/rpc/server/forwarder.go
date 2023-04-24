@@ -3,30 +3,27 @@ package server
 import (
 	"context"
 	"fmt"
+	"github.com/SuzukiHonoka/spaceship/internal/router"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	proto "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
-	"golang.org/x/net/proxy"
 	"io"
 	"log"
 	"net"
 	"strconv"
-	"time"
 )
 
 type Forwarder struct {
-	Ctx         context.Context
-	Stream      proto.Proxy_ProxyServer
-	Conn        net.Conn
-	Ack         chan interface{}
-	ProxyDialer proxy.Dialer
+	Ctx    context.Context
+	Stream proto.Proxy_ProxyServer
+	Conn   net.Conn
+	Ack    chan interface{}
 }
 
-func NewForwarder(ctx context.Context, stream proto.Proxy_ProxyServer, pd proxy.Dialer) *Forwarder {
+func NewForwarder(ctx context.Context, stream proto.Proxy_ProxyServer) *Forwarder {
 	return &Forwarder{
-		Ctx:         ctx,
-		Stream:      stream,
-		Ack:         make(chan interface{}),
-		ProxyDialer: pd,
+		Ctx:    ctx,
+		Stream: stream,
+		Ack:    make(chan interface{}),
 	}
 }
 
@@ -94,14 +91,18 @@ func (c *Forwarder) CopyClientToTarget() error {
 	if !Users.Match(req.Id) {
 		return fmt.Errorf("unauthticated uuid: %s -> %w", req.Id, transport.ErrorUserNotFound)
 	}
-	//log.Printf("prepare for dialing: %s:%d", req.Fqdn, req.Port)
+	//log.Printf("prepare for dialing: %s:%d", req.Host, req.Port)
+	route, err := router.GetRoute(req.Fqdn)
+	if route == nil {
+		if err != nil {
+			return fmt.Errorf("get route error: %w", err)
+		}
+		return fmt.Errorf("route blocked: %s", req.Fqdn)
+	}
+	log.Printf("proxy accepted: %s -> %s", req.Fqdn, route)
 	target := net.JoinHostPort(req.Fqdn, strconv.Itoa(int(req.Port)))
 	// dial to target with 3 minutes timeout as default
-	if c.ProxyDialer != nil {
-		c.Conn, err = c.ProxyDialer.Dial(transport.Network, target)
-	} else {
-		c.Conn, err = net.DialTimeout(transport.Network, target, 3*time.Minute)
-	}
+	c.Conn, err = route.Dial(transport.Network, target)
 	if err != nil {
 		_ = c.Stream.Send(&proto.ProxyDST{
 			Status: proto.ProxyStatus_Error,
@@ -111,7 +112,6 @@ func (c *Forwarder) CopyClientToTarget() error {
 	}
 	// trigger read
 	c.Ack <- struct{}{}
-	log.Println("rpc server proxy received ->", req.Fqdn)
 	// loop read client and forward
 	for {
 		select {

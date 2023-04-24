@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"github.com/SuzukiHonoka/spaceship/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"log"
 	"net"
 )
@@ -76,7 +76,7 @@ func (s *Server) Serve() error {
 
 // ServeConn is used to serve a single connection.
 func (s *Server) ServeConn(conn net.Conn) error {
-	defer transport.ForceClose(conn)
+	defer utils.ForceClose(conn)
 	bufConn := bufio.NewReader(conn)
 	// Read the version byte
 	version := []byte{0}

@@ -3,7 +3,7 @@ package router
 import (
 	"bufio"
 	"fmt"
-	"github.com/SuzukiHonoka/spaceship/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"net"
 	"os"
 	"regexp"
@@ -11,6 +11,10 @@ import (
 )
 
 var (
+	RouteServerDefault = &Route{
+		Destination: EgressDirect,
+		MatchType:   TypeDefault,
+	}
 	RouteDefault = &Route{
 		Destination: EgressProxy,
 		MatchType:   TypeDefault,
@@ -47,23 +51,17 @@ func (r *Route) GenerateCache() error {
 		for b.Scan() {
 			r.Sources = append(r.Sources, b.Text())
 		}
-		transport.ForceClose(f)
+		utils.ForceClose(f)
 	}
 	switch r.MatchType {
 	case TypeDefault:
 	case TypeExact:
 	case TypeDomains:
-		for i, s := range r.Sources {
-			var sb strings.Builder
-			sb.WriteRune('.')
-			sb.WriteString(s)
-			r.Sources[i] = sb.String()
-		}
 	case TypeCIDR:
 		for _, cidr := range r.Sources {
 			_, IPNet, err := net.ParseCIDR(cidr)
 			if err != nil {
-				return fmt.Errorf("CIDR: %s parse failed: %w", cidr, err)
+				return fmt.Errorf("cidr: %s parse failed: %w", cidr, err)
 			}
 			r.cache.CIDRs = append(r.cache.CIDRs, IPNet)
 		}
@@ -71,7 +69,7 @@ func (r *Route) GenerateCache() error {
 		for _, rx := range r.Sources {
 			regx, err := regexp.Compile(rx)
 			if err != nil {
-				return fmt.Errorf("REGEX: %s parse failed: %w", r.Sources, err)
+				return fmt.Errorf("regex: %s parse failed: %w", rx, err)
 			}
 			r.cache.RegexS = append(r.cache.RegexS, regx)
 		}

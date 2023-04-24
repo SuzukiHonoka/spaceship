@@ -3,8 +3,9 @@ package socks
 import (
 	"context"
 	"fmt"
+	"github.com/SuzukiHonoka/spaceship/internal/router"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
-	"github.com/SuzukiHonoka/spaceship/internal/transport/router"
+	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"io"
 	"log"
 	"net"
@@ -136,20 +137,18 @@ func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Reques
 	} else {
 		target = req.DestAddr.IP.String()
 	}
-	//c := client.NewClient()
-	route, err := router.GetRoutes().GetRoute(target)
-	// if grpc connection failed
+	route, err := router.GetRoute(target)
 	if err != nil {
-		log.Printf("socks: get route error: %v", err)
+		log.Printf("socks: get route for [%s] error: %v", target, err)
 		if err := sendReply(conn, ruleFailure, nil); err != nil {
-			return fmt.Errorf("failed to send reply: %v", err)
+			return fmt.Errorf("failed to send reply: %w", err)
 		}
 		return nil
 	}
 	log.Printf("socks: %s -> %s", net.JoinHostPort(target, strconv.Itoa(int(req.DestAddr.Port))), route)
 	// start proxy
 	ctx = context.WithValue(ctx, "request", &transport.Request{
-		Fqdn: target,
+		Host: target,
 		Port: req.DestAddr.Port,
 	})
 	localAdder := make(chan string)
@@ -159,24 +158,23 @@ func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Reques
 		err := route.Proxy(ctx, localAdder, conn, req.bufConn)
 		proxyError <- err
 	}()
-	local := <-localAdder
-	if local == "" {
+	local, ok := <-localAdder
+	if !ok || local == "" {
 		if err := sendReply(conn, networkUnreachable, nil); err != nil {
 			return fmt.Errorf("failed to send reply: %v", err)
 		}
 		return nil
 	}
 	// Send success
-	ip, port, _ := transport.SplitHostPort(local)
+	ip, port, _ := utils.SplitHostPort(local)
 	bind := AddrSpec{IP: net.ParseIP(ip), Port: port}
 	if err := sendReply(conn, successReply, &bind); err != nil {
 		return fmt.Errorf("failed to send reply: %v", err)
 	}
 	//log.Printf("proxy local addr: %s\n", local)
 	//log.Println("proxy local end")
-	err = <-proxyError
-	if err != nil {
-		transport.PrintErrorIfCritical(err, "socks")
+	if err = <-proxyError; err != nil {
+		utils.PrintErrorIfCritical(err, "socks")
 	}
 	return nil
 }

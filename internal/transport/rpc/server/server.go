@@ -4,11 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc"
 	proto "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
+	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	config "github.com/SuzukiHonoka/spaceship/pkg/config/server"
-	"golang.org/x/net/proxy"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -19,11 +18,10 @@ var Users *config.Users
 
 type server struct {
 	proto.UnimplementedProxyServer
-	Ctx         context.Context
-	ProxyDialer proxy.Dialer
+	Ctx context.Context
 }
 
-func NewServer(ctx context.Context, users *config.Users, ssl *config.SSL, pd proxy.Dialer) (*grpc.Server, error) {
+func NewServer(ctx context.Context, users *config.Users, ssl *config.SSL) (*grpc.Server, error) {
 	// check users
 	if users.IsNullOrEmpty() {
 		return nil, errors.New("users can not be empty")
@@ -44,8 +42,7 @@ func NewServer(ctx context.Context, users *config.Users, ssl *config.SSL, pd pro
 	s := grpc.NewServer(append(rpc.ServerOptions, transportOption)...)
 	Users = users
 	proto.RegisterProxyServer(s, &server{
-		Ctx:         ctx,
-		ProxyDialer: pd,
+		Ctx: ctx,
 	})
 	return s, nil
 }
@@ -57,7 +54,7 @@ func (s *server) Proxy(stream proto.Proxy_ProxyServer) error {
 	ctx, cancel := context.WithCancel(s.Ctx)
 	defer cancel()
 	// Forwarder
-	f := NewForwarder(ctx, stream, s.ProxyDialer)
+	f := NewForwarder(ctx, stream)
 	// target <- client
 	go func() {
 		err := f.CopyClientToTarget()
@@ -69,7 +66,7 @@ func (s *server) Proxy(stream proto.Proxy_ProxyServer) error {
 		proxyError <- fmt.Errorf("client <- target error: %w", err)
 	}()
 	err := <-proxyError
-	transport.PrintErrorIfCritical(err, "rpc")
+	utils.PrintErrorIfCritical(err, "rpc")
 	// close target connection
 	_ = f.Close()
 	// send session end to client

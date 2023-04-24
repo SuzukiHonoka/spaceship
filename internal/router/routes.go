@@ -17,9 +17,6 @@ func (r Routes) GenerateCache() error {
 }
 
 func (r Routes) GetRoute(dst string) (transport.Transport, error) {
-	if len(r) == 0 {
-		return EgressProxy.GetTransport()
-	}
 	if route, ok := table.Get(dst); ok {
 		//log.Printf("cache hit: %s -> %s", dst, route)
 		return route.GetTransport()
