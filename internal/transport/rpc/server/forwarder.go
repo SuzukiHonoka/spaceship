@@ -93,11 +93,8 @@ func (c *Forwarder) CopyClientToTarget() error {
 	}
 	//log.Printf("prepare for dialing: %s:%d", req.Host, req.Port)
 	route, err := router.GetRoute(req.Fqdn)
-	if route == nil {
-		if err != nil {
-			return fmt.Errorf("get route error: %w", err)
-		}
-		return fmt.Errorf("route blocked: %s", req.Fqdn)
+	if err != nil {
+		return fmt.Errorf("get route for [%s] error: %w", req.Fqdn, err)
 	}
 	log.Printf("proxy accepted: %s -> %s", req.Fqdn, route)
 	target := net.JoinHostPort(req.Fqdn, strconv.Itoa(int(req.Port)))
