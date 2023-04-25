@@ -9,10 +9,6 @@ var (
 	}
 )
 
-func GetCount() int {
-	return len(routesCache)
-}
-
 func AddToFirstRoute(r *Route) {
 	rs := Routes{r}
 	routesCache = append(rs, routesCache...)
@@ -28,10 +24,6 @@ func GetRoute(dst string) (transport.Transport, error) {
 
 func GenerateCache() error {
 	return routesCache.GenerateCache()
-}
-
-func GetRoutes() Routes {
-	return routesCache
 }
 
 func SetRoutes(r Routes) {
