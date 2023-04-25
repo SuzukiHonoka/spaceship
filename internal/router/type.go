@@ -4,7 +4,7 @@ type Type string
 
 const (
 	TypeExact   Type = "exact"
-	TypeDomains Type = "domains"
+	TypeDomain  Type = "domain"
 	TypeCIDR    Type = "cidr"
 	TypeRegex   Type = "regex"
 	TypeDefault Type = "default"

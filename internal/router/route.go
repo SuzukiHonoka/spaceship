@@ -55,7 +55,7 @@ func (r *Route) GenerateCache() error {
 	switch r.MatchType {
 	case TypeDefault:
 	case TypeExact:
-	case TypeDomains:
+	case TypeDomain:
 	case TypeCIDR:
 		for _, cidr := range r.Sources {
 			_, IPNet, err := net.ParseCIDR(cidr)
@@ -88,7 +88,7 @@ func (r *Route) Match(dst string) bool {
 				return true
 			}
 		}
-	case TypeDomains:
+	case TypeDomain:
 		dst = utils.ExtractDomain(dst)
 		for _, domain := range r.Sources {
 			if domain == dst {
