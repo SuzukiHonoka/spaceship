@@ -8,7 +8,7 @@ if [ ! -d "$BUILD_DIR" ]
 then
     mkdir $BUILD_DIR
 fi
-cd $BUILD_DIR
+cd $BUILD_DIR || exit
 
 echo "build for [${1}]"
 
