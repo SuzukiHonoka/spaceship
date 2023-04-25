@@ -2,9 +2,11 @@ package utils
 
 import (
 	"golang.org/x/net/proxy"
+	"golang.org/x/net/publicsuffix"
 	"net"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 // SplitHostPort uses net.SplitHostPort but converts port to uint16 format
@@ -31,4 +33,16 @@ func LoadProxy(p string) (proxy.Dialer, error) {
 	}
 	return d, nil
 	// todo: RegisterDialerType for other scheme
+}
+
+func ExtractDomain(s string) string {
+	eTLD, icann := publicsuffix.PublicSuffix(s)
+	if icann {
+		domain := s[:len(s)-len(eTLD)-1]
+		if index := strings.LastIndexByte(domain, '.'); index != -1 {
+			return s[index+1:]
+		}
+		return s
+	}
+	return eTLD
 }

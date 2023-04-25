@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"regexp"
-	"strings"
 )
 
 var (
@@ -90,8 +89,9 @@ func (r *Route) Match(dst string) bool {
 			}
 		}
 	case TypeDomains:
+		dst = utils.ExtractDomain(dst)
 		for _, domain := range r.Sources {
-			if strings.Contains(dst, domain) {
+			if domain == dst {
 				return true
 			}
 		}
