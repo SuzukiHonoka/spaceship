@@ -74,12 +74,8 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 			s := socks.New(ctx, &socks.Config{})
 			defer utils.ForceClose(s)
 			go func() {
-				err := s.ListenAndServe("tcp", c.ListenSocks)
-				if err != nil {
-					err = fmt.Errorf("serve socks failed: %w", err)
-				}
-				if !signalArrived {
-					sigError <- err
+				if err := s.ListenAndServe("tcp", c.ListenSocks); err != nil && !signalArrived {
+					sigError <- fmt.Errorf("serve socks failed: %w", err)
 				}
 			}()
 		}
@@ -88,12 +84,8 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 			h := http.New(ctx)
 			defer utils.ForceClose(h)
 			go func() {
-				err := h.ListenAndServe("tcp", c.ListenHttp)
-				if err != nil {
-					err = fmt.Errorf("serve http failed: %w", err)
-				}
-				if !signalArrived {
-					sigError <- err
+				if err := h.ListenAndServe("tcp", c.ListenHttp); err != nil && !signalArrived {
+					sigError <- fmt.Errorf("serve http failed: %w", err)
 				}
 			}()
 		}
