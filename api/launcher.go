@@ -25,8 +25,7 @@ func NewLauncher() *Launcher {
 }
 
 func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
-	err := c.Apply()
-	if err != nil {
+	if err := c.Apply(); err != nil {
 		return err
 	}
 	// main context
@@ -54,8 +53,7 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 
 	case config.RoleClient:
 		// check uuid format
-		_, err := uuid.Parse(c.UUID)
-		if err != nil {
+		if _, err := uuid.Parse(c.UUID); err != nil {
 			log.Printf("current uuid is not valid: %v, using simple text as uuid now is accepted but use it at your own risk", err)
 		}
 		// client start
@@ -63,7 +61,7 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 		// destroy any left connections
 		defer client.Destroy()
 		// initialize pool
-		if err = client.Init(c.ServerAddr, c.Host, c.EnableTLS, c.Mux, c.CAs); err != nil {
+		if err := client.Init(c.ServerAddr, c.Host, c.EnableTLS, c.Mux, c.CAs); err != nil {
 			return fmt.Errorf("init client failed: %w", err)
 		}
 		// flag
