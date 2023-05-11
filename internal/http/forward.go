@@ -269,9 +269,7 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 	}
 	//forward process
 	localAddr := make(chan string)
-	ctx, done := context.WithCancel(f.Ctx)
-	defer done()
-	valuedCtx := context.WithValue(ctx, "request", &transport.Request{
+	valuedCtx := context.WithValue(context.Background(), "request", &transport.Request{
 		Host: host,
 		Port: port,
 	})
@@ -289,8 +287,7 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 	// channel for receive err and wait for
 	proxyError := make(chan error)
 	go func() {
-		err := route.Proxy(valuedCtx, localAddr, f.Conn, r)
-		proxyError <- err
+		proxyError <- route.Proxy(valuedCtx, localAddr, f.Conn, r)
 	}()
 	internalError := make(chan error)
 	go func() {
@@ -298,12 +295,14 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 		if b := f.b.Bytes(); len(b) > 0 {
 			if _, err := w.Write(f.b.Bytes()); err != nil {
 				internalError <- fmt.Errorf("write buffer err: %w", err)
+				return
 			}
 		}
 		//log.Println("src -> target start")
 		// todo: use our own io copy function with custom buffer and error returning
 		if _, err := utils.CopyBuffer(w, f.Conn, nil); err != nil {
 			internalError <- fmt.Errorf("%s: %w", "copy stream error", err)
+			return
 		}
 		// client close
 		internalError <- io.EOF
@@ -324,7 +323,7 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 		return fmt.Errorf("send http status error: %w", err)
 	}
 	select {
-	case err := <-proxyError:
+	case err = <-proxyError:
 		// notify proxy session is ended
 		// todo: rpc only check server and client stream copy error
 		if err != nil {
@@ -333,7 +332,7 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 			//log.Println("keep alive")
 			notify <- struct{}{}
 		}
-	case err := <-internalError:
+	case err = <-internalError:
 		return err
 	}
 	return nil
