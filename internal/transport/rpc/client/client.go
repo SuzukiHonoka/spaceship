@@ -93,11 +93,12 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer, r io.Reader) error {
-	defer close(localAddr)
-	defer utils.ForceClose(c)
+	defer func() {
+		close(localAddr)
+		utils.ForceClose(c)
+	}()
 	req, ok := ctx.Value("request").(*transport.Request)
 	if !ok {
-		localAddr <- ""
 		return transport.ErrorRequestNotFound
 	}
 	sessionCtx, cancel := context.WithCancel(ctx)
@@ -105,18 +106,15 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 	// rcp client
 	stream, err := c.ProxyClient.Proxy(sessionCtx)
 	if err != nil {
-		localAddr <- ""
 		return err
 	}
 	//log.Printf("sending proxy to rpc: %s", req.Host)
 	// get local addr first
-	err = stream.Send(&proxy.ProxySRC{
+	if err = stream.Send(&proxy.ProxySRC{
 		Id:   uuid,
 		Fqdn: req.Host,
 		Port: uint32(req.Port),
-	})
-	if err != nil {
-		localAddr <- ""
+	}); err != nil {
 		return err
 	}
 	watcher := make(chan string)
@@ -136,7 +134,6 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 	select {
 	case <-t.C:
 		//timed out
-		localAddr <- ""
 		return fmt.Errorf("rpc: server -> %s timed out: %w", req.Host, os.ErrDeadlineExceeded)
 	case localAddr <- <-watcher:
 		t.Stop()
