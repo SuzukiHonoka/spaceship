@@ -7,6 +7,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc"
 	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
+	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -93,9 +94,7 @@ func (c *Client) Close() error {
 
 func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer, r io.Reader) error {
 	defer close(localAddr)
-	defer func() {
-		_ = c.Close()
-	}()
+	defer utils.ForceClose(c)
 	req, ok := ctx.Value("request").(*transport.Request)
 	if !ok {
 		localAddr <- ""

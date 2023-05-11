@@ -285,10 +285,7 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 	}
 	log.Printf("http: %s -> %s", net.JoinHostPort(host, strconv.Itoa(int(port))), route)
 	r, w := io.Pipe()
-	defer func() {
-		_ = w.Close()
-		_ = r.Close()
-	}()
+	defer utils.ForceCloseAll(w, r)
 	// channel for receive err and wait for
 	proxyError := make(chan error)
 	go func() {

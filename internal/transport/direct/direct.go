@@ -39,6 +39,7 @@ func (d Direct) Proxy(ctx context.Context, localAddr chan<- string, dst io.Write
 		close(localAddr)
 		return err
 	}
+	defer utils.ForceClose(conn)
 	localAddr <- conn.LocalAddr().String()
 	defer utils.ForceClose(conn)
 	// src -> dst

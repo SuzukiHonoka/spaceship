@@ -55,6 +55,8 @@ func (s *server) Proxy(stream proto.Proxy_ProxyServer) error {
 	defer cancel()
 	// Forwarder
 	f := NewForwarder(ctx, stream)
+	// close target connection
+	defer utils.ForceClose(f)
 	// target <- client
 	go func() {
 		err := f.CopyClientToTarget()

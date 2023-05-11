@@ -2,6 +2,7 @@ package client
 
 import (
 	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
+	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"log"
@@ -71,7 +72,7 @@ func (p *Pool) Init() error {
 func (p *Pool) Destroy() {
 	for _, conn := range p.Elements {
 		if conn.ClientConn != nil {
-			_ = conn.Close()
+			utils.ForceClose(conn)
 		}
 	}
 }
