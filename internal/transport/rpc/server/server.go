@@ -67,10 +67,9 @@ func (s *server) Proxy(stream proto.Proxy_ProxyServer) error {
 		err := f.CopyTargetToClient()
 		proxyError <- fmt.Errorf("client <- target error: %w", err)
 	}()
-	err := <-proxyError
-	utils.PrintErrorIfCritical(err, "rpc")
-	// close target connection
-	_ = f.Close()
+	if err := <-proxyError; err != nil {
+		utils.PrintErrorIfCritical(err, "rpc")
+	}
 	// send session end to client
 	_ = stream.Send(&proto.ProxyDST{
 		Status: proto.ProxyStatus_EOF,
