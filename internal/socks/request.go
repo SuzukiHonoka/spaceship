@@ -155,8 +155,7 @@ func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Reques
 	proxyError := make(chan error)
 	//defer close(proxyError)
 	go func() {
-		err := route.Proxy(ctx, localAdder, conn, req.bufConn)
-		proxyError <- err
+		proxyError <- route.Proxy(ctx, localAdder, conn, req.bufConn)
 	}()
 	local, ok := <-localAdder
 	if !ok || local == "" {
