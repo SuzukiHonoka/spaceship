@@ -13,6 +13,8 @@ import (
 
 const TransportName = "direct"
 
+const dialTimeout = 3 * time.Minute
+
 var Transport = Direct{}
 
 type Direct struct{}
@@ -22,7 +24,7 @@ func (d Direct) String() string {
 }
 
 func (d Direct) Dial(network, addr string) (net.Conn, error) {
-	return net.DialTimeout(network, addr, 3*time.Minute)
+	return net.DialTimeout(network, addr, dialTimeout)
 }
 
 // Proxy the traffic locally
@@ -31,34 +33,28 @@ func (d Direct) Proxy(ctx context.Context, localAddr chan<- string, dst io.Write
 	if !ok {
 		return transport.ErrorRequestNotFound
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	target := net.JoinHostPort(req.Host, strconv.Itoa(int(req.Port)))
-	conn, err := net.DialTimeout(transport.Network, target, 3*time.Minute)
+	conn, err := net.DialTimeout(transport.Network, target, dialTimeout)
 	if err != nil {
 		close(localAddr)
 		return err
 	}
 	defer utils.ForceClose(conn)
 	localAddr <- conn.LocalAddr().String()
-	defer utils.ForceClose(conn)
+	proxyError := make(chan error)
 	// src -> dst
 	go func() {
-		if _, err := utils.CopyBuffer(conn, src, nil); err != nil {
-			err = fmt.Errorf("src -> dst error: %w", err)
-			utils.PrintErrorIfCritical(err, "direct")
-			cancel()
-		}
+		_, err := utils.CopyBuffer(conn, src, nil)
+		proxyError <- err
 	}()
 	// src <- dst
 	go func() {
-		if _, err := utils.CopyBuffer(dst, conn, nil); err != nil {
-			err = fmt.Errorf("src <- dst error: %w", err)
-			utils.PrintErrorIfCritical(err, "direct")
-			cancel()
-		}
+		_, err := utils.CopyBuffer(dst, conn, nil)
+		proxyError <- err
 	}()
-	<-ctx.Done()
+	if err := <-proxyError; err != nil {
+		return fmt.Errorf("direct: %w", err)
+	}
 	return nil
 }
 
