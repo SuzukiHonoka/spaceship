@@ -67,3 +67,10 @@ func CopyBuffer(dst io.Writer, src io.Reader, buf []byte) (written int64, err er
 func ForceClose(closer io.Closer) {
 	_ = closer.Close()
 }
+
+// ForceCloseAll force close all closers
+func ForceCloseAll(closers ...io.Closer) {
+	for _, closer := range closers {
+		ForceClose(closer)
+	}
+}
