@@ -21,7 +21,7 @@ import (
 )
 
 const snifferSize = 4 * 1024
-const sessionTimeout = 3 * time.Minute
+const sessionTimeout = 30 * time.Minute
 
 type Forwarder struct {
 	Ctx  context.Context
