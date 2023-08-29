@@ -60,8 +60,9 @@ func ParseReqFromRaw(target string) (method, host, params string, port uint16, e
 		// 1. http://google.com 2. google.com
 		if host, port, err = utils.SplitHostPort(targetUrl.Host); err != nil {
 			// other error
-			isNotMissingPortError := strings.LastIndex(err.Error(), "missing port in address") == -1
-			if isNotMissingPortError {
+			var addrErr *net.AddrError
+			errors.As(err, &addrErr)
+			if addrErr.Err != "missing port in address" {
 				return method, "", "", 0, err
 			}
 			host = targetUrl.Host
@@ -305,7 +306,7 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 			return
 		}
 		// client close
-		internalError <- io.EOF
+		close(internalError)
 		//log.Println("src -> target done")
 	}()
 	//log.Println("wait for local addr")
@@ -332,7 +333,10 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 			//log.Println("keep alive")
 			notify <- struct{}{}
 		}
-	case err = <-internalError:
+	case err, ok := <-internalError:
+		if !ok {
+			return nil
+		}
 		return err
 	}
 	return nil
