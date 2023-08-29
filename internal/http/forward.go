@@ -215,8 +215,8 @@ func (f *Forwarder) Forward() error {
 	return nil
 }
 
-func (f *Forwarder) forward(notify chan<- struct{}) error {
-	defer close(notify)
+func (f *Forwarder) forward(reuse chan<- struct{}) error {
+	defer close(reuse)
 	// 4k buffer, capable of storing up to 2048 words which enough for http headers
 	// used for store raw socket messages to identify the remote host and filter sensitive-http-headers
 	tmp := make([]byte, snifferSize)
@@ -328,16 +328,16 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 		// notify proxy session is ended
 		// todo: rpc only check server and client stream copy error
 		if err != nil {
-			utils.PrintErrorIfCritical(err, "http")
-		} else if keepAlive {
-			//log.Println("keep alive")
-			notify <- struct{}{}
+			return err
 		}
 	case err, ok := <-internalError:
-		if !ok {
-			return nil
+		if ok && err != nil {
+			return err
 		}
-		return err
+	}
+	if keepAlive {
+		log.Println("keep alive")
+		reuse <- struct{}{}
 	}
 	return nil
 }
