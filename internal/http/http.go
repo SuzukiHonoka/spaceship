@@ -3,10 +3,8 @@ package http
 import (
 	"context"
 	"github.com/SuzukiHonoka/spaceship/internal/utils"
-	"io"
 	"log"
 	"net"
-	"os"
 )
 
 type Server struct {
@@ -49,8 +47,8 @@ func (s *Server) Serve() error {
 			}
 		}
 		go func() {
-			if err := s.ServeConn(conn); err != nil && err != io.EOF && err != os.ErrDeadlineExceeded {
-				log.Printf("http: %v", err)
+			if err := s.ServeConn(conn); err != nil {
+				utils.PrintErrorIfCritical(err, "http")
 			}
 		}()
 	}
