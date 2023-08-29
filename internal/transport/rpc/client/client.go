@@ -123,7 +123,10 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 	// rpc stream receiver
 	go func() {
 		err := f.CopyTargetToSRC()
-		forwardError <- fmt.Errorf("rpc: src <- server -> %s: %w", req.Host, err)
+		if err != io.EOF {
+			forwardError <- fmt.Errorf("rpc: src <- server -> %s: %w", req.Host, err)
+		}
+		forwardError <- nil
 	}()
 	// rpc sender
 	go func() {
