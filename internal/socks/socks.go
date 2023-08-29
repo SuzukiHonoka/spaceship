@@ -3,6 +3,7 @@ package socks
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"log"
@@ -100,7 +101,7 @@ func (s *Server) ServeConn(conn net.Conn) error {
 
 	request, err := NewRequest(bufConn)
 	if err != nil {
-		if err == unrecognizedAddrType {
+		if errors.Is(err, unrecognizedAddrType) {
 			if err := sendReply(conn, addrTypeNotSupported, nil); err != nil {
 				return fmt.Errorf("failed to send reply: %v", err)
 			}

@@ -258,7 +258,7 @@ func (f *Forwarder) forward(notify chan<- struct{}) error {
 		err = f.handleTunnel(reader, scanner)
 	default:
 		if s := f.handleProxy(method, params, reader, scanner); s != nil {
-			if keepAlive = s == transport.ErrorKeepAliveNeeded; !keepAlive {
+			if keepAlive = errors.Is(s, transport.ErrorKeepAliveNeeded); !keepAlive {
 				err = s
 			}
 		}
