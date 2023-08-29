@@ -125,6 +125,7 @@ func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer
 		err := f.CopyTargetToSRC()
 		if err != io.EOF {
 			forwardError <- fmt.Errorf("rpc: src <- server -> %s: %w", req.Host, err)
+			return
 		}
 		forwardError <- nil
 	}()
