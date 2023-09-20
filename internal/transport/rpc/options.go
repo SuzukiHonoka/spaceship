@@ -27,6 +27,8 @@ var DialOptions = []grpc.DialOption{
 			Timeout: GeneralTimeout,
 		}).DialContext(ctx, "tcp", s)
 	}),
+	grpc.WithWriteBufferSize(0),
+	grpc.WithReadBufferSize(0),
 	grpc.WithUserAgent("spaceship/" + manifest.VersionCode),
 }
 
