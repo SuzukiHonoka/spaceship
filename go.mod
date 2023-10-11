@@ -4,8 +4,8 @@ go 1.21
 
 require (
 	github.com/google/uuid v1.3.1
-	golang.org/x/net v0.16.0
-	google.golang.org/grpc v1.58.3
+	golang.org/x/net v0.17.0
+	google.golang.org/grpc v1.58.2
 	google.golang.org/protobuf v1.31.0
 )
 
