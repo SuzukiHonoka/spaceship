@@ -336,7 +336,7 @@ func (f *Forwarder) forward(reuse chan<- struct{}) error {
 		}
 	}
 	if keepAlive {
-		log.Println("keep alive")
+		log.Println("http: keep alive")
 		reuse <- struct{}{}
 	}
 	return nil
