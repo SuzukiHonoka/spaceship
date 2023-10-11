@@ -21,8 +21,8 @@ import (
 const TransportName = "proxy"
 
 var (
-	uuid     string
-	connPool *Pool
+	uuid      string
+	connQueue *ConnQueue
 )
 
 type Client struct {
@@ -61,14 +61,15 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 	} else {
 		credential = insecure.NewCredentials()
 	}
-	connPool = NewPool(int(mux), server, append(rpc.DialOptions, grpc.WithTransportCredentials(credential))...)
-	return connPool.Init()
+	params := NewParams(server, append(rpc.DialOptions, grpc.WithTransportCredentials(credential))...)
+	connQueue = NewConnQueue(int(mux), params)
+	return connQueue.Init()
 }
 
 func Destroy() {
 	// double check since credential errors might occur
-	if connPool != nil {
-		connPool.Destroy()
+	if connQueue != nil {
+		connQueue.Destroy()
 	}
 }
 
@@ -77,7 +78,7 @@ func (c *Client) Dial(network, addr string) (net.Conn, error) {
 }
 
 func NewClient() (*Client, error) {
-	client, doneFunc, err := connPool.GetClient()
+	client, doneFunc, err := connQueue.GetClient()
 	if err != nil {
 		return nil, err
 	}
