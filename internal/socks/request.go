@@ -140,26 +140,23 @@ func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Reques
 	route, err := router.GetRoute(target)
 	if err != nil {
 		log.Printf("socks: get route for [%s] error: %v", target, err)
-		if err := sendReply(conn, ruleFailure, nil); err != nil {
+		if err = sendReply(conn, ruleFailure, nil); err != nil {
 			return fmt.Errorf("failed to send reply: %w", err)
 		}
 		return nil
 	}
 	log.Printf("socks: %s -> %s", net.JoinHostPort(target, strconv.Itoa(int(req.DestAddr.Port))), route)
 	// start proxy
-	ctx = context.WithValue(ctx, "request", &transport.Request{
-		Host: target,
-		Port: req.DestAddr.Port,
-	})
+	request := transport.NewRequest(target, req.DestAddr.Port)
 	localAdder := make(chan string)
 	proxyError := make(chan error)
 	//defer close(proxyError)
 	go func() {
-		proxyError <- route.Proxy(ctx, localAdder, conn, req.bufConn)
+		proxyError <- route.Proxy(context.Background(), request, localAdder, conn, req.bufConn)
 	}()
 	local, ok := <-localAdder
 	if !ok || local == "" {
-		if err := sendReply(conn, networkUnreachable, nil); err != nil {
+		if err = sendReply(conn, networkUnreachable, nil); err != nil {
 			return fmt.Errorf("failed to send reply: %v", err)
 		}
 		return nil
@@ -167,7 +164,7 @@ func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Reques
 	// Send success
 	ip, port, _ := utils.SplitHostPort(local)
 	bind := AddrSpec{IP: net.ParseIP(ip), Port: port}
-	if err := sendReply(conn, successReply, &bind); err != nil {
+	if err = sendReply(conn, successReply, &bind); err != nil {
 		return fmt.Errorf("failed to send reply: %v", err)
 	}
 	//log.Printf("proxy local addr: %s\n", local)

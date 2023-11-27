@@ -231,7 +231,7 @@ func (f *Forwarder) forward(reuse chan<- struct{}) error {
 	scanner := bufio.NewScanner(reader)
 	// scan the first line, if we reached the end or any error occurred
 	if ok := scanner.Scan(); !ok {
-		if err := scanner.Err(); err != nil {
+		if err = scanner.Err(); err != nil {
 			return fmt.Errorf("scann first line failed: %w", err)
 		}
 		return transport.ErrorBadRequest
@@ -270,10 +270,6 @@ func (f *Forwarder) forward(reuse chan<- struct{}) error {
 	}
 	//forward process
 	localAddr := make(chan string)
-	valuedCtx := context.WithValue(context.Background(), "request", &transport.Request{
-		Host: host,
-		Port: port,
-	})
 	route, err := router.GetRoute(host)
 	if err != nil {
 		log.Printf("http: get route for [%s] error: %v", host, err)
@@ -286,9 +282,10 @@ func (f *Forwarder) forward(reuse chan<- struct{}) error {
 	r, w := io.Pipe()
 	defer utils.ForceCloseAll(w, r)
 	// channel for receive err and wait for
+	request := transport.NewRequest(host, port)
 	proxyError := make(chan error)
 	go func() {
-		proxyError <- route.Proxy(valuedCtx, localAddr, f.Conn, r)
+		proxyError <- route.Proxy(context.Background(), request, localAddr, f.Conn, r)
 	}()
 	internalError := make(chan error)
 	go func() {

@@ -93,7 +93,7 @@ func (c *Client) Close() error {
 	return c.DoneFunc()
 }
 
-func (c *Client) Proxy(ctx context.Context, localAddr chan<- string, w io.Writer, r io.Reader) error {
+func (c *Client) Proxy(ctx context.Context, req transport.Request, localAddr chan<- string, w io.Writer, r io.Reader) error {
 	defer func() {
 		close(localAddr)
 		utils.ForceClose(c)

@@ -28,15 +28,11 @@ func (d Direct) Dial(network, addr string) (net.Conn, error) {
 }
 
 // Proxy the traffic locally
-func (d Direct) Proxy(ctx context.Context, localAddr chan<- string, dst io.Writer, src io.Reader) error {
-	req, ok := ctx.Value("request").(*transport.Request)
-	if !ok {
-		return transport.ErrorRequestNotFound
-	}
+func (d Direct) Proxy(ctx context.Context, req transport.Request, localAddr chan<- string, dst io.Writer, src io.Reader) error {
+	defer close(localAddr)
 	target := net.JoinHostPort(req.Host, strconv.Itoa(int(req.Port)))
 	conn, err := net.DialTimeout(transport.Network, target, dialTimeout)
 	if err != nil {
-		close(localAddr)
 		return err
 	}
 	defer utils.ForceClose(conn)

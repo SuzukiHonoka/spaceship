@@ -3,6 +3,7 @@ package forward
 import (
 	"context"
 	"fmt"
+	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	"golang.org/x/net/proxy"
 	"io"
 	"net"
@@ -35,7 +36,7 @@ func (f *Forward) Dial(network, addr string) (net.Conn, error) {
 	return nil, fmt.Errorf("%s: dialer not attached", f.String())
 }
 
-func (f *Forward) Proxy(ctx context.Context, localAddr chan<- string, dst io.Writer, src io.Reader) error {
+func (f *Forward) Proxy(ctx context.Context, req transport.Request, localAddr chan<- string, dst io.Writer, src io.Reader) error {
 	close(localAddr)
 	return fmt.Errorf("%s: proxy not implemented", f.String())
 }
