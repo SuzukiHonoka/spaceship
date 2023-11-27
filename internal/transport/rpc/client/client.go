@@ -47,8 +47,8 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 		}
 		// load custom cas if exist
 		for _, path := range cas {
-			cert, err := os.ReadFile(path)
-			if err != nil {
+			var cert []byte
+			if cert, err = os.ReadFile(path); err != nil {
 				log.Printf("read CA file from path: %s failed: %v", path, err)
 				continue
 			}
@@ -98,10 +98,6 @@ func (c *Client) Proxy(ctx context.Context, req transport.Request, localAddr cha
 		close(localAddr)
 		utils.ForceClose(c)
 	}()
-	req, ok := ctx.Value("request").(*transport.Request)
-	if !ok {
-		return transport.ErrorRequestNotFound
-	}
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	// rcp client
@@ -124,8 +120,8 @@ func (c *Client) Proxy(ctx context.Context, req transport.Request, localAddr cha
 	// rpc stream receiver
 	go func() {
 		err := f.CopyTargetToSRC()
-		if err != io.EOF {
-			forwardError <- fmt.Errorf("rpc: src <- server -> %s: %w", req.Host, err)
+		if err != nil {
+			forwardError <- fmt.Errorf("rpc: src <- server <- %s: %w", req.Host, err)
 			return
 		}
 		forwardError <- nil
@@ -133,7 +129,11 @@ func (c *Client) Proxy(ctx context.Context, req transport.Request, localAddr cha
 	// rpc sender
 	go func() {
 		err := f.CopySRCtoTarget()
-		forwardError <- fmt.Errorf("rpc: src -> server -> %s: %w", req.Host, err)
+		if err != nil {
+			forwardError <- fmt.Errorf("rpc: src -> server -> %s: %w", req.Host, err)
+			return
+		}
+		forwardError <- nil
 	}()
 	t := time.NewTimer(rpc.GeneralTimeout)
 	select {

@@ -44,47 +44,44 @@ func (c *Forwarder) copySRCtoTarget(buf []byte) error {
 }
 
 func (c *Forwarder) CopyTargetToSRC() error {
+	var buf proxy.ProxyDST
 	for {
 		select {
 		case <-c.Ctx.Done():
 			return nil
 		default:
-			if err := c.copyTargetToSRC(); err != nil {
+			if err := c.copyTargetToSRC(&buf); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-func (c *Forwarder) copyTargetToSRC() error {
+func (c *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) error {
 	//log.Println("rpc server reading..")
-	res, err := c.Stream.Recv()
-	if err != nil {
+	var err error
+	if buf, err = c.Stream.Recv(); err != nil {
 		return err
 	}
 	//log.Printf("rpc client on receive: %d", res.Status)
 	//fmt.Printf("----> \n%s\n", res.Data)
-	switch res.Status {
+	switch buf.Status {
 	case proxy.ProxyStatus_Session:
 		//log.Printf("target: %s", string(res.Data))
-		n, err := c.Writer.Write(res.Data)
-		if err != nil {
+		if _, err = c.Writer.Write(buf.Data); err != nil {
 			// log.Printf("error when sending client request to target stream: %v", err)
 			return err
 		}
-		if n != len(res.Data) {
-			return fmt.Errorf("received: %d sent: %d loss: %d %w", len(res.Data), n, n/len(res.Data), transport.ErrorPacketLoss)
-		}
 		//log.Println("rpc server msg forwarded")
 	case proxy.ProxyStatus_Accepted:
-		c.LocalAddr <- res.Addr
+		c.LocalAddr <- buf.Addr
 	case proxy.ProxyStatus_EOF:
 		return io.EOF
 	case proxy.ProxyStatus_Error:
 		c.LocalAddr <- ""
 		return transport.ErrorServerFailed
 	default:
-		return fmt.Errorf("unknown status: %d", res.Status)
+		return fmt.Errorf("unknown status: %d", buf.Status)
 	}
 	return nil
 }

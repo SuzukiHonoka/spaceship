@@ -110,36 +110,33 @@ func (c *Forwarder) CopyClientToTarget() error {
 	// trigger read
 	c.Ack <- struct{}{}
 	// loop read client and forward
+	var buf proto.ProxySRC
 	for {
 		select {
 		case <-c.Ctx.Done():
 			return nil
 		default:
-			if err := c.copyClientToTarget(); err != nil {
+			if err = c.copyClientToTarget(&buf); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-func (c *Forwarder) copyClientToTarget() error {
+func (c *Forwarder) copyClientToTarget(buf *proto.ProxySRC) error {
 	//log.Println("rpc server receiving...")
-	req, err := c.Stream.Recv()
-	if err != nil {
+	var err error
+	if buf, err = c.Stream.Recv(); err != nil {
 		return err
 	}
 	// return EOF if client closed or invalid message being received
-	if req.Data == nil {
+	if buf.Data == nil {
 		return io.EOF
 	}
 	//log.Printf("RX: %s", string(data))
 	// write to remote
-	n, err := c.Conn.Write(req.Data)
-	if err != nil {
+	if _, err = c.Conn.Write(buf.Data); err != nil {
 		return err
-	}
-	if n != len(req.Data) {
-		return fmt.Errorf("received: %d sent: %d losses: %d %w", len(req.Data), n, n/len(req.Data), transport.ErrorPacketLoss)
 	}
 	return nil
 }
