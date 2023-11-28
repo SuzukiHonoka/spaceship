@@ -8,21 +8,20 @@ A program helps you to create a tunnel to the remote network.
 ## Usage
 ```shell
 root@starx:/opt/spaceship# ./spaceship -h
-spaceship v1.4.8 for personal use only, absolutely without any warranty, any kind of illegal intention by using this program are strongly forbidden.
+spaceship v1.x.x for personal use only, absolutely without any warranty, any kind of illegal intention by using this program are strongly forbidden.
 Usage of spaceship:
   -c string
         config path (default "./config.json")
 ```
-The spaceship server and client configuration example are now added in repo/example/config
 
 ## Nginx Reserve Proxy Configuration
 ```nginx
 ...
-    location /proxy. {  
+    location /proxy. {
+        grpc_intercept_errors on;
         grpc_socket_keepalive on;
         grpc_send_timeout 3600s;
         grpc_read_timeout 3600s;
-        grpc_buffer_size 4k;
         grpc_pass grpc://127.0.0.1:12345;
     }
 ...
