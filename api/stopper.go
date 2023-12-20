@@ -8,7 +8,7 @@ import (
 
 func (l *Launcher) waitForCancel() {
 	sys := make(chan os.Signal, 1)
-	signal.Notify(sys, syscall.SIGKILL, syscall.SIGTERM, syscall.SIGINT)
+	signal.Notify(sys, os.Interrupt, syscall.SIGKILL, syscall.SIGTERM, syscall.SIGINT)
 	select {
 	case <-sys:
 	case <-l.sigStop:
