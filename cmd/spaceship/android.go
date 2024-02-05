@@ -9,10 +9,10 @@ import (
 
 // android may not resolve dns correctly through DefaultResolver
 func init() {
-	// use dns server of dnspod by default
+	// use google dns server by default
 	d := &dns.DNS{
 		Type:   dns.TypeCommon,
-		Server: "119.29.29.29",
+		Server: "8.8.8.8",
 	}
 	d.SetDefault()
 }
