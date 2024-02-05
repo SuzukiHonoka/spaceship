@@ -18,17 +18,24 @@ import (
 	"os"
 )
 
+// MixedConfig is a server/client mixed config, along with general config.
 type MixedConfig struct {
-	Role     `json:"role"`
+	// Role is an identifier for distinguish the role in spaceship since the server/client are not seperated.
+	// supported roles: "server", "client"
+	Role `json:"role"`
+	// DNS is used for set up the custom dns as an upstream of global resolver.
 	*dns.DNS `json:"dns,omitempty"`
-	CAs      []string    `json:"cas,omitempty"`
-	LogMode  logger.Mode `json:"log,omitempty"`
+	// CAs is used for append the custom CA to the system cert pool.
+	CAs []string `json:"cas,omitempty"`
+	// LogMode is used for set up specific log mod, defaults to stdout.
+	LogMode logger.Mode `json:"log,omitempty"`
 	client.Client
 	server.Server
 }
 
+// NewFromConfigFile loads the config from the file in the specific path.
 func NewFromConfigFile(path string) (*MixedConfig, error) {
-	if !utils.FileExist(path) {
+	if !utils.PathExist(path) {
 		return nil, errors.New("config file not exist")
 	}
 	b, err := os.ReadFile(path)
@@ -42,6 +49,7 @@ func NewFromConfigFile(path string) (*MixedConfig, error) {
 	return &config, nil
 }
 
+// NewFromString loads the config from raw config string in json format (stick to the config structure).
 func NewFromString(c string) (*MixedConfig, error) {
 	var config MixedConfig
 	if err := json.Unmarshal([]byte(c), &config); err != nil {
@@ -50,6 +58,7 @@ func NewFromString(c string) (*MixedConfig, error) {
 	return &config, nil
 }
 
+// Apply applies the MixedConfig
 func (c *MixedConfig) Apply() error {
 	switch c.Role {
 	case RoleClient, RoleServer:
@@ -95,7 +104,6 @@ func (c *MixedConfig) Apply() error {
 		}
 		router.SetRoutes(router.Routes{route})
 	}
-
 	if !c.IPv6 {
 		if c.Role == RoleServer {
 			transport.DisableIPv6()
@@ -103,9 +111,5 @@ func (c *MixedConfig) Apply() error {
 		router.AddToFirstRoute(router.RouteBlockIPv6)
 		log.Println("ipv6 disabled")
 	}
-
-	if err := router.GenerateCache(); err != nil {
-		return err
-	}
-	return nil
+	return router.GenerateCache()
 }
