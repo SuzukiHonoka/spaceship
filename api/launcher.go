@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/http"
 	"github.com/SuzukiHonoka/spaceship/internal/socks"
@@ -54,7 +55,7 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 	case config.RoleClient:
 		// check uuid format
 		if _, err := uuid.Parse(c.UUID); err != nil {
-			log.Printf("current uuid is not valid: %v, using simple text as uuid now is accepted but use it at your own risk", err)
+			return errors.New("uuid is not valid")
 		}
 		// client start
 		log.Println("client starting")
