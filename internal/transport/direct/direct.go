@@ -8,12 +8,9 @@ import (
 	"io"
 	"net"
 	"strconv"
-	"time"
 )
 
 const TransportName = "direct"
-
-const dialTimeout = 3 * time.Minute
 
 var Transport = Direct{}
 
@@ -24,14 +21,14 @@ func (d Direct) String() string {
 }
 
 func (d Direct) Dial(network, addr string) (net.Conn, error) {
-	return net.DialTimeout(network, addr, dialTimeout)
+	return net.DialTimeout(network, addr, transport.DialTimeout)
 }
 
 // Proxy the traffic locally
-func (d Direct) Proxy(ctx context.Context, req transport.Request, localAddr chan<- string, dst io.Writer, src io.Reader) error {
+func (d Direct) Proxy(_ context.Context, req transport.Request, localAddr chan<- string, dst io.Writer, src io.Reader) error {
 	defer close(localAddr)
 	target := net.JoinHostPort(req.Host, strconv.Itoa(int(req.Port)))
-	conn, err := net.DialTimeout(transport.Network, target, dialTimeout)
+	conn, err := net.DialTimeout(transport.Network, target, transport.DialTimeout)
 	if err != nil {
 		return err
 	}

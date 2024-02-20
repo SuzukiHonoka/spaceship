@@ -3,12 +3,13 @@ package transport
 import "errors"
 
 var (
-	ErrorPacketLoss      = errors.New("packet loss")
-	ErrorUserNotFound    = errors.New("user not found")
-	ErrorRequestNotFound = errors.New("request not found")
-	ErrorTargetACKFailed = errors.New("target ack failed")
-	ErrorServerFailed    = errors.New("server error")
-	ErrorBadRequest      = errors.New("bad request")
-	ErrorKeepAliveNeeded = errors.New("keep alive needed")
-	ErrorBlocked         = errors.New("blocked")
+	ErrPackageLoss     = errors.New("package loss")
+	ErrUserNotFound    = errors.New("user not found")
+	ErrRequestNotFound = errors.New("request not found")
+	ErrTargetACKFailed = errors.New("target ack failed")
+	ErrServerFailed    = errors.New("server error")
+	ErrBadRequest      = errors.New("bad request")
+	ErrKeepAliveNeeded = errors.New("keep alive needed")
+	ErrBlocked         = errors.New("blocked")
+	ErrNotImplemented  = errors.New("not implemented")
 )

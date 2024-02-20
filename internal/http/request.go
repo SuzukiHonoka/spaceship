@@ -47,13 +47,13 @@ func ParseRequestFromRaw(raw string) (*Request, error) {
 	targetRawUri, _, ok2 := strings.Cut(rest, " ")
 	// we are not a http website
 	if targetRawUri == "/" {
-		return nil, transport.ErrorBadRequest
+		return nil, transport.ErrBadRequest
 	}
 	// proper request format at first line: (HTTP_METHOD TARGET_URL HTTP_VERSION)
 	// -> GET https://www.google.com HTTP/1.1
 	// it should have 3 elements divided by space
 	if !ok1 || !ok2 {
-		return nil, transport.ErrorBadRequest
+		return nil, transport.ErrBadRequest
 	}
 	//log.Println(method, targetRawUri)
 	var r Request
@@ -90,7 +90,7 @@ func ParseRequestFromRaw(raw string) (*Request, error) {
 				if v, ok := ProtocolMap[targetUrl.Scheme]; ok {
 					r.Port = v
 				} else {
-					err = fmt.Errorf("unkown scheme: %s %w", targetUrl.Scheme, transport.ErrorBadRequest)
+					err = fmt.Errorf("unkown scheme: %s %w", targetUrl.Scheme, transport.ErrBadRequest)
 					return nil, err
 				}
 			} else {

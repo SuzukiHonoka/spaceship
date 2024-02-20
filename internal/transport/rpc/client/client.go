@@ -73,7 +73,7 @@ func Destroy() {
 	}
 }
 
-func (c *Client) Dial(network, addr string) (net.Conn, error) {
+func (c *Client) Dial(_, _ string) (net.Conn, error) {
 	return nil, fmt.Errorf("%s: dial not implemented", c.String())
 }
 
@@ -119,8 +119,7 @@ func (c *Client) Proxy(ctx context.Context, req transport.Request, localAddr cha
 	f := NewForwarder(ctx, stream, w, r, watcher)
 	// rpc stream receiver
 	go func() {
-		err := f.CopyTargetToSRC()
-		if err != nil {
+		if err := f.CopyTargetToSRC(); err != nil {
 			forwardError <- fmt.Errorf("rpc: src <- server <- %s: %w", req.Host, err)
 			return
 		}
@@ -128,8 +127,7 @@ func (c *Client) Proxy(ctx context.Context, req transport.Request, localAddr cha
 	}()
 	// rpc sender
 	go func() {
-		err := f.CopySRCtoTarget()
-		if err != nil {
+		if err := f.CopySRCtoTarget(); err != nil {
 			forwardError <- fmt.Errorf("rpc: src -> server -> %s: %w", req.Host, err)
 			return
 		}

@@ -129,7 +129,7 @@ func (s *Server) handleRequest(req *Request, conn ConnWriter) error {
 }
 
 // handleConnect is used to handle a connect command
-func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Request) error {
+func (s *Server) handleConnect(_ context.Context, conn ConnWriter, req *Request) error {
 	// set target dst
 	var target string
 	if req.DestAddr.FQDN != "" {
@@ -176,7 +176,7 @@ func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Reques
 }
 
 // handleBind is used to handle a connect command
-func (s *Server) handleBind(ctx context.Context, conn ConnWriter, req *Request) error {
+func (s *Server) handleBind(_ context.Context, conn ConnWriter, _ *Request) error {
 	// TODO: Support bind
 	if err := sendReply(conn, commandNotSupported, nil); err != nil {
 		return fmt.Errorf("failed to send reply: %v", err)
@@ -185,7 +185,7 @@ func (s *Server) handleBind(ctx context.Context, conn ConnWriter, req *Request) 
 }
 
 // handleAssociate is used to handle a connect command
-func (s *Server) handleAssociate(ctx context.Context, conn ConnWriter, req *Request) error {
+func (s *Server) handleAssociate(_ context.Context, conn ConnWriter, _ *Request) error {
 	// TODO: Support associate
 	if err := sendReply(conn, commandNotSupported, nil); err != nil {
 		return fmt.Errorf("failed to send reply: %v", err)

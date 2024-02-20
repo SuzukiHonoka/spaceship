@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"io"
 	"net"
 )
@@ -22,17 +23,12 @@ func (h BlackHole) Close() error {
 	return nil
 }
 
-func (h BlackHole) Dial(network, addr string) (c net.Conn, err error) {
-	return nil, fmt.Errorf("%s: dial not implemented", h.String())
+func (h BlackHole) Dial(_, _ string) (c net.Conn, err error) {
+	return nil, fmt.Errorf("%s: %w", h, transport.ErrNotImplemented)
 }
 
-func (h BlackHole) Proxy(ctx context.Context, req transport.Request, localAddr chan<- string, dst io.Writer, src io.Reader) error {
+func (h BlackHole) Proxy(_ context.Context, _ transport.Request, localAddr chan<- string, _ io.Writer, src io.Reader) error {
 	localAddr <- "127.0.0.1:0"
-	buffer := make([]byte, transport.BufferSize)
-	for {
-		_, err := src.Read(buffer)
-		if err != nil {
-			return err
-		}
-	}
+	_, err := utils.CopyBuffer(io.Discard, src, nil)
+	return err
 }

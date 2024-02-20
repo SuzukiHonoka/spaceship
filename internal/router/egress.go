@@ -30,7 +30,7 @@ func (e Egress) GetTransport() (transport.Transport, error) {
 	case EgressBlackHole:
 		return blackhole.Transport, nil
 	case EgressBlock:
-		return nil, transport.ErrorBlocked
+		return nil, transport.ErrBlocked
 	}
 	return nil, fmt.Errorf("desired transport [%s] not implemented", e)
 }

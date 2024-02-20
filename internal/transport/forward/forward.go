@@ -33,10 +33,10 @@ func (f *Forward) Dial(network, addr string) (net.Conn, error) {
 	if f.dialer != nil {
 		return f.dialer.Dial(network, addr)
 	}
-	return nil, fmt.Errorf("%s: dialer not attached", f.String())
+	return nil, fmt.Errorf("%s: dialer not attached", f)
 }
 
-func (f *Forward) Proxy(ctx context.Context, req transport.Request, localAddr chan<- string, dst io.Writer, src io.Reader) error {
+func (f *Forward) Proxy(_ context.Context, _ transport.Request, localAddr chan<- string, _ io.Writer, _ io.Reader) error {
 	close(localAddr)
-	return fmt.Errorf("%s: proxy not implemented", f.String())
+	return fmt.Errorf("%s: %w", f, transport.ErrNotImplemented)
 }

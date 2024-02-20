@@ -59,7 +59,7 @@ func (f *Forwarder) handleProxy(method, rawParams string, reader *bytes.Reader, 
 		//v := strings.ToLower(line[s+1:])
 		//log.Printf("http.parsed: [%s]: [%s]", headerName, v)
 		if headerName == "proxy-connection" && strings.TrimSpace(strings.ToLower(line[s+1:])) == "keep-alive" {
-			err = transport.ErrorKeepAliveNeeded
+			err = transport.ErrKeepAliveNeeded
 			//log.Println("http: keep alive needed")
 		}
 		if !hopHeaders.Filter(headerName) {
@@ -156,7 +156,7 @@ func (f *Forwarder) forward(reuse chan<- struct{}) error {
 		if err = scanner.Err(); err != nil {
 			return fmt.Errorf("scann first line failed: %w", err)
 		}
-		return transport.ErrorBadRequest
+		return transport.ErrBadRequest
 	}
 	// match the raw parameter
 	// only in formal request methods and having http prefix in URL
@@ -179,7 +179,7 @@ func (f *Forwarder) forward(reuse chan<- struct{}) error {
 		err = f.handleTunnel(reader, scanner)
 	default:
 		if s := f.handleProxy(req.Method, req.Params, reader, scanner); s != nil {
-			if keepAlive = errors.Is(s, transport.ErrorKeepAliveNeeded); !keepAlive {
+			if keepAlive = errors.Is(s, transport.ErrKeepAliveNeeded); !keepAlive {
 				err = s
 			}
 		}

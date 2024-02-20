@@ -39,7 +39,7 @@ func (c *Forwarder) CopyTargetToClient() error {
 	_, ok := <-c.Ack
 	if !ok {
 		//log.Println("ack failed")
-		return transport.ErrorTargetACKFailed
+		return transport.ErrTargetACKFailed
 	}
 	// send local addr to client for nat
 	msgAccept := &proto.ProxyDST{
@@ -89,7 +89,7 @@ func (c *Forwarder) CopyClientToTarget() error {
 	}
 	// check user
 	if !Users.Match(req.Id) {
-		return fmt.Errorf("unauthticated uuid: %s -> %w", req.Id, transport.ErrorUserNotFound)
+		return fmt.Errorf("unauthticated uuid: %s -> %w", req.Id, transport.ErrUserNotFound)
 	}
 	//log.Printf("prepare for dialing: %s:%d", req.Host, req.Port)
 	route, err := router.GetRoute(req.Fqdn)

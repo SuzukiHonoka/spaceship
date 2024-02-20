@@ -79,7 +79,7 @@ func (c *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) error {
 		return io.EOF
 	case proxy.ProxyStatus_Error:
 		c.LocalAddr <- ""
-		return transport.ErrorServerFailed
+		return transport.ErrServerFailed
 	default:
 		return fmt.Errorf("unknown status: %d", buf.Status)
 	}

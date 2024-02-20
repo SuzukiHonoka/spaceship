@@ -41,7 +41,7 @@ func (a NoAuthAuthenticator) GetCode() uint8 {
 	return NoAuth
 }
 
-func (a NoAuthAuthenticator) Authenticate(reader io.Reader, writer io.Writer) (*AuthContext, error) {
+func (a NoAuthAuthenticator) Authenticate(_ io.Reader, writer io.Writer) (*AuthContext, error) {
 	_, err := writer.Write([]byte{socks5Version, NoAuth})
 	return &AuthContext{NoAuth, nil}, err
 }
