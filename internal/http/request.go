@@ -11,6 +11,8 @@ import (
 	"strings"
 )
 
+var ErrDelimiterNotFound = errors.New("delimiter not found")
+
 type Request struct {
 	Method string
 	Host   string
@@ -29,14 +31,14 @@ func ParseRawParamsFromUrl(scheme bool, url string) (string, error) {
 			}
 		}
 		if count != 3 {
-			return "", errors.New("delimiter not found")
+			return "", ErrDelimiterNotFound
 		}
 		return url[i-1:], nil
 	}
 	// without scheme -> host/params...
 	i := strings.IndexByte(url, '/')
 	if i == -1 {
-		return "", errors.New("delimiter not found")
+		return "", ErrDelimiterNotFound
 	}
 	return url[i:], nil
 }

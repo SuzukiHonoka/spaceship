@@ -145,6 +145,7 @@ func (s *Server) handleConnect(_ context.Context, conn ConnWriter, req *Request)
 		}
 		return nil
 	}
+	defer utils.ForceClose(route)
 	log.Printf("socks: %s -> %s", net.JoinHostPort(target, strconv.Itoa(int(req.DestAddr.Port))), route)
 	// start proxy
 	request := transport.NewRequest(target, req.DestAddr.Port)

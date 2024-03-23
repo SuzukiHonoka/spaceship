@@ -29,7 +29,7 @@ func NewServer(ctx context.Context, users *config.Users, ssl *config.SSL) (*grpc
 	// create server and register
 	var transportOption grpc.ServerOption
 	if ssl != nil {
-		credential, err := credentials.NewServerTLSFromFile(ssl.Cert, ssl.Key)
+		credential, err := credentials.NewServerTLSFromFile(ssl.PublicKey, ssl.PrivateKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to setup TLS: %w", err)
 		}
@@ -59,20 +59,25 @@ func (s *server) Proxy(stream proto.Proxy_ProxyServer) error {
 	defer utils.ForceClose(f)
 	// target <- client
 	go func() {
-		err := f.CopyClientToTarget()
-		proxyError <- fmt.Errorf("client -> target error: %w", err)
+		if err := f.CopyClientToTarget(); err != nil {
+			proxyError <- fmt.Errorf("client -> target error: %w", err)
+			return
+		}
+		close(proxyError)
 	}()
 	// target -> client
 	go func() {
-		err := f.CopyTargetToClient()
-		proxyError <- fmt.Errorf("client <- target error: %w", err)
+		if err := f.CopyTargetToClient(); err != nil {
+			proxyError <- fmt.Errorf("client <- target error: %w", err)
+			return
+		}
+		close(proxyError)
 	}()
-	if err := <-proxyError; err != nil {
+	if err, ok := <-proxyError; ok && err != nil {
 		utils.PrintErrorIfCritical(err, "rpc")
 	}
 	// send session end to client
-	_ = stream.Send(&proto.ProxyDST{
+	return stream.Send(&proto.ProxyDST{
 		Status: proto.ProxyStatus_EOF,
 	})
-	return nil
 }

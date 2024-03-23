@@ -9,9 +9,8 @@ import (
 
 type ConnQueue struct {
 	Params   *Params
-	Stream   chan *ConnWrapper
 	Size     int
-	Rear     *ConnNode
+	Conn     ConnWrappers
 	shutdown bool
 }
 
@@ -23,44 +22,25 @@ type ConnNode struct {
 func NewConnQueue(size int, params *Params) *ConnQueue {
 	queue := &ConnQueue{
 		Params: params,
-		Stream: make(chan *ConnWrapper),
-	}
-	for i := 0; i < size; i++ {
-		node := new(ConnNode)
-		queue.Insert(node)
+		Size:   size,
+		Conn:   make([]*ConnWrapper, 0, size),
 	}
 	return queue
 }
 
-func (q *ConnQueue) Wheel() {
-	for p := q.Rear; !q.shutdown; p = p.Next {
-		q.Stream <- p.Conn
-	}
-}
-
-func (q *ConnQueue) Insert(node *ConnNode) {
-	// queue empty
-	if q.Rear == nil {
-		node.Next = node
-		q.Rear = node
-	} else {
-		node.Next = q.Rear.Next
-		q.Rear.Next = node
-	}
-	q.Size++
+func (q *ConnQueue) Add(conn *ConnWrapper) {
+	q.Conn = append(q.Conn, conn)
 }
 
 func (q *ConnQueue) Init() error {
-	p := q.Rear
 	for i := 0; i < q.Size; i++ {
 		conn, err := q.Dial()
 		if err != nil {
 			return err
 		}
-		p.Conn = conn
-		p = p.Next
+		q.Add(conn)
 	}
-	go q.Wheel()
+	log.Println("ConnQueue initialized")
 	return nil
 }
 
@@ -72,12 +52,11 @@ func (q *ConnQueue) Dial() (*ConnWrapper, error) {
 // Destroy force disconnect all the connections
 func (q *ConnQueue) Destroy() {
 	q.shutdown = true
-	p := q.Rear
 	for i := 0; i < q.Size; i++ {
-		if p.Conn != nil {
-			utils.ForceClose(p.Conn)
+		conn := q.Conn[i]
+		if conn != nil && conn.ClientConn != nil {
+			utils.ForceClose(conn)
 		}
-		p = p.Next
 	}
 }
 
@@ -95,7 +74,7 @@ func (q *ConnQueue) GetConn() (*ConnWrapper, func() error, error) {
 	if q.Size == 0 {
 		return q.GetConnOutSide()
 	}
-	el := <-q.Stream
+	el := q.Conn.PickLRU()
 	el.Use()
 	// check if conn ok
 	switch el.GetState() {

@@ -1,6 +1,6 @@
 package server
 
 type SSL struct {
-	Cert string // certificate path
-	Key  string // certificate key path
+	PublicKey  string `json:"cert"` // certificate path
+	PrivateKey string `json:"key"`  // certificate key path
 }

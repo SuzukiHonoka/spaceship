@@ -7,7 +7,6 @@ import (
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc"
 	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
-	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -40,7 +39,7 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 		pool, err := x509.SystemCertPool()
 		if err != nil {
 			if len(cas) == 0 {
-				return fmt.Errorf("at least one addtional ca not found since the system cert pool can not be copied: %w", err)
+				return fmt.Errorf("addtional ca not found while system cert pool can not be copied: %w", err)
 			}
 			log.Println("copy system cert pool failed, creating new empty pool")
 			pool = x509.NewCertPool()
@@ -94,10 +93,7 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) Proxy(ctx context.Context, req transport.Request, localAddr chan<- string, w io.Writer, r io.Reader) error {
-	defer func() {
-		close(localAddr)
-		utils.ForceClose(c)
-	}()
+	defer close(localAddr)
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	// rcp client

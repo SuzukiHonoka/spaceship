@@ -2,6 +2,8 @@ package client
 
 import (
 	"google.golang.org/grpc"
+	"log"
+	"math"
 	"sync/atomic"
 )
 
@@ -20,3 +22,23 @@ func (w *ConnWrapper) Done() error {
 }
 
 type ConnWrappers []*ConnWrapper
+
+func (w ConnWrappers) PickLRU() *ConnWrapper {
+	lru := uint32(math.MaxUint32)
+	var conn *ConnWrapper
+	for i := 0; i < len(w); i++ {
+		if wrapper := w[i]; wrapper.InUse < lru {
+			lru = wrapper.InUse
+			conn = wrapper
+		}
+	}
+	return conn
+}
+
+func (w ConnWrappers) LogStatus() {
+	inuse := make([]uint32, len(w))
+	for i, wrapper := range w {
+		inuse[i] = wrapper.InUse
+	}
+	log.Printf("Inuse status: %v", inuse)
+}

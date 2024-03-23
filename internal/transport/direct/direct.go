@@ -45,7 +45,7 @@ func (d Direct) Proxy(_ context.Context, req transport.Request, localAddr chan<-
 		_, err := utils.CopyBuffer(dst, conn, nil)
 		proxyError <- err
 	}()
-	if err := <-proxyError; err != nil {
+	if err = <-proxyError; err != nil {
 		return fmt.Errorf("direct: %w", err)
 	}
 	return nil

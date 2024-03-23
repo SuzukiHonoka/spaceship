@@ -198,6 +198,7 @@ func (f *Forwarder) forward(reuse chan<- struct{}) error {
 		}
 		return nil
 	}
+	defer utils.ForceClose(route)
 	log.Printf("http: %s -> %s", net.JoinHostPort(req.Host, strconv.Itoa(int(req.Port))), route)
 	r, w := io.Pipe()
 	defer utils.ForceCloseAll(w, r)
@@ -209,16 +210,17 @@ func (f *Forwarder) forward(reuse chan<- struct{}) error {
 	}()
 	internalError := make(chan error)
 	go func() {
+		var err error
 		// buffer rewrite -> reconstructed tcp raw msg
 		if b := f.b.Bytes(); len(b) > 0 {
-			if _, err := w.Write(f.b.Bytes()); err != nil {
+			if _, err = w.Write(f.b.Bytes()); err != nil {
 				internalError <- fmt.Errorf("write buffer err: %w", err)
 				return
 			}
 		}
 		//log.Println("src -> target start")
 		// todo: use our own io copy function with custom buffer and error returning
-		if _, err := utils.CopyBuffer(w, f.Conn, nil); err != nil {
+		if _, err = utils.CopyBuffer(w, f.Conn, nil); err != nil {
 			internalError <- fmt.Errorf("%s: %w", "copy stream error", err)
 			return
 		}

@@ -99,8 +99,7 @@ func (c *Forwarder) CopyClientToTarget() error {
 	log.Printf("proxy accepted: %s -> %s", req.Fqdn, route)
 	target := net.JoinHostPort(req.Fqdn, strconv.Itoa(int(req.Port)))
 	// dial to target with 3 minutes timeout as default
-	c.Conn, err = route.Dial(transport.Network, target)
-	if err != nil {
+	if c.Conn, err = route.Dial(transport.Network, target); err != nil {
 		_ = c.Stream.Send(&proto.ProxyDST{
 			Status: proto.ProxyStatus_Error,
 		})
