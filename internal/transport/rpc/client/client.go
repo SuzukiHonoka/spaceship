@@ -14,7 +14,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"time"
 )
 
 const TransportName = "proxy"
@@ -92,58 +91,29 @@ func (c *Client) Close() error {
 	return c.DoneFunc()
 }
 
-func (c *Client) Proxy(ctx context.Context, req transport.Request, localAddr chan<- string, w io.Writer, r io.Reader) error {
+func (c *Client) Proxy(ctx context.Context, req *transport.Request, localAddr chan<- string, w io.Writer, r io.Reader) error {
 	defer close(localAddr)
+
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
 	// rcp client
 	stream, err := c.ProxyClient.Proxy(sessionCtx)
 	if err != nil {
 		return err
 	}
 	//log.Printf("sending proxy to rpc: %s", req.Host)
-	// get local addr first
-	if err = stream.Send(&proxy.ProxySRC{
-		Id:   uuid,
-		Fqdn: req.Host,
-		Port: uint32(req.Port),
-	}); err != nil {
-		return err
-	}
-	watcher := make(chan string)
 	forwardError := make(chan error)
-	f := NewForwarder(ctx, stream, w, r, watcher)
-	// rpc stream receiver
+
+	f := NewForwarder(ctx, stream, w, r)
 	go func() {
-		if err := f.CopyTargetToSRC(); err != nil {
-			forwardError <- fmt.Errorf("rpc: src <- server <- %s: %w", req.Host, err)
-			return
-		}
-		forwardError <- nil
+		forwardError <- f.Start(req, localAddr)
 	}()
-	// rpc sender
-	go func() {
-		if err := f.CopySRCtoTarget(); err != nil {
-			forwardError <- fmt.Errorf("rpc: src -> server -> %s: %w", req.Host, err)
-			return
-		}
-		forwardError <- nil
-	}()
-	t := time.NewTimer(rpc.GeneralTimeout)
-	select {
-	case <-t.C:
-		//timed out
-		return fmt.Errorf("rpc: server -> %s timed out: %w", req.Host, os.ErrDeadlineExceeded)
-	case localAddr <- <-watcher:
-		t.Stop()
-		// done
-		//log.Printf("rpc: server -> %s success", req.Host)
-	}
+
 	// block main
 	select {
 	case err = <-forwardError:
 		return err
-	case <-sessionCtx.Done():
 	case <-ctx.Done():
 	}
 	//log.Println("client done")

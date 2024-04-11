@@ -5,8 +5,8 @@ type Request struct {
 	Port uint16
 }
 
-func NewRequest(host string, port uint16) Request {
-	return Request{
+func NewRequest(host string, port uint16) *Request {
+	return &Request{
 		Host: host,
 		Port: port,
 	}

@@ -25,8 +25,9 @@ func (d Direct) Dial(network, addr string) (net.Conn, error) {
 }
 
 // Proxy the traffic locally
-func (d Direct) Proxy(_ context.Context, req transport.Request, localAddr chan<- string, dst io.Writer, src io.Reader) error {
+func (d Direct) Proxy(_ context.Context, req *transport.Request, localAddr chan<- string, dst io.Writer, src io.Reader) error {
 	defer close(localAddr)
+
 	target := net.JoinHostPort(req.Host, strconv.Itoa(int(req.Port)))
 	conn, err := net.DialTimeout(transport.Network, target, transport.DialTimeout)
 	if err != nil {
@@ -34,18 +35,26 @@ func (d Direct) Proxy(_ context.Context, req transport.Request, localAddr chan<-
 	}
 	defer utils.ForceClose(conn)
 	localAddr <- conn.LocalAddr().String()
-	proxyError := make(chan error)
+
+	proxyErrChan := make(chan error)
 	// src -> dst
 	go func() {
-		_, err := utils.CopyBuffer(conn, src, nil)
-		proxyError <- err
+		_, err1 := utils.CopyBuffer(conn, src, nil)
+		proxyErrChan <- err1
 	}()
+
 	// src <- dst
 	go func() {
-		_, err := utils.CopyBuffer(dst, conn, nil)
-		proxyError <- err
+		_, err2 := utils.CopyBuffer(dst, conn, nil)
+		proxyErrChan <- err2
 	}()
-	if err = <-proxyError; err != nil {
+
+	for i := 0; i < 2; i++ {
+		if proxyErr := <-proxyErrChan; proxyErr != nil {
+			err = proxyErr
+		}
+	}
+	if err != nil {
 		return fmt.Errorf("direct: %w", err)
 	}
 	return nil

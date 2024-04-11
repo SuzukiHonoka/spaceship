@@ -36,7 +36,7 @@ func (f *Forward) Dial(network, addr string) (net.Conn, error) {
 	return nil, fmt.Errorf("%s: dialer not attached", f)
 }
 
-func (f *Forward) Proxy(_ context.Context, _ transport.Request, localAddr chan<- string, _ io.Writer, _ io.Reader) error {
+func (f *Forward) Proxy(_ context.Context, _ *transport.Request, localAddr chan<- string, _ io.Writer, _ io.Reader) error {
 	close(localAddr)
 	return fmt.Errorf("%s: %w", f, transport.ErrNotImplemented)
 }

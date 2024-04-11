@@ -31,7 +31,7 @@ func NewServer(ctx context.Context, users *config.Users, ssl *config.SSL) (*grpc
 	if ssl != nil {
 		credential, err := credentials.NewServerTLSFromFile(ssl.PublicKey, ssl.PrivateKey)
 		if err != nil {
-			return nil, fmt.Errorf("failed to setup TLS: %w", err)
+			return nil, fmt.Errorf("setup tls failed, err=%w", err)
 		}
 		log.Println("using secure grpc [h2]")
 		transportOption = grpc.Creds(credential)
@@ -49,31 +49,13 @@ func NewServer(ctx context.Context, users *config.Users, ssl *config.SSL) (*grpc
 
 func (s *server) Proxy(stream proto.Proxy_ProxyServer) error {
 	//log.Println("rpc server incomes")
-	proxyError := make(chan error)
-	// block main until canceled
+	// cancel forwarder
 	ctx, cancel := context.WithCancel(s.Ctx)
 	defer cancel()
 	// Forwarder
 	f := NewForwarder(ctx, stream)
-	// close target connection
-	defer utils.ForceClose(f)
-	// target <- client
-	go func() {
-		if err := f.CopyClientToTarget(); err != nil {
-			proxyError <- fmt.Errorf("client -> target error: %w", err)
-			return
-		}
-		close(proxyError)
-	}()
-	// target -> client
-	go func() {
-		if err := f.CopyTargetToClient(); err != nil {
-			proxyError <- fmt.Errorf("client <- target error: %w", err)
-			return
-		}
-		close(proxyError)
-	}()
-	if err, ok := <-proxyError; ok && err != nil {
+
+	if err := f.Start(); err != nil {
 		utils.PrintErrorIfCritical(err, "rpc")
 	}
 	// send session end to client

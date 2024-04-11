@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc"
 	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
 	"io"
+	"os"
+	"time"
 )
 
 type Forwarder struct {
@@ -13,23 +16,23 @@ type Forwarder struct {
 	Stream    proxy.Proxy_ProxyClient
 	Writer    io.Writer
 	Reader    io.Reader
-	LocalAddr chan<- string
+	LocalAddr chan string
 }
 
-func NewForwarder(ctx context.Context, s proxy.Proxy_ProxyClient, w io.Writer, r io.Reader, ch chan<- string) *Forwarder {
+func NewForwarder(ctx context.Context, s proxy.Proxy_ProxyClient, w io.Writer, r io.Reader) *Forwarder {
 	return &Forwarder{
 		Ctx:       ctx,
 		Stream:    s,
 		Writer:    w,
 		Reader:    r,
-		LocalAddr: ch,
+		LocalAddr: make(chan string),
 	}
 }
 
-func (c *Forwarder) copySRCtoTarget(buf []byte) error {
+func (f *Forwarder) copySRCtoTarget(buf []byte) error {
 	//log.Println("rpc client reading...")
 	//read from src
-	n, err := c.Reader.Read(buf)
+	n, err := f.Reader.Read(buf)
 	if err != nil {
 		return err
 	}
@@ -38,29 +41,28 @@ func (c *Forwarder) copySRCtoTarget(buf []byte) error {
 	srcData := &proxy.ProxySRC{
 		Data: buf[:n],
 	}
-	err = c.Stream.Send(srcData)
-	return err
+	return f.Stream.Send(srcData)
 	//log.Println("rpc client msg forwarded")
 }
 
-func (c *Forwarder) CopyTargetToSRC() error {
-	var buf proxy.ProxyDST
+func (f *Forwarder) CopyTargetToSRC() error {
+	buf := new(proxy.ProxyDST)
 	for {
 		select {
-		case <-c.Ctx.Done():
+		case <-f.Ctx.Done():
 			return nil
 		default:
-			if err := c.copyTargetToSRC(&buf); err != nil {
+			if err := f.copyTargetToSRC(buf); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-func (c *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) error {
+func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) error {
 	//log.Println("rpc server reading..")
 	var err error
-	if buf, err = c.Stream.Recv(); err != nil {
+	if buf, err = f.Stream.Recv(); err != nil {
 		return err
 	}
 	//log.Printf("rpc client on receive: %d", res.Status)
@@ -68,17 +70,17 @@ func (c *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) error {
 	switch buf.Status {
 	case proxy.ProxyStatus_Session:
 		//log.Printf("target: %s", string(res.Data))
-		if _, err = c.Writer.Write(buf.Data); err != nil {
+		if _, err = f.Writer.Write(buf.Data); err != nil {
 			// log.Printf("error when sending client request to target stream: %v", err)
 			return err
 		}
 		//log.Println("rpc server msg forwarded")
 	case proxy.ProxyStatus_Accepted:
-		c.LocalAddr <- buf.Addr
+		f.LocalAddr <- buf.Addr
 	case proxy.ProxyStatus_EOF:
 		return io.EOF
 	case proxy.ProxyStatus_Error:
-		c.LocalAddr <- ""
+		close(f.LocalAddr)
 		return transport.ErrServerFailed
 	default:
 		return fmt.Errorf("unknown status: %d", buf.Status)
@@ -86,17 +88,73 @@ func (c *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) error {
 	return nil
 }
 
-func (c *Forwarder) CopySRCtoTarget() error {
+func (f *Forwarder) CopySRCtoTarget() error {
 	// buffer
 	buf := make([]byte, transport.BufferSize)
 	for {
 		select {
-		case <-c.Ctx.Done():
+		case <-f.Ctx.Done():
 			return nil
 		default:
-			if err := c.copySRCtoTarget(buf); err != nil {
+			if err := f.copySRCtoTarget(buf); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) error {
+	// handshake and get localAddr first
+	if err := f.Stream.Send(&proxy.ProxySRC{
+		Id:   uuid,
+		Fqdn: req.Host,
+		Port: uint32(req.Port),
+	}); err != nil {
+		return err
+	}
+
+	// buffered err ch
+	proxyErrChan := make(chan error, 2)
+
+	// rpc stream receiver
+	go func() {
+		err := f.CopyTargetToSRC()
+		if err != nil {
+			err = fmt.Errorf("rpc: src <- server <- %s: %w", req.Host, err)
+		}
+		proxyErrChan <- err
+	}()
+
+	// rpc sender
+	go func() {
+		err := f.CopySRCtoTarget()
+		if err != nil {
+			err = fmt.Errorf("rpc: src -> server -> %s: %w", req.Host, err)
+		}
+		proxyErrChan <- err
+	}()
+
+	// ack timeout
+	t := time.NewTimer(rpc.GeneralTimeout)
+	select {
+	case <-t.C:
+		//timed out
+		return fmt.Errorf("rpc: server -> %s timed out: %w", req.Host, os.ErrDeadlineExceeded)
+	case localAddr, ok := <-f.LocalAddr:
+		if ok {
+			localAddrChan <- localAddr
+			t.Stop()
+		}
+		// done
+		//log.Printf("rpc: server -> %s success", req.Host)
+	}
+
+	// wait 2 error
+	var err error
+	for i := 0; i < 2; i++ {
+		if proxyErr := <-proxyErrChan; proxyErr != nil {
+			err = proxyErr
+		}
+	}
+	return err
 }

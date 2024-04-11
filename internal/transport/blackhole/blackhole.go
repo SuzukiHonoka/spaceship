@@ -27,7 +27,7 @@ func (h BlackHole) Dial(_, _ string) (c net.Conn, err error) {
 	return nil, fmt.Errorf("%s: %w", h, transport.ErrNotImplemented)
 }
 
-func (h BlackHole) Proxy(_ context.Context, _ transport.Request, localAddr chan<- string, _ io.Writer, src io.Reader) error {
+func (h BlackHole) Proxy(_ context.Context, _ *transport.Request, localAddr chan<- string, _ io.Writer, src io.Reader) error {
 	localAddr <- "127.0.0.1:0"
 	_, err := utils.CopyBuffer(io.Discard, src, nil)
 	return err
