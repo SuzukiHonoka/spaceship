@@ -77,7 +77,9 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 				if !ok {
 					return errors.New("basic auth format error")
 				}
-				cfg.Credentials[user] = password
+				cfg.Credentials = map[string]string{
+					user: password,
+				}
 			}
 			s := socks.New(ctx, cfg)
 			defer utils.ForceClose(s)
