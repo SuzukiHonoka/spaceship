@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/http"
 	"github.com/SuzukiHonoka/spaceship/internal/socks"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"log"
 	"net"
+	"strings"
 )
 
 type Launcher struct {
@@ -69,7 +71,15 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 		sigError := make(chan error)
 		// socks
 		if c.ListenSocks != "" {
-			s := socks.New(ctx, &socks.Config{})
+			cfg := new(socks.Config)
+			if c.BasicAuth != "" {
+				user, password, ok := strings.Cut(c.BasicAuth, ":")
+				if !ok {
+					return errors.New("basic auth format error")
+				}
+				cfg.Credentials[user] = password
+			}
+			s := socks.New(ctx, cfg)
 			defer utils.ForceClose(s)
 			go func() {
 				if err := s.ListenAndServe("tcp", c.ListenSocks); err != nil && !signalArrived {

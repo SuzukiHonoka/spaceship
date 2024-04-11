@@ -121,7 +121,7 @@ func (s *Server) authenticate(conn io.Writer, bufConn io.Reader) (*AuthContext, 
 	// check client whether supported user-password auth
 	for _, method := range methods {
 		if method == UserPassAuth {
-			return UserPassAuthenticator{}.Authenticate(bufConn, conn)
+			return UserPassAuthenticator{s.Config.Credentials}.Authenticate(bufConn, conn)
 		}
 	}
 	// no usable method found
