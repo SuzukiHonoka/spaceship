@@ -21,9 +21,9 @@ func PrintErrorIfCritical(err error, msg string) {
 		return
 	default:
 		// grpc errors
-		if s, ok := status.FromError(errors.Unwrap(err)); ok {
+		if s, ok := status.FromError(err); ok {
 			switch s.Code() {
-			case codes.Unavailable, codes.Canceled:
+			case codes.Internal, codes.Canceled:
 				return
 			}
 		}
