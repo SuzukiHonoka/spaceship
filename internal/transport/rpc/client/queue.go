@@ -54,7 +54,7 @@ func (q *ConnQueue) Destroy() {
 	q.shutdown = true
 	for i := 0; i < q.Size; i++ {
 		conn := q.Conn[i]
-		if conn != nil && conn.ClientConn != nil {
+		if conn != nil {
 			utils.ForceClose(conn)
 		}
 	}

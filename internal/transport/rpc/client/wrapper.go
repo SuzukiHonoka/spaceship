@@ -21,6 +21,13 @@ func (w *ConnWrapper) Done() error {
 	return nil
 }
 
+func (w *ConnWrapper) Close() error {
+	if w.ClientConn != nil {
+		return w.ClientConn.Close()
+	}
+	return nil
+}
+
 type ConnWrappers []*ConnWrapper
 
 func (w ConnWrappers) PickLRU() *ConnWrapper {
