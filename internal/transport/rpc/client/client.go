@@ -43,6 +43,7 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 			log.Println("copy system cert pool failed, creating new empty pool")
 			pool = x509.NewCertPool()
 		}
+
 		// load custom cas if exist
 		for _, path := range cas {
 			var cert []byte
@@ -113,9 +114,8 @@ func (c *Client) Proxy(ctx context.Context, req *transport.Request, localAddr ch
 	// block main
 	select {
 	case err = <-forwardError:
-		return err
 	case <-ctx.Done():
 	}
 	//log.Println("client done")
-	return nil
+	return err
 }

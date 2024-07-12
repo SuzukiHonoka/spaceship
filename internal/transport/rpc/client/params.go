@@ -13,13 +13,3 @@ func NewParams(addr string, opts ...grpc.DialOption) *Params {
 		Opts: opts,
 	}
 }
-
-func (p *Params) Dial() (*ConnWrapper, error) {
-	conn, err := grpc.Dial(p.Addr, p.Opts...)
-	if err != nil {
-		return nil, err
-	}
-	return &ConnWrapper{
-		ClientConn: conn,
-	}, nil
-}

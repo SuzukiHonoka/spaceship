@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/router"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
@@ -29,6 +28,8 @@ type Forwarder struct {
 }
 
 func (f *Forwarder) handleProxy(method, rawParams string, reader *bytes.Reader, scanner *bufio.Scanner) (err error) {
+	// construct HTTP message
+	// head eg:  GET / HTTP/1.1
 	var sb strings.Builder
 	for _, seg := range []string{method, rawParams} {
 		sb.WriteString(seg)
@@ -37,8 +38,10 @@ func (f *Forwarder) handleProxy(method, rawParams string, reader *bytes.Reader, 
 	sb.WriteString("HTTP/1.1")
 	sb.WriteString(CRLF)
 	head := sb.String()
+
 	//log.Printf("head: %s", head)
 	_, _ = f.b.WriteString(head)
+
 	// filter headers
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -54,14 +57,16 @@ func (f *Forwarder) handleProxy(method, rawParams string, reader *bytes.Reader, 
 			break
 		}
 		//log.Println(line)
-		s := strings.Index(line, ":")
-		headerName := strings.ToLower(line[:s])
+
+		// filter headers
+		k, _, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		headerName := strings.ToLower(k)
 		//v := strings.ToLower(line[s+1:])
 		//log.Printf("http.parsed: [%s]: [%s]", headerName, v)
-		if headerName == "proxy-connection" && strings.TrimSpace(strings.ToLower(line[s+1:])) == "keep-alive" {
-			err = transport.ErrKeepAliveNeeded
-			//log.Println("http: keep alive needed")
-		}
+
 		if !hopHeaders.Filter(headerName) {
 			sb = strings.Builder{}
 			sb.WriteString(line)
@@ -87,70 +92,40 @@ func (f *Forwarder) handleTunnel(reader *bytes.Reader, scanner *bufio.Scanner) (
 }
 
 func (f *Forwarder) Forward() error {
-	proxyError := make(chan error)
-	// MAX_REUSE_COUNT = 32
-	for i := 0; i < 32; i++ {
-		observer := make(chan struct{})
-		go func() {
-			proxyError <- f.forward(observer)
-		}()
-		t := time.NewTimer(sessionTimeout)
-		select {
-		case <-t.C:
-			return os.ErrDeadlineExceeded
-		case err := <-proxyError:
-			t.Stop()
-			// normal end if nil
-			if err != nil {
-				// internal error: connection down, etc.
-				//if err != io.EOF || errors.Is(err, net.ErrClosed) {
-				//	log.Printf("http: end due error: %v", err)
-				//}
-				return err
-			}
-			// wait for signal of observer
-			t.Reset(sessionTimeout)
-			select {
-			case <-t.C:
-				//log.Println("http: rpc timed out")
-				return os.ErrDeadlineExceeded
-			case _, ok := <-observer:
-				t.Stop()
-				if !ok {
-					//log.Println("http: not reuse")
-					return nil
-				}
-				log.Println("http: reuse")
-				// session end but connection still present
-				continue
-				//case _, ok := <-observer:
-				//	if !ok {
-				//		//log.Println("http: not reuse")
-				//		break
-				//	}
-				//	log.Println("http: reuse")
-				//	// session end but connection still present
-				//	continue
-			}
+	proxyErr := make(chan error)
+	go func() {
+		proxyErr <- f.forward()
+	}()
+
+	t := time.NewTimer(sessionTimeout)
+	select {
+	case <-t.C:
+		return os.ErrDeadlineExceeded
+	case err := <-proxyErr:
+		t.Stop()
+		if err != nil {
+			return fmt.Errorf("http: forward error=%w", err)
 		}
 	}
 	return nil
 }
 
-func (f *Forwarder) forward(reuse chan<- struct{}) error {
-	defer close(reuse)
+func (f *Forwarder) forward() error {
 	// 4k buffer, capable of storing up to 2048 words which enough for http headers
 	// used for store raw socket messages to identify the remote host and filter sensitive-http-headers
 	tmp := make([]byte, snifferSize)
+
 	// actual reads to the buffer
 	n, err := f.Conn.Read(tmp)
 	if err != nil {
 		return err
 	}
+
 	// read first line to check if the format is legal and switch transport filter manners
 	// note that HTTP CONNECT is direct tunnel
 	reader := bytes.NewReader(tmp[:n])
 	scanner := bufio.NewScanner(reader)
+
 	// scan the first line, if we reached the end or any error occurred
 	if ok := scanner.Scan(); !ok {
 		if err = scanner.Err(); err != nil {
@@ -158,36 +133,35 @@ func (f *Forwarder) forward(reuse chan<- struct{}) error {
 		}
 		return transport.ErrBadRequest
 	}
+
 	// match the raw parameter
 	// only in formal request methods and having http prefix in URL
 	first := scanner.Text()
 	req, err := ParseRequestFromRaw(first)
-	// parse error
 	if err != nil {
 		return fmt.Errorf("parse request failed: %w", err)
 	}
-	// unpack ipv6 if necessary
+
+	// unpack ipv6 when necessary
 	req.UnpackIPv6()
+
 	// buffer for stored raw messages
 	// len:0 max-cap:4k
 	f.b = bytes.NewBuffer(make([]byte, 0, snifferSize))
-	// keepalive
-	var keepAlive bool
+
 	// check request method
 	switch req.Method {
 	case http.MethodConnect:
 		err = f.handleTunnel(reader, scanner)
 	default:
-		if s := f.handleProxy(req.Method, req.Params, reader, scanner); s != nil {
-			if keepAlive = errors.Is(s, transport.ErrKeepAliveNeeded); !keepAlive {
-				err = s
-			}
-		}
+		err = f.handleProxy(req.Method, req.Params, reader, scanner)
 	}
+
 	// handle error
 	if err != nil {
 		return fmt.Errorf("handle request failed: %w", err)
 	}
+
 	//forward process
 	localAddr := make(chan string)
 	route, err := router.GetRoute(req.Host)
@@ -198,65 +172,68 @@ func (f *Forwarder) forward(reuse chan<- struct{}) error {
 		}
 		return nil
 	}
-	defer utils.ForceClose(route)
+
+	// route found
+	defer utils.Close(route)
 	log.Printf("http: %s -> %s", net.JoinHostPort(req.Host, strconv.Itoa(int(req.Port))), route)
+
+	// pipe for sniffer write-back
 	r, w := io.Pipe()
-	defer utils.ForceCloseAll(w, r)
+	defer utils.CloseAll(w, r)
+
 	// channel for receive err and wait for
 	request := transport.NewRequest(req.Host, req.Port)
-	proxyError := make(chan error)
+	proxyErr := make(chan error)
+
+	// actual proxy
 	go func() {
-		proxyError <- route.Proxy(context.Background(), request, localAddr, f.Conn, r)
+		proxyErr <- route.Proxy(context.Background(), request, localAddr, f.Conn, r)
 	}()
-	internalError := make(chan error)
+
+	// internal process
+	internalErr := make(chan error)
 	go func() {
-		var err error
 		// buffer rewrite -> reconstructed tcp raw msg
 		if b := f.b.Bytes(); len(b) > 0 {
-			if _, err = w.Write(f.b.Bytes()); err != nil {
-				internalError <- fmt.Errorf("write buffer err: %w", err)
+			if _, err := w.Write(b); err != nil {
+				internalErr <- fmt.Errorf("write buffer err: %w", err)
 				return
 			}
 		}
+
 		//log.Println("src -> target start")
 		// todo: use our own io copy function with custom buffer and error returning
-		if _, err = utils.CopyBuffer(w, f.Conn, nil); err != nil {
-			internalError <- fmt.Errorf("%s: %w", "copy stream error", err)
-			return
+		if _, err = io.CopyBuffer(w, f.Conn, make([]byte, transport.BufferSize)); err != nil {
+			internalErr <- fmt.Errorf("%s: %w", "copy stream error", err)
 		}
-		// client close
-		close(internalError)
 		//log.Println("src -> target done")
+		close(internalErr)
 	}()
+
 	//log.Println("wait for local addr")
 	//ld := <-localAddr
 	//log.Printf("local addr: %s", ld)
 	var b bytes.Buffer
 	if addr, ok := <-localAddr; !ok || addr == "" {
 		b.Write(MessageServiceUnavailable)
-	} else if req.Method == "CONNECT" {
+	} else if req.Method == http.MethodConnect {
 		b.Write(MessageConnectionEstablished)
 	}
 	// message end
 	b.WriteString(CRLF)
+
 	if _, err = f.Conn.Write(b.Bytes()); err != nil {
 		return fmt.Errorf("send http status error: %w", err)
 	}
+
 	select {
-	case err = <-proxyError:
+	case err = <-proxyErr:
 		// notify proxy session is ended
 		// todo: rpc only check server and client stream copy error
-		if err != nil {
-			return err
-		}
-	case err, ok := <-internalError:
-		if ok && err != nil {
-			return err
+	case err1, ok := <-internalErr:
+		if ok {
+			err = err1
 		}
 	}
-	if keepAlive {
-		log.Println("http: keep alive")
-		reuse <- struct{}{}
-	}
-	return nil
+	return err
 }

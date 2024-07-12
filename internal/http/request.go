@@ -23,17 +23,16 @@ type Request struct {
 func ParseRawParamsFromUrl(scheme bool, url string) (string, error) {
 	if scheme {
 		// with scheme -> http://host/params...
-		count, i := 0, 0
-		for ; count < 3 && i < len(url); i++ {
+		for i, j := 0, 0; i < len(url); i++ {
 			// ascii code of "/" is 47
 			if url[i] == 47 {
-				count++
+				j++
+			}
+			if j == 3 {
+				return url[i:], nil
 			}
 		}
-		if count != 3 {
-			return "", ErrDelimiterNotFound
-		}
-		return url[i-1:], nil
+		return "", ErrDelimiterNotFound
 	}
 	// without scheme -> host/params...
 	i := strings.IndexByte(url, '/')
@@ -83,7 +82,9 @@ func ParseRequestFromRaw(raw string) (*Request, error) {
 		if r.Host, r.Port, err = utils.SplitHostPort(targetUrl.Host); err != nil {
 			// other error
 			var addrErr *net.AddrError
-			errors.As(err, &addrErr)
+			if !errors.As(err, &addrErr) {
+				return nil, err
+			}
 			if addrErr.Err != "missing port in address" {
 				return nil, err
 			}

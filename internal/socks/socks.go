@@ -77,7 +77,7 @@ func (s *Server) Serve() error {
 
 // ServeConn is used to serve a single connection.
 func (s *Server) ServeConn(conn net.Conn) error {
-	defer utils.ForceClose(conn)
+	defer utils.Close(conn)
 	bufConn := bufio.NewReader(conn)
 	// Read the version byte
 	version := []byte{0}

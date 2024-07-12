@@ -55,11 +55,10 @@ func (s *Server) Serve() error {
 }
 
 func (s *Server) ServeConn(conn net.Conn) error {
-	defer utils.ForceClose(conn)
+	defer utils.Close(conn)
 	f := &Forwarder{
 		Ctx:  s.Ctx,
 		Conn: conn,
 	}
-	defer utils.ForceClose(conn)
 	return f.Forward()
 }

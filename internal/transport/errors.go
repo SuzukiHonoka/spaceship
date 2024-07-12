@@ -9,7 +9,6 @@ var (
 	ErrTargetACKFailed = errors.New("target ack failed")
 	ErrServerFailed    = errors.New("server error")
 	ErrBadRequest      = errors.New("bad request")
-	ErrKeepAliveNeeded = errors.New("keep alive needed")
 	ErrBlocked         = errors.New("blocked")
 	ErrNotImplemented  = errors.New("not implemented")
 )

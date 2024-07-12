@@ -12,6 +12,17 @@ type ConnWrapper struct {
 	InUse uint32
 }
 
+func NewConnWrapper(p *Params) (*ConnWrapper, error) {
+	conn, err := grpc.NewClient(p.Addr, p.Opts...)
+	if err != nil {
+		return nil, err
+	}
+	wrapper := &ConnWrapper{
+		ClientConn: conn,
+	}
+	return wrapper, nil
+}
+
 func (w *ConnWrapper) Use() {
 	atomic.AddUint32(&w.InUse, 1)
 }

@@ -105,16 +105,17 @@ func (f *Forwarder) CopySRCtoTarget() error {
 
 func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) error {
 	// handshake and get localAddr first
-	if err := f.Stream.Send(&proxy.ProxySRC{
+	handshake := &proxy.ProxySRC{
 		Id:   uuid,
 		Fqdn: req.Host,
 		Port: uint32(req.Port),
-	}); err != nil {
+	}
+	if err := f.Stream.Send(handshake); err != nil {
 		return err
 	}
 
 	// buffered err ch
-	proxyErrChan := make(chan error, 2)
+	proxyErr := make(chan error, 2)
 
 	// rpc stream receiver
 	go func() {
@@ -122,7 +123,7 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 		if err != nil {
 			err = fmt.Errorf("rpc: src <- server <- %s: %w", req.Host, err)
 		}
-		proxyErrChan <- err
+		proxyErr <- err
 	}()
 
 	// rpc sender
@@ -131,7 +132,7 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 		if err != nil {
 			err = fmt.Errorf("rpc: src -> server -> %s: %w", req.Host, err)
 		}
-		proxyErrChan <- err
+		proxyErr <- err
 	}()
 
 	// ack timeout
@@ -149,12 +150,10 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 		//log.Printf("rpc: server -> %s success", req.Host)
 	}
 
-	// wait 2 error
 	var err error
 	for i := 0; i < 2; i++ {
-		if proxyErr := <-proxyErrChan; proxyErr != nil {
-			err = proxyErr
-		}
+		err = <-proxyErr
 	}
+
 	return err
 }

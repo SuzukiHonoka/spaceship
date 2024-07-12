@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const GeneralTimeout = 3 * time.Second
+const GeneralTimeout = 5 * time.Second
 
 var DialOptions = []grpc.DialOption{
 	grpc.WithKeepaliveParams(keepalive.ClientParameters{
@@ -29,6 +29,7 @@ var DialOptions = []grpc.DialOption{
 	}),
 	grpc.WithWriteBufferSize(0),
 	grpc.WithReadBufferSize(0),
+	grpc.WithIdleTimeout(30 * time.Minute),
 	grpc.WithUserAgent("spaceship/" + manifest.VersionCode),
 }
 

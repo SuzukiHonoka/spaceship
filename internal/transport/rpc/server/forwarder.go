@@ -42,6 +42,7 @@ func (f *Forwarder) CopyTargetToClient() error {
 		//log.Println("ack failed")
 		return transport.ErrTargetACKFailed
 	}
+
 	// send local addr to client for nat
 	msgAccept := &proto.ProxyDST{
 		Status: proto.ProxyStatus_Accepted,
@@ -50,6 +51,7 @@ func (f *Forwarder) CopyTargetToClient() error {
 	if err := f.Stream.Send(msgAccept); err != nil {
 		return err
 	}
+
 	// buffer
 	buf := make([]byte, transport.BufferSize)
 	//log.Println("reading from target connection started")
@@ -72,11 +74,13 @@ func (f *Forwarder) copyTargetToClient(buf []byte) error {
 	if err != nil {
 		return err
 	}
+
 	//log.Println("rpc server -> client")
 	dstData := &proto.ProxyDST{
 		Status: proto.ProxyStatus_Session,
 		Data:   buf[:n],
 	}
+
 	//err = c.Stream.Send(dstData)
 	//dstData = nil
 	return f.Stream.Send(dstData)
@@ -89,16 +93,19 @@ func (f *Forwarder) CopyClientToTarget() error {
 	if err != nil {
 		return err
 	}
+
 	// check user
 	if !Users.Match(req.Id) {
 		return fmt.Errorf("%w: uuid=%s", transport.ErrUserNotFound, req.Id)
 	}
+
 	//log.Printf("prepare for dialing: %s:%d", req.Host, req.Port)
 	route, err := router.GetRoute(req.Fqdn)
 	if err != nil {
 		return fmt.Errorf("get route for [%s] error: %w", req.Fqdn, err)
 	}
 	log.Printf("proxy accepted: %s -> %s", req.Fqdn, route)
+
 	target := net.JoinHostPort(req.Fqdn, strconv.Itoa(int(req.Port)))
 	// dial to target with 3 minutes timeout as default
 	if f.Conn, err = route.Dial(transport.Network, target); err != nil {
@@ -107,8 +114,10 @@ func (f *Forwarder) CopyClientToTarget() error {
 		})
 		return fmt.Errorf("dial target error: %w", err)
 	}
+
 	// trigger read
 	f.Ack <- struct{}{}
+
 	// loop read client and forward
 	buf := new(proto.ProxySRC)
 	for {
@@ -129,11 +138,13 @@ func (f *Forwarder) copyClientToTarget(buf *proto.ProxySRC) error {
 	if buf, err = f.Stream.Recv(); err != nil {
 		return err
 	}
+
 	// return EOF if client closed or invalid message being received
 	if buf.Data == nil {
 		return io.EOF
 	}
 	//log.Printf("RX: %s", string(data))
+
 	// write to remote
 	_, err = f.Conn.Write(buf.Data)
 	return err
@@ -141,10 +152,10 @@ func (f *Forwarder) copyClientToTarget(buf *proto.ProxySRC) error {
 
 func (f *Forwarder) Start() error {
 	// always close conn
-	defer utils.ForceClose(f)
+	defer utils.Close(f)
 
 	// buffered err ch
-	proxyErrChan := make(chan error, 2)
+	proxyErr := make(chan error, 2)
 
 	// target <- client
 	go func() {
@@ -152,7 +163,7 @@ func (f *Forwarder) Start() error {
 		if err != nil {
 			err = fmt.Errorf("stream copy failed: client -> target, err=%w", err)
 		}
-		proxyErrChan <- err
+		proxyErr <- err
 	}()
 
 	// target -> client
@@ -161,15 +172,13 @@ func (f *Forwarder) Start() error {
 		if err != nil {
 			err = fmt.Errorf("stream copy failed: client <- target, err=%w", err)
 		}
-		proxyErrChan <- err
+		proxyErr <- err
 	}()
 
-	// wait 2 error
 	var err error
 	for i := 0; i < 2; i++ {
-		if proxyErr := <-proxyErrChan; proxyErr != nil {
-			err = proxyErr
-		}
+		err = <-proxyErr
 	}
-	return err
+
+	return fmt.Errorf("server: %w", err)
 }

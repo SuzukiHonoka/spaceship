@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
-	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"io"
 	"net"
 )
@@ -29,6 +28,6 @@ func (h BlackHole) Dial(_, _ string) (c net.Conn, err error) {
 
 func (h BlackHole) Proxy(_ context.Context, _ *transport.Request, localAddr chan<- string, _ io.Writer, src io.Reader) error {
 	localAddr <- "127.0.0.1:0"
-	_, err := utils.CopyBuffer(io.Discard, src, nil)
+	_, err := io.Copy(io.Discard, src)
 	return err
 }

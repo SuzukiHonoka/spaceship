@@ -14,7 +14,7 @@ var (
 		Destination: EgressDirect,
 		MatchType:   TypeDefault,
 	}
-	RouteDefault = &Route{
+	RouteClientDefault = &Route{
 		Destination: EgressProxy,
 		MatchType:   TypeDefault,
 	}
@@ -50,7 +50,7 @@ func (r *Route) GenerateCache() error {
 		for b.Scan() {
 			r.Sources = append(r.Sources, b.Text())
 		}
-		utils.ForceClose(f)
+		utils.Close(f)
 	}
 	switch r.MatchType {
 	case TypeDefault:

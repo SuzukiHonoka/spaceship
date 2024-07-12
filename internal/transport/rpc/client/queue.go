@@ -46,7 +46,7 @@ func (q *ConnQueue) Init() error {
 
 // Dial dials new grpc connection with saved params
 func (q *ConnQueue) Dial() (*ConnWrapper, error) {
-	return q.Params.Dial()
+	return NewConnWrapper(q.Params)
 }
 
 // Destroy force disconnect all the connections
@@ -55,7 +55,7 @@ func (q *ConnQueue) Destroy() {
 	for i := 0; i < q.Size; i++ {
 		conn := q.Conn[i]
 		if conn != nil {
-			utils.ForceClose(conn)
+			utils.Close(conn)
 		}
 	}
 }

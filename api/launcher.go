@@ -47,7 +47,7 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 		if err != nil {
 			return fmt.Errorf("listen at %s error %w", c.Listen, err)
 		}
-		defer utils.ForceClose(listener)
+		defer utils.Close(listener)
 		log.Printf("rpc started at %s", c.Listen)
 		if err = s.Serve(listener); err != nil {
 			return err
@@ -82,7 +82,7 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 				}
 			}
 			s := socks.New(ctx, cfg)
-			defer utils.ForceClose(s)
+			defer utils.Close(s)
 			go func() {
 				if err := s.ListenAndServe("tcp", c.ListenSocks); err != nil && !signalArrived {
 					sigError <- fmt.Errorf("serve socks failed: %w", err)
@@ -92,7 +92,7 @@ func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
 		// http
 		if c.ListenHttp != "" {
 			h := http.New(ctx)
-			defer utils.ForceClose(h)
+			defer utils.Close(h)
 			go func() {
 				if err := h.ListenAndServe("tcp", c.ListenHttp); err != nil && !signalArrived {
 					sigError <- fmt.Errorf("serve http failed: %w", err)

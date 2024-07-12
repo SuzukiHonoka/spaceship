@@ -1,7 +1,8 @@
 syntax = "proto3";
 
 package proxy;
-option go_package = ".;proxy";
+
+option go_package = "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto;proxy";
 
 service Proxy{
   rpc DnsResolve(stream DnsRequest) returns (stream DnsResponse) {};

@@ -1,29 +1,20 @@
 package utils
 
 import (
-	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	"io"
+	"log"
 )
 
-// CopyBuffer is the actual implementation of Copy and CopyBuffer.
-// if buf is nil, one is allocated.
-// Note that this is a copy function of io from the built-in,
-// the only changes is let preset buffer size respect the transport settings.
-func CopyBuffer(dst io.Writer, src io.Reader, buf []byte) (written int64, err error) {
-	if buf == nil {
-		buf = make([]byte, transport.BufferSize)
+// Close closes the closer
+func Close(closer io.Closer) {
+	if err := closer.Close(); err != nil {
+		log.Printf("closer: %v close failed, err=%s", closer, err)
 	}
-	return io.CopyBuffer(dst, src, buf)
 }
 
-// ForceClose forces close the closer
-func ForceClose(closer io.Closer) {
-	_ = closer.Close()
-}
-
-// ForceCloseAll force close all closers
-func ForceCloseAll(closers ...io.Closer) {
+// CloseAll close all closers
+func CloseAll(closers ...io.Closer) {
 	for _, closer := range closers {
-		ForceClose(closer)
+		Close(closer)
 	}
 }
