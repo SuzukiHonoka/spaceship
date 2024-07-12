@@ -180,5 +180,5 @@ func (f *Forwarder) Start() error {
 		err = <-proxyErr
 	}
 
-	return fmt.Errorf("server: %w", err)
+	return err
 }
