@@ -98,14 +98,14 @@ func (c *Client) Proxy(ctx context.Context, req *transport.Request, localAddr ch
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// rcp client
+	// rcp client stream
 	stream, err := c.ProxyClient.Proxy(sessionCtx)
 	if err != nil {
 		return err
 	}
+
 	//log.Printf("sending proxy to rpc: %s", req.Host)
 	forwardError := make(chan error)
-
 	f := NewForwarder(ctx, stream, w, r)
 	go func() {
 		forwardError <- f.Start(req, localAddr)

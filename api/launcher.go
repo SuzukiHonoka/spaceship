@@ -12,114 +12,126 @@ import (
 	"github.com/SuzukiHonoka/spaceship/pkg/config"
 	"github.com/google/uuid"
 	"log"
-	"net"
 	"strings"
 )
 
 type Launcher struct {
-	sigStop chan interface{}
+	sigStop chan struct{}
 }
 
 func NewLauncher() *Launcher {
 	return &Launcher{
-		sigStop: make(chan interface{}),
+		sigStop: make(chan struct{}),
 	}
 }
 
-func (l *Launcher) LaunchWithError(c *config.MixedConfig) error {
-	if err := c.Apply(); err != nil {
+func (l *Launcher) launchServer(ctx context.Context, cfg *config.MixedConfig) error {
+	log.Println("server starting")
+
+	// create server
+	s, err := server.NewServer(ctx, cfg.Users, cfg.SSL)
+	if err != nil {
+		return fmt.Errorf("create server failed: %w", err)
+	}
+	return s.ListenAndServe(cfg.Listen)
+}
+
+func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) error {
+	log.Println("client starting")
+
+	// check uuid format
+	if _, err := uuid.Parse(cfg.UUID); err != nil {
 		return err
 	}
-	// main context
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	// switch role
-	switch c.Role {
-	case config.RoleServer:
-		// server start
-		log.Println("server starting")
-		s, err := server.NewServer(ctx, c.Users, c.SSL)
-		if err != nil {
-			return fmt.Errorf("create server failed: %w", err)
-		}
-		// listen ingress and serve
-		listener, err := net.Listen("tcp", c.Listen)
-		if err != nil {
-			return fmt.Errorf("listen at %s error %w", c.Listen, err)
-		}
-		defer utils.Close(listener)
-		log.Printf("rpc started at %s", c.Listen)
-		if err = s.Serve(listener); err != nil {
-			return err
+
+	// destroy any left connections
+	defer client.Destroy()
+
+	// initialize pool
+	if err := client.Init(cfg.ServerAddr, cfg.Host, cfg.EnableTLS, cfg.Mux, cfg.CAs); err != nil {
+		return fmt.Errorf("init client failed: %w", err)
+	}
+
+	// interrupt flag
+	var signalArrived bool
+
+	// error channel for http/socks server
+	errChan := make(chan error)
+
+	// create socks server
+	if cfg.ListenSocks != "" {
+		socksCfg := new(socks.Config)
+
+		// setup auth if set
+		if cfg.BasicAuth != "" {
+			user, password, ok := strings.Cut(cfg.BasicAuth, ":")
+			if !ok {
+				return errors.New("basic auth format error")
+			}
+			socksCfg.Credentials = map[string]string{
+				user: password,
+			}
 		}
 
-	case config.RoleClient:
-		// check uuid format
-		if _, err := uuid.Parse(c.UUID); err != nil {
-			return err
-		}
-		// client start
-		log.Println("client starting")
-		// destroy any left connections
-		defer client.Destroy()
-		// initialize pool
-		if err := client.Init(c.ServerAddr, c.Host, c.EnableTLS, c.Mux, c.CAs); err != nil {
-			return fmt.Errorf("init client failed: %w", err)
-		}
-		// flag
-		var signalArrived bool
-		sigError := make(chan error)
-		// socks
-		if c.ListenSocks != "" {
-			cfg := new(socks.Config)
-			if c.BasicAuth != "" {
-				user, password, ok := strings.Cut(c.BasicAuth, ":")
-				if !ok {
-					return errors.New("basic auth format error")
-				}
-				cfg.Credentials = map[string]string{
-					user: password,
-				}
-			}
-			s := socks.New(ctx, cfg)
-			defer utils.Close(s)
-			go func() {
-				if err := s.ListenAndServe("tcp", c.ListenSocks); err != nil && !signalArrived {
-					sigError <- fmt.Errorf("serve socks failed: %w", err)
-				}
-			}()
-		}
-		// http
-		if c.ListenHttp != "" {
-			h := http.New(ctx)
-			defer utils.Close(h)
-			go func() {
-				if err := h.ListenAndServe("tcp", c.ListenHttp); err != nil && !signalArrived {
-					sigError <- fmt.Errorf("serve http failed: %w", err)
-				}
-			}()
-		}
-		// blocks main
+		s := socks.New(ctx, socksCfg)
+		defer utils.Close(s)
 		go func() {
-			l.waitForCancel()
-			signalArrived = true
-			close(sigError)
-		}()
-		select {
-		case err, ok := <-sigError:
-			if ok {
-				return fmt.Errorf("inbound process error: %w", err)
+			if err := s.ListenAndServe("tcp", cfg.ListenSocks); err != nil && !signalArrived {
+				errChan <- fmt.Errorf("serve socks failed: %w", err)
 			}
+		}()
+	}
+
+	// create http server
+	if cfg.ListenHttp != "" {
+		h := http.New(ctx)
+		defer utils.Close(h)
+		go func() {
+			if err := h.ListenAndServe("tcp", cfg.ListenHttp); err != nil && !signalArrived {
+				errChan <- fmt.Errorf("serve http failed: %w", err)
+			}
+		}()
+	}
+
+	// blocks main
+	go func() {
+		l.waitForCancel()
+		signalArrived = true
+	}()
+
+	select {
+	case err, ok := <-errChan:
+		if ok {
+			return fmt.Errorf("inbound process error: %w", err)
 		}
-	default:
-		return fmt.Errorf("unrecognized role: %s", c.Role)
 	}
 	return nil
 }
 
+func (l *Launcher) LaunchWithError(cfg *config.MixedConfig) error {
+	// apply config
+	if err := cfg.Apply(); err != nil {
+		return err
+	}
+
+	// main context
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// switch role
+	switch cfg.Role {
+	case config.RoleServer:
+		return l.launchServer(ctx, cfg)
+	case config.RoleClient:
+		return l.launchClient(ctx, cfg)
+	default:
+		return fmt.Errorf("unrecognized role: %s", cfg.Role)
+	}
+}
+
 func (l *Launcher) Launch(c *config.MixedConfig) bool {
 	if err := l.LaunchWithError(c); err != nil {
-		log.Println(err)
+		log.Printf("launch error: %v", err)
 		return false
 	}
 	return true

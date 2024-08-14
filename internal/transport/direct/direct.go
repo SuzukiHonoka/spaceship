@@ -40,13 +40,13 @@ func (d Direct) Proxy(_ context.Context, req *transport.Request, localAddr chan<
 
 	// src -> dst
 	go func() {
-		_, err1 := io.CopyBuffer(conn, src, make([]byte, transport.BufferSize))
+		_, err1 := io.CopyBuffer(conn, src, transport.AllocateBuffer())
 		proxyErrCh <- err1
 	}()
 
 	// src <- dst
 	go func() {
-		_, err2 := io.CopyBuffer(dst, conn, make([]byte, transport.BufferSize))
+		_, err2 := io.CopyBuffer(dst, conn, transport.AllocateBuffer())
 		proxyErrCh <- err2
 	}()
 

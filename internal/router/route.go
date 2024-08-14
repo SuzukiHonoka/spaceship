@@ -36,8 +36,8 @@ type Route struct {
 }
 
 type MatchCache struct {
-	RegexS []*regexp.Regexp
-	CIDRs  []*net.IPNet
+	Regexps []*regexp.Regexp
+	CIDRs   []*net.IPNet
 }
 
 func (r *Route) GenerateCache() error {
@@ -70,7 +70,7 @@ func (r *Route) GenerateCache() error {
 			if err != nil {
 				return fmt.Errorf("regex: %s parse failed: %w", rx, err)
 			}
-			r.cache.RegexS = append(r.cache.RegexS, regx)
+			r.cache.Regexps = append(r.cache.Regexps, regx)
 		}
 	default:
 		return fmt.Errorf("unknown route type: %s, cannot generate cache", r.MatchType)
@@ -96,8 +96,8 @@ func (r *Route) Match(dst string) bool {
 			}
 		}
 	case TypeRegex:
-		if r.cache.RegexS != nil {
-			for _, regx := range r.cache.RegexS {
+		if r.cache.Regexps != nil {
+			for _, regx := range r.cache.Regexps {
 				if regx.MatchString(dst) {
 					return true
 				}

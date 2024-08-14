@@ -46,10 +46,12 @@ func ParseRawParamsFromUrl(scheme bool, url string) (string, error) {
 func ParseRequestFromRaw(raw string) (*Request, error) {
 	method, rest, ok1 := strings.Cut(raw, " ")
 	targetRawUri, _, ok2 := strings.Cut(rest, " ")
+
 	// we are not a http website
 	if targetRawUri == "/" {
 		return nil, transport.ErrBadRequest
 	}
+
 	// proper request format at first line: (HTTP_METHOD TARGET_URL HTTP_VERSION)
 	// -> GET https://www.google.com HTTP/1.1
 	// it should have 3 elements divided by space
@@ -57,29 +59,34 @@ func ParseRequestFromRaw(raw string) (*Request, error) {
 		return nil, transport.ErrBadRequest
 	}
 	//log.Println(method, targetRawUri)
-	var r Request
-	r.Method = method
+
+	req := new(Request)
+	req.Method = method
+
+	// parse request host and port
+
 	switch method {
 	case http.MethodConnect:
 		// no scheme
 		// CONNECT www.google.com:443 HTTP/1.1
 		var err error
-		if r.Host, r.Port, err = utils.SplitHostPort(targetRawUri); err != nil {
+		if req.Host, req.Port, err = utils.SplitHostPort(targetRawUri); err != nil {
 			return nil, err
 		}
 	default:
 		// parse URL from raw
 		targetUrl, err := url.Parse(targetRawUri)
-		// if not a legal url format
 		if err != nil {
 			return nil, err
 		}
-		// mark
+
+		// scheme mark
 		hasScheme := targetUrl.Scheme != ""
+
 		// divide the host and port
 		// this will raise error if port not found
 		// 1. http://google.com 2. google.com
-		if r.Host, r.Port, err = utils.SplitHostPort(targetUrl.Host); err != nil {
+		if req.Host, req.Port, err = utils.SplitHostPort(targetUrl.Host); err != nil {
 			// other error
 			var addrErr *net.AddrError
 			if !errors.As(err, &addrErr) {
@@ -88,28 +95,29 @@ func ParseRequestFromRaw(raw string) (*Request, error) {
 			if addrErr.Err != "missing port in address" {
 				return nil, err
 			}
-			r.Host = targetUrl.Host
+
+			// missing port in address
+			req.Host = targetUrl.Host
 			if hasScheme {
 				if v, ok := ProtocolMap[targetUrl.Scheme]; ok {
-					r.Port = v
+					req.Port = v
 				} else {
-					err = fmt.Errorf("unkown scheme: %s %w", targetUrl.Scheme, transport.ErrBadRequest)
-					return nil, err
+					return nil, fmt.Errorf("unkown scheme: %s %w", targetUrl.Scheme, transport.ErrBadRequest)
 				}
 			} else {
-				r.Port = 80
+				req.Port = 80
 			}
 		}
-		if r.Params, err = ParseRawParamsFromUrl(hasScheme, targetRawUri); err != nil {
+		if req.Params, err = ParseRawParamsFromUrl(hasScheme, targetRawUri); err != nil {
 			return nil, err
 		}
 	}
 	//log.Printf("request parsed: %+v\n", r)
-	return &r, nil
+	return req, nil
 }
 
 func (r *Request) UnpackIPv6() {
-	if r.Host[0] == '[' && r.Host[len(r.Host)-1] == ']' {
+	if r.Host[0] == '[' {
 		r.Host = r.Host[1 : len(r.Host)-1]
 	}
 }

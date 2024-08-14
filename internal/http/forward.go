@@ -19,7 +19,7 @@ import (
 )
 
 const snifferSize = 4 * 1024
-const sessionTimeout = 30 * time.Minute
+const sessionTimeout = 24 * time.Hour
 
 type Forwarder struct {
 	Ctx  context.Context
@@ -29,22 +29,24 @@ type Forwarder struct {
 
 func (f *Forwarder) handleProxy(method, rawParams string, reader *bytes.Reader, scanner *bufio.Scanner) (err error) {
 	// construct HTTP message
-	// head eg:  GET / HTTP/1.1
-	var sb strings.Builder
+	// raw head eg:  GET / HTTP/1.1
+	buf := new(bytes.Buffer)
 	for _, seg := range []string{method, rawParams} {
-		sb.WriteString(seg)
-		sb.WriteRune(' ')
+		buf.WriteString(seg)
+		buf.WriteRune(' ')
 	}
-	sb.WriteString("HTTP/1.1")
-	sb.WriteString(CRLF)
-	head := sb.String()
+	buf.WriteString("HTTP/1.1")
+	buf.WriteString(CRLF)
+	headBytes := buf.Bytes()
 
 	//log.Printf("head: %s", head)
-	_, _ = f.b.WriteString(head)
+	_, _ = f.b.Write(headBytes)
 
 	// filter headers
 	for scanner.Scan() {
+		// header per line
 		line := scanner.Text()
+
 		// if headers end
 		if line == "" {
 			// if no payload
@@ -52,7 +54,7 @@ func (f *Forwarder) handleProxy(method, rawParams string, reader *bytes.Reader, 
 				f.b.WriteString(CRLF)
 				return nil
 			}
-			// payload exist -> write back
+			// payload exist, write back
 			f.b.Write(scanner.Bytes())
 			break
 		}
@@ -68,10 +70,10 @@ func (f *Forwarder) handleProxy(method, rawParams string, reader *bytes.Reader, 
 		//log.Printf("http.parsed: [%s]: [%s]", headerName, v)
 
 		if !hopHeaders.Filter(headerName) {
-			sb = strings.Builder{}
-			sb.WriteString(line)
-			sb.WriteString(CRLF)
-			f.b.WriteString(sb.String())
+			buf.Reset()
+			buf.WriteString(line)
+			buf.WriteString(CRLF)
+			f.b.Write(buf.Bytes())
 		}
 	}
 	// rest of raw data
@@ -136,8 +138,8 @@ func (f *Forwarder) forward() error {
 
 	// match the raw parameter
 	// only in formal request methods and having http prefix in URL
-	first := scanner.Text()
-	req, err := ParseRequestFromRaw(first)
+	firstLine := scanner.Text()
+	req, err := ParseRequestFromRaw(firstLine)
 	if err != nil {
 		return fmt.Errorf("parse request failed: %w", err)
 	}
@@ -166,7 +168,7 @@ func (f *Forwarder) forward() error {
 	localAddr := make(chan string)
 	route, err := router.GetRoute(req.Host)
 	if err != nil {
-		log.Printf("http: get route for [%s] error: %v", req.Host, err)
+		log.Printf("http: get route for %s error: %v", req.Host, err)
 		if _, err = f.Conn.Write(MessageServiceUnavailable); err != nil {
 			return fmt.Errorf("failed to send reply: %w", err)
 		}
@@ -175,7 +177,7 @@ func (f *Forwarder) forward() error {
 
 	// route found
 	defer utils.Close(route)
-	log.Printf("http: %s -> %s", net.JoinHostPort(req.Host, strconv.Itoa(int(req.Port))), route)
+	log.Printf("http: %s -> %s", net.JoinHostPort(req.Host, strconv.FormatUint(uint64(req.Port), 10)), route)
 
 	// pipe for sniffer write-back
 	r, w := io.Pipe()
@@ -183,11 +185,11 @@ func (f *Forwarder) forward() error {
 
 	// channel for receive err and wait for
 	request := transport.NewRequest(req.Host, req.Port)
-	proxyErr := make(chan error)
 
+	proxyErr := make(chan error)
 	// actual proxy
 	go func() {
-		proxyErr <- route.Proxy(context.Background(), request, localAddr, f.Conn, r)
+		proxyErr <- route.Proxy(f.Ctx, request, localAddr, f.Conn, r)
 	}()
 
 	// internal process
@@ -202,21 +204,27 @@ func (f *Forwarder) forward() error {
 		}
 
 		//log.Println("src -> target start")
-		// todo: use our own io copy function with custom buffer and error returning
-		if _, err = io.CopyBuffer(w, f.Conn, make([]byte, transport.BufferSize)); err != nil {
+		if _, err = io.CopyBuffer(w, f.Conn, transport.AllocateBuffer()); err != nil {
 			internalErr <- fmt.Errorf("%s: %w", "copy stream error", err)
 		}
 		//log.Println("src -> target done")
-		close(internalErr)
+
+		internalErr <- nil
 	}()
 
 	//log.Println("wait for local addr")
 	//ld := <-localAddr
 	//log.Printf("local addr: %s", ld)
-	var b bytes.Buffer
+
 	if addr, ok := <-localAddr; !ok || addr == "" {
-		b.Write(MessageServiceUnavailable)
-	} else if req.Method == http.MethodConnect {
+		if _, err = f.Conn.Write(MessageServiceUnavailable); err != nil {
+			return fmt.Errorf("failed to send reply: %w", err)
+		}
+		return nil
+	}
+
+	var b bytes.Buffer
+	if req.Method == http.MethodConnect {
 		b.Write(MessageConnectionEstablished)
 	}
 	// message end
@@ -230,10 +238,7 @@ func (f *Forwarder) forward() error {
 	case err = <-proxyErr:
 		// notify proxy session is ended
 		// todo: rpc only check server and client stream copy error
-	case err1, ok := <-internalErr:
-		if ok {
-			err = err1
-		}
+	case err = <-internalErr:
 	}
 	return err
 }

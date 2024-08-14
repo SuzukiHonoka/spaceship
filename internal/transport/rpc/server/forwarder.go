@@ -7,6 +7,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	proto "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
 	"github.com/SuzukiHonoka/spaceship/internal/utils"
+	config "github.com/SuzukiHonoka/spaceship/pkg/config/server"
 	"io"
 	"log"
 	"net"
@@ -15,14 +16,16 @@ import (
 
 type Forwarder struct {
 	Ctx    context.Context
+	Users  config.Users
 	Stream proto.Proxy_ProxyServer
 	Conn   net.Conn
 	Ack    chan interface{}
 }
 
-func NewForwarder(ctx context.Context, stream proto.Proxy_ProxyServer) *Forwarder {
+func NewForwarder(ctx context.Context, users config.Users, stream proto.Proxy_ProxyServer) *Forwarder {
 	return &Forwarder{
 		Ctx:    ctx,
+		Users:  users,
 		Stream: stream,
 		Ack:    make(chan interface{}),
 	}
@@ -49,11 +52,11 @@ func (f *Forwarder) CopyTargetToClient() error {
 		Addr:   f.Conn.LocalAddr().String(),
 	}
 	if err := f.Stream.Send(msgAccept); err != nil {
-		return err
+		return fmt.Errorf("send local addr to client error: %w", err)
 	}
 
 	// buffer
-	buf := make([]byte, transport.BufferSize)
+	buf := transport.AllocateBuffer()
 	//log.Println("reading from target connection started")
 	// loop read target and forward
 	for {
@@ -86,33 +89,43 @@ func (f *Forwarder) copyTargetToClient(buf []byte) error {
 	return f.Stream.Send(dstData)
 }
 
-func (f *Forwarder) CopyClientToTarget() error {
-	defer close(f.Ack)
-	// do the handshake first
+func (f *Forwarder) handshake() error {
 	req, err := f.Stream.Recv()
 	if err != nil {
 		return err
 	}
 
 	// check user
-	if !Users.Match(req.Id) {
+	if !f.Users.Match(req.Id) {
 		return fmt.Errorf("%w: uuid=%s", transport.ErrUserNotFound, req.Id)
 	}
 
 	//log.Printf("prepare for dialing: %s:%d", req.Host, req.Port)
 	route, err := router.GetRoute(req.Fqdn)
 	if err != nil {
-		return fmt.Errorf("get route for [%s] error: %w", req.Fqdn, err)
+		return fmt.Errorf("get route for %s error: %w", req.Fqdn, err)
 	}
 	log.Printf("proxy accepted: %s -> %s", req.Fqdn, route)
 
-	target := net.JoinHostPort(req.Fqdn, strconv.Itoa(int(req.Port)))
+	target := net.JoinHostPort(req.Fqdn, strconv.FormatUint(uint64(req.Port), 10))
+
 	// dial to target with 3 minutes timeout as default
 	if f.Conn, err = route.Dial(transport.Network, target); err != nil {
 		_ = f.Stream.Send(&proto.ProxyDST{
 			Status: proto.ProxyStatus_Error,
 		})
 		return fmt.Errorf("dial target error: %w", err)
+	}
+	return nil
+}
+
+func (f *Forwarder) CopyClientToTarget() error {
+	defer close(f.Ack)
+
+	// do the handshake first
+	err := f.handshake()
+	if err != nil {
+		return fmt.Errorf("handshake error: %w", err)
 	}
 
 	// trigger read
@@ -163,7 +176,7 @@ func (f *Forwarder) Start() error {
 		if err != nil {
 			err = fmt.Errorf("stream copy failed: client -> target, err=%w", err)
 		}
-		proxyErr <- err
+		proxyErr <- nil
 	}()
 
 	// target -> client
@@ -172,9 +185,10 @@ func (f *Forwarder) Start() error {
 		if err != nil {
 			err = fmt.Errorf("stream copy failed: client <- target, err=%w", err)
 		}
-		proxyErr <- err
+		proxyErr <- nil
 	}()
 
+	// return the last error
 	var err error
 	for i := 0; i < 2; i++ {
 		err = <-proxyErr

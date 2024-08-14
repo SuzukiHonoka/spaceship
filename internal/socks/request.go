@@ -171,7 +171,7 @@ func (s *Server) handleConnect(_ context.Context, conn ConnWriter, req *Request)
 	//log.Printf("proxy local addr: %s\n", local)
 	//log.Println("proxy local end")
 	if err = <-proxyError; err != nil {
-		utils.PrintErrorIfCritical(err, "socks")
+		log.Printf("socks: %v", err)
 	}
 	return nil
 }

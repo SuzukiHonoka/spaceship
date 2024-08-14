@@ -70,7 +70,9 @@ func (s *Server) Serve() error {
 			}
 		}
 		go func() {
-			_ = s.ServeConn(conn)
+			if err := s.ServeConn(conn); err != nil {
+				log.Printf("[ERR] socks: %v", err)
+			}
 		}()
 	}
 }
@@ -79,18 +81,22 @@ func (s *Server) Serve() error {
 func (s *Server) ServeConn(conn net.Conn) error {
 	defer utils.Close(conn)
 	bufConn := bufio.NewReader(conn)
+
 	// Read the version byte
 	version := []byte{0}
 	if _, err := bufConn.Read(version); err != nil {
-		log.Printf("[ERR] socks: Failed to get version byte: %v", err)
+		err = fmt.Errorf("failed to get version byte: %v", err)
+		log.Printf("[ERR] socks: %v", err)
 		return err
 	}
+
 	// Ensure we are compatible
 	if version[0] != socks5Version {
 		err := fmt.Errorf("unsupported socks version: %v", version)
 		log.Printf("[ERR] socks: %v", err)
 		return err
 	}
+
 	// Authenticate the connection
 	authContext, err := s.authenticate(conn, bufConn)
 	if err != nil {

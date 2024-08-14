@@ -7,12 +7,14 @@ import (
 	"github.com/SuzukiHonoka/spaceship/pkg/dns"
 )
 
-// android may not resolve dns correctly through DefaultResolver
+// defaultDnsServer is the default dns server for android, use the dns server from dnspod for now.
+const defaultDnsServer = "119.29.29.29"
+
+// android may not resolve dns correctly through DefaultResolver, so we set a default dns server here.
 func init() {
-	// use google dns server by default
 	d := &dns.DNS{
 		Type:   dns.TypeCommon,
-		Server: "8.8.8.8",
+		Server: defaultDnsServer,
 	}
 	d.SetDefault()
 }

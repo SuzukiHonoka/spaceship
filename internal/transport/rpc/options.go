@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const GeneralTimeout = 5 * time.Second
+const GeneralTimeout = 15 * time.Second
 
 var DialOptions = []grpc.DialOption{
 	grpc.WithKeepaliveParams(keepalive.ClientParameters{

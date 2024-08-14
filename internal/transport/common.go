@@ -10,3 +10,7 @@ var Network = "tcp"
 
 // DialTimeout for transport of direct
 var DialTimeout = 3 * time.Minute
+
+func AllocateBuffer() []byte {
+	return make([]byte, BufferSize)
+}

@@ -48,7 +48,7 @@ func (s *Server) Serve() error {
 		}
 		go func() {
 			if err := s.ServeConn(conn); err != nil {
-				utils.PrintErrorIfCritical(err, "http")
+				log.Printf("http: %v", err)
 			}
 		}()
 	}

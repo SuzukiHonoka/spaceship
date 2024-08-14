@@ -42,9 +42,8 @@ func (w *ConnWrapper) Close() error {
 type ConnWrappers []*ConnWrapper
 
 func (w ConnWrappers) PickLRU() *ConnWrapper {
-	lru := uint32(math.MaxUint32)
 	var conn *ConnWrapper
-	for i := 0; i < len(w); i++ {
+	for lru, i := uint32(math.MaxUint32), 0; i < len(w); i++ {
 		if wrapper := w[i]; wrapper.InUse < lru {
 			lru = wrapper.InUse
 			conn = wrapper

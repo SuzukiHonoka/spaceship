@@ -1,6 +1,7 @@
 package client
 
 import (
+	"fmt"
 	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
 	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"google.golang.org/grpc/connectivity"
@@ -35,6 +36,7 @@ func (q *ConnQueue) Add(conn *ConnWrapper) {
 func (q *ConnQueue) Init() error {
 	for i := 0; i < q.Size; i++ {
 		conn, err := q.Dial()
+
 		if err != nil {
 			return err
 		}
@@ -46,7 +48,13 @@ func (q *ConnQueue) Init() error {
 
 // Dial dials new grpc connection with saved params
 func (q *ConnQueue) Dial() (*ConnWrapper, error) {
-	return NewConnWrapper(q.Params)
+	w, err := NewConnWrapper(q.Params)
+	if err != nil {
+		return nil, fmt.Errorf("creating grpc wrapper: %w", err)
+	}
+	// connect immediately
+	w.Connect()
+	return w, nil
 }
 
 // Destroy force disconnect all the connections

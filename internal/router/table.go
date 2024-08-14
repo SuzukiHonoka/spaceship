@@ -5,19 +5,19 @@ import "sync"
 type RoutesTable map[string]Egress
 
 type syncedRoutesTable struct {
-	sync.RWMutex
+	mu sync.RWMutex
 	RoutesTable
 }
 
 func (t *syncedRoutesTable) Set(k string, egress Egress) {
-	t.Lock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.RoutesTable[k] = egress
-	t.Unlock()
 }
 
 func (t *syncedRoutesTable) Get(k string) (Egress, bool) {
-	t.RLock()
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	egress, ok := t.RoutesTable[k]
-	t.RUnlock()
 	return egress, ok
 }
