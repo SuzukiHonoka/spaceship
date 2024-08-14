@@ -52,9 +52,6 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 		return fmt.Errorf("init client failed: %w", err)
 	}
 
-	// interrupt flag
-	var signalArrived bool
-
 	// error channel for http/socks server
 	errChan := make(chan error)
 
@@ -76,9 +73,10 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 		s := socks.New(ctx, socksCfg)
 		defer utils.Close(s)
 		go func() {
-			if err := s.ListenAndServe("tcp", cfg.ListenSocks); err != nil && !signalArrived {
+			if err := s.ListenAndServe("tcp", cfg.ListenSocks); err != nil {
 				errChan <- fmt.Errorf("serve socks failed: %w", err)
 			}
+			errChan <- nil
 		}()
 	}
 
@@ -87,23 +85,25 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 		h := http.New(ctx)
 		defer utils.Close(h)
 		go func() {
-			if err := h.ListenAndServe("tcp", cfg.ListenHttp); err != nil && !signalArrived {
+			if err := h.ListenAndServe("tcp", cfg.ListenHttp); err != nil {
 				errChan <- fmt.Errorf("serve http failed: %w", err)
 			}
+			errChan <- nil
 		}()
 	}
 
-	// blocks main
+	// listen interrupts
 	go func() {
-		l.waitForCancel()
-		signalArrived = true
+		l.listenSignal()
 	}()
 
+	// blocks main
 	select {
-	case err, ok := <-errChan:
-		if ok {
+	case err := <-errChan:
+		if err != nil {
 			return fmt.Errorf("inbound process error: %w", err)
 		}
+	case <-l.sigStop:
 	}
 	return nil
 }
