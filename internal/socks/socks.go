@@ -40,8 +40,8 @@ func New(ctx context.Context, conf *Config) *Server {
 }
 
 // ListenAndServe is used to create a listener and serve on it
-func (s *Server) ListenAndServe(network, addr string) error {
-	l, err := net.Listen(network, addr)
+func (s *Server) ListenAndServe(_, addr string) error {
+	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}

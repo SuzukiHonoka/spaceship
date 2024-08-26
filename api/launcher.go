@@ -76,7 +76,6 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 			if err := s.ListenAndServe("tcp", cfg.ListenSocks); err != nil {
 				errChan <- fmt.Errorf("serve socks failed: %w", err)
 			}
-			errChan <- nil
 		}()
 	}
 
@@ -88,7 +87,6 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 			if err := h.ListenAndServe("tcp", cfg.ListenHttp); err != nil {
 				errChan <- fmt.Errorf("serve http failed: %w", err)
 			}
-			errChan <- nil
 		}()
 	}
 
@@ -100,9 +98,7 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 	// blocks main
 	select {
 	case err := <-errChan:
-		if err != nil {
-			return fmt.Errorf("inbound process error: %w", err)
-		}
+		return fmt.Errorf("inbound process error: %w", err)
 	case <-l.sigStop:
 	}
 	return nil
