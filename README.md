@@ -1,20 +1,24 @@
 # Spaceship
-A program helps you to create a tunnel to the remote network.
 
-## Technique
- - grpc
- - protobuf
+Spaceship is a tool designed to create secure tunnels to remote networks.
+
+# Technologies Used
+
+- gRPC
+- Protocol Buffers (protobuf)
 
 ## Usage
+
 ```shell
-root@starx:/opt/spaceship# ./spaceship -h
-spaceship v1.x.x for personal use only, absolutely without any warranty, any kind of illegal intention by using this program are strongly forbidden.
-Usage of spaceship:
+# ./spaceship -h
+Usage spaceship:
   -c string
         config path (default "./config.json")
+  -v    show spaceship version
 ```
 
 ## Nginx Reserve Proxy Configuration
+
 ```nginx
 ...
     location /proxy. {
@@ -26,20 +30,26 @@ Usage of spaceship:
     }
 ...
 ```
+
 Note that `proxy` is the current proto source package name
 
 ## Safety
-Since it only uses pure grpc with insecure option for now, you should really set up a reserve proxy with TLS for real 
-transfer. Like `Nginx + TLS`.
 
-## Status
-The program is still under developing, any PR are warmly welcomed.
+Spaceship currently uses pure gRPC with the insecure option. For secure communication, it is highly recommended to set
+up a reverse proxy with TLS, such as `Nginx + TLS`.
 
-## TODO
-- support doh/dot as dns resolver
+## Development Status
 
-## Legal statement
-This program is provided as it is, absolutely without any warranty, and it's only available for the repo members, 
-sharing it to any other one is strongly forbidden.  
-Also, while you are using the program, you must obey the laws in your current living country.  
-**ANY KIND OF ILLEGAL INTENTION BY USING THIS PROGRAM ARE STRONGLY FORBIDDEN**
+The program is still under development. Contributions via pull requests are greatly appreciated.
+
+## Legal Disclaimer
+
+This program is provided "as is," with no warranties or guarantees. It is available only to repository members, and
+sharing it with others is strictly prohibited. Users must adhere to the laws of their respective countries. **Any
+illegal use of this program is strictly prohibited.**
+
+## Acknowledgements
+
+We would like to extend our heartfelt thanks to JetBrains for their generous support through the Open Source Development
+License. Your tools have been instrumental in the development of this project, and we deeply appreciate your commitment
+to the open-source community.
