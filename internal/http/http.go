@@ -161,7 +161,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// forward the connection
 	forwardErr := make(chan error)
 	go func() {
-		if _, err = io.CopyBuffer(pw, conn, transport.AllocateBuffer()); err != nil && err != io.EOF {
+		if _, err := io.CopyBuffer(pw, conn, transport.AllocateBuffer()); err != nil && err != io.EOF {
 			ServeError(conn, fmt.Errorf("http: copy body failed for %s", r.Host))
 			forwardErr <- err
 		}
