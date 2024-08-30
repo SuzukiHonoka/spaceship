@@ -127,7 +127,7 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 		if err != nil {
 			err = fmt.Errorf("rpc: src <- server <- %s: %w", req.Host, err)
 		}
-		proxyErr <- nil
+		proxyErr <- err
 	}()
 
 	// rpc sender
@@ -136,7 +136,7 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 		if err != nil {
 			err = fmt.Errorf("rpc: src -> server -> %s: %w", req.Host, err)
 		}
-		proxyErr <- nil
+		proxyErr <- err
 	}()
 
 	// ack timeout

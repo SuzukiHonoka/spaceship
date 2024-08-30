@@ -176,7 +176,7 @@ func (f *Forwarder) Start() error {
 		if err != nil {
 			err = fmt.Errorf("stream copy failed: client -> target, err=%w", err)
 		}
-		proxyErr <- nil
+		proxyErr <- err
 	}()
 
 	// target -> client
@@ -185,7 +185,7 @@ func (f *Forwarder) Start() error {
 		if err != nil {
 			err = fmt.Errorf("stream copy failed: client <- target, err=%w", err)
 		}
-		proxyErr <- nil
+		proxyErr <- err
 	}()
 
 	// return the last error
