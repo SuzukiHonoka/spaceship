@@ -124,7 +124,7 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 	// rpc stream receiver
 	go func() {
 		err := f.CopyTargetToSRC()
-		if err != nil {
+		if err != nil && err != io.EOF {
 			err = fmt.Errorf("rpc: src <- server <- %s: %w", req.Host, err)
 		}
 		proxyErr <- err
@@ -133,7 +133,7 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 	// rpc sender
 	go func() {
 		err := f.CopySRCtoTarget()
-		if err != nil {
+		if err != nil && err != io.EOF {
 			err = fmt.Errorf("rpc: src -> server -> %s: %w", req.Host, err)
 		}
 		proxyErr <- err

@@ -173,7 +173,7 @@ func (f *Forwarder) Start() error {
 	// target <- client
 	go func() {
 		err := f.CopyClientToTarget()
-		if err != nil {
+		if err != nil && err != io.EOF {
 			err = fmt.Errorf("stream copy failed: client -> target, err=%w", err)
 		}
 		proxyErr <- err
@@ -182,7 +182,7 @@ func (f *Forwarder) Start() error {
 	// target -> client
 	go func() {
 		err := f.CopyTargetToClient()
-		if err != nil {
+		if err != nil && err != io.EOF {
 			err = fmt.Errorf("stream copy failed: client <- target, err=%w", err)
 		}
 		proxyErr <- err
