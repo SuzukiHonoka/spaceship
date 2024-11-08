@@ -5,7 +5,7 @@ go 1.23
 require (
 	github.com/google/uuid v1.6.0
 	golang.org/x/net v0.30.0
-	google.golang.org/grpc v1.67.1
+	google.golang.org/grpc v1.68.0
 	google.golang.org/protobuf v1.35.1
 )
 
