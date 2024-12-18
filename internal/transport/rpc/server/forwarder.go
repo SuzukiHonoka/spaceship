@@ -84,7 +84,7 @@ func (f *Forwarder) copyTargetToClient(buf []byte) error {
 		Data:   buf[:n],
 	}
 
-	//err = c.Stream.Send(dstData)
+	//err = c.stream.Send(dstData)
 	//dstData = nil
 	return f.Stream.Send(dstData)
 }

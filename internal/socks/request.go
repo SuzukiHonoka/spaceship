@@ -137,6 +137,7 @@ func (s *Server) handleConnect(_ context.Context, conn ConnWriter, req *Request)
 	} else {
 		target = req.DestAddr.IP.String()
 	}
+
 	route, err := router.GetRoute(target)
 	if err != nil {
 		log.Printf("socks: get route for [%s] error: %v", target, err)
@@ -146,14 +147,19 @@ func (s *Server) handleConnect(_ context.Context, conn ConnWriter, req *Request)
 		return nil
 	}
 	defer utils.Close(route)
+
 	log.Printf("socks: %s -> %s", net.JoinHostPort(target, strconv.Itoa(int(req.DestAddr.Port))), route)
+
 	// start proxy
 	request := transport.NewRequest(target, req.DestAddr.Port)
 	localAdder := make(chan string)
 	proxyError := make(chan error)
-	//defer close(proxyError)
+
+	proxyCtx, cancel := context.WithCancel(s.Ctx)
+	defer cancel()
+
 	go func() {
-		proxyError <- route.Proxy(context.Background(), request, localAdder, conn, req.bufConn)
+		proxyError <- route.Proxy(proxyCtx, request, localAdder, conn, req.bufConn)
 	}()
 	local, ok := <-localAdder
 	if !ok || local == "" {
@@ -162,6 +168,7 @@ func (s *Server) handleConnect(_ context.Context, conn ConnWriter, req *Request)
 		}
 		return nil
 	}
+
 	// Send success
 	ip, port, _ := utils.SplitHostPort(local)
 	bind := AddrSpec{IP: net.ParseIP(ip), Port: port}
@@ -170,6 +177,7 @@ func (s *Server) handleConnect(_ context.Context, conn ConnWriter, req *Request)
 	}
 	//log.Printf("proxy local addr: %s\n", local)
 	//log.Println("proxy local end")
+
 	if err = <-proxyError; err != nil {
 		log.Printf("socks: %v", err)
 	}

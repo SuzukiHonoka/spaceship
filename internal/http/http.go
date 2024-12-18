@@ -41,9 +41,9 @@ func (s *Server) ListenAndServe(_, addr string) error {
 func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodConnect {
 		s.handleConnect(w, r)
-	} else {
-		s.handleRequest(w, r)
+		return
 	}
+	s.handleRequest(w, r)
 }
 
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
@@ -82,6 +82,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	proxyLocalAddr := make(chan string)
 
 	pr, pw := io.Pipe()
+	defer utils.Close(pw)
 
 	// DEBUG ONLY
 	//tpr, tpw := io.Pipe()
@@ -100,8 +101,11 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	//	}
 	//}()
 
+	proxyCtx, cancel := context.WithCancel(s.Ctx)
+	defer cancel()
+
 	go func() {
-		proxyErr <- route.Proxy(s.Ctx, request, proxyLocalAddr, conn, pr)
+		proxyErr <- route.Proxy(proxyCtx, request, proxyLocalAddr, conn, pr)
 	}()
 
 	// wait for proxy handshake
@@ -122,7 +126,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	buf.WriteString(CRLF)
 
 	// Host maybe missing in headers, and will cause bad request errors, rewrite it
-	r.Header.Set("Host", request.Host)
+	if r.Header.Get("Host") == "" {
+		r.Header.Set("Host", request.Host)
+	}
 
 	// raw headers, should filter sensitive headers
 	for k, v := range r.Header {
@@ -161,16 +167,17 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// forward the connection
 	forwardErr := make(chan error)
 	go func() {
-		if _, err := io.CopyBuffer(pw, conn, transport.AllocateBuffer()); err != nil && err != io.EOF {
+		_, err := io.CopyBuffer(pw, conn, transport.AllocateBuffer())
+		if err != nil && err != io.EOF {
 			ServeError(conn, fmt.Errorf("http: copy body failed for %s", r.Host))
-			forwardErr <- err
 		}
-		forwardErr <- nil
+		forwardErr <- err
 	}()
 
 	// wait for proxy to finish
 	select {
 	case <-s.Ctx.Done():
+		return
 	case err = <-forwardErr:
 	case err = <-proxyErr:
 	}
@@ -214,8 +221,11 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	proxyErr := make(chan error)
 	proxyLocalAddr := make(chan string)
 
+	proxyCtx, cancel := context.WithCancel(s.Ctx)
+	defer cancel()
+
 	go func() {
-		proxyErr <- route.Proxy(s.Ctx, request, proxyLocalAddr, conn, conn)
+		proxyErr <- route.Proxy(proxyCtx, request, proxyLocalAddr, conn, conn)
 	}()
 
 	// wait for proxy handshake
@@ -226,14 +236,18 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// send proxy OK
-	_, _ = conn.Write(MessageConnectionEstablished)
+	if _, err = conn.Write(MessageConnectionEstablished); err != nil {
+		log.Printf("http: send connection established failed for %s", r.Host)
+		return
+	}
 
 	// wait for proxy to finish
 	select {
 	case <-s.Ctx.Done():
+		return
 	case err = <-proxyErr:
-	}
-	if err != nil {
-		ServeError(conn, fmt.Errorf("http: proxy failed: %w", err))
+		if err != nil {
+			ServeError(conn, fmt.Errorf("http: proxy failed: %w", err))
+		}
 	}
 }

@@ -13,9 +13,16 @@ import (
 
 func ServeError(w io.Writer, err error) {
 	log.Println(err)
-	if w != nil {
-		_, _ = w.Write(MessageServiceUnavailable)
-		_, _ = fmt.Fprintf(w, err.Error())
+	if w == nil {
+		return
+	}
+	_, err1 := w.Write(MessageServiceUnavailable)
+	if err1 != nil {
+		log.Printf("http: write error status: %v", err1)
+		return
+	}
+	if _, err1 = fmt.Fprintf(w, err.Error()); err1 != nil {
+		log.Printf("http: write error: %v", err1)
 	}
 }
 

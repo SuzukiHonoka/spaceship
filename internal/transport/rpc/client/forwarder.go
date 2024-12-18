@@ -7,41 +7,47 @@ import (
 	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc"
 	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
 	"io"
+	"log"
 	"os"
 	"time"
 )
 
 type Forwarder struct {
-	Ctx       context.Context
-	Stream    proxy.Proxy_ProxyClient
-	Writer    io.Writer
-	Reader    io.Reader
-	LocalAddr chan string
+	ctx       context.Context
+	stream    proxy.Proxy_ProxyClient
+	writer    io.Writer
+	reader    io.Reader
+	localAddr chan string
+	// statistics
+	totalTx uint64
+	totalRx uint64
 }
 
 func NewForwarder(ctx context.Context, s proxy.Proxy_ProxyClient, w io.Writer, r io.Reader) *Forwarder {
 	return &Forwarder{
-		Ctx:       ctx,
-		Stream:    s,
-		Writer:    w,
-		Reader:    r,
-		LocalAddr: make(chan string),
+		ctx:       ctx,
+		stream:    s,
+		writer:    w,
+		reader:    r,
+		localAddr: make(chan string),
 	}
 }
 
 func (f *Forwarder) copySRCtoTarget(buf []byte) error {
 	//log.Println("rpc client reading...")
 	//read from src
-	n, err := f.Reader.Read(buf)
+	n, err := f.reader.Read(buf)
 	if err != nil {
 		return err
 	}
+	f.totalTx += uint64(n)
+
 	//fmt.Printf("<----- packet size: %d\n%s\n", n, buf)
 	// send to rpc
 	srcData := &proxy.ProxySRC{
 		Data: buf[:n],
 	}
-	return f.Stream.Send(srcData)
+	return f.stream.Send(srcData)
 	//log.Println("rpc client msg forwarded")
 }
 
@@ -49,7 +55,7 @@ func (f *Forwarder) CopyTargetToSRC() (err error) {
 	buf := new(proxy.ProxyDST)
 	for {
 		select {
-		case <-f.Ctx.Done():
+		case <-f.ctx.Done():
 			return nil
 		default:
 			if err = f.copyTargetToSRC(buf); err != nil {
@@ -62,7 +68,7 @@ func (f *Forwarder) CopyTargetToSRC() (err error) {
 func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) error {
 	//log.Println("rpc server reading..")
 	var err error
-	if buf, err = f.Stream.Recv(); err != nil {
+	if buf, err = f.stream.Recv(); err != nil {
 		return err
 	}
 
@@ -73,18 +79,20 @@ func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) error {
 		//log.Printf("target: %s", string(res.Data))
 
 		// data size already aligned with transport.bufferSize, skip copy in trunk
-		if _, err = f.Writer.Write(buf.Data); err != nil {
+		n, err := f.writer.Write(buf.Data)
+		if err != nil {
 			// log.Printf("error when sending client request to target stream: %v", err)
 			return err
 		}
+		f.totalRx += uint64(n)
 
 		//log.Println("rpc server msg forwarded")
 	case proxy.ProxyStatus_Accepted:
-		f.LocalAddr <- buf.Addr
+		f.localAddr <- buf.Addr
 	case proxy.ProxyStatus_EOF:
 		return io.EOF
 	case proxy.ProxyStatus_Error:
-		close(f.LocalAddr)
+		close(f.localAddr)
 		return transport.ErrServerFailed
 	default:
 		return fmt.Errorf("unknown status: %d", buf.Status)
@@ -97,7 +105,7 @@ func (f *Forwarder) CopySRCtoTarget() (err error) {
 	buf := transport.AllocateBuffer()
 	for {
 		select {
-		case <-f.Ctx.Done():
+		case <-f.ctx.Done():
 			return nil
 		default:
 			if err = f.copySRCtoTarget(buf); err != nil {
@@ -114,8 +122,8 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 		Fqdn: req.Host,
 		Port: uint32(req.Port),
 	}
-	if err := f.Stream.Send(handshake); err != nil {
-		return err
+	if err := f.stream.Send(handshake); err != nil {
+		return fmt.Errorf("rpc: src -> server -> %s handshake failed: %w", req.Host, err)
 	}
 
 	// buffered err ch
@@ -145,20 +153,18 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 	case <-t.C:
 		// timed out
 		return fmt.Errorf("rpc: server -> %s ack timed out: %w", req.Host, os.ErrDeadlineExceeded)
-	case localAddr, ok := <-f.LocalAddr:
+	case localAddr, ok := <-f.localAddr:
 		if !ok {
 			return fmt.Errorf("rpc: server -> %s ack failed", req.Host)
 		}
 		localAddrChan <- localAddr
 		t.Stop()
 		// done
-		//log.Printf("rpc: server -> %s success", req.Host)
+		//log.Printf("rpc: server -> %s -> %s success", req.Host, localAddr)
 	}
 
-	var err error
-	for i := 0; i < 2; i++ {
-		err = <-proxyErr
-	}
+	err := <-proxyErr
 
+	log.Printf("session: %s: %d bytes sent, %d bytes received", req.Host, f.totalTx, f.totalRx)
 	return err
 }

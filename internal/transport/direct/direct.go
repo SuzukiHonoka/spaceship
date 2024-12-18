@@ -36,7 +36,7 @@ func (d Direct) Proxy(_ context.Context, req *transport.Request, localAddr chan<
 	defer utils.Close(conn)
 	localAddr <- conn.LocalAddr().String()
 
-	proxyErrCh := make(chan error)
+	proxyErrCh := make(chan error, 2)
 
 	// src -> dst
 	go func() {
@@ -50,10 +50,8 @@ func (d Direct) Proxy(_ context.Context, req *transport.Request, localAddr chan<
 		proxyErrCh <- err2
 	}()
 
-	for i := 0; i < 2; i++ {
-		if proxyErr := <-proxyErrCh; proxyErr != nil {
-			err = fmt.Errorf("direct: %w", proxyErr)
-		}
+	if err = <-proxyErrCh; err != nil {
+		err = fmt.Errorf("direct: %w", err)
 	}
 
 	return err
