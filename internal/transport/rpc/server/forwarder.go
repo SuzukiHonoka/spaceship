@@ -189,10 +189,7 @@ func (f *Forwarder) Start() error {
 	}()
 
 	// return the last error
-	var err error
-	for i := 0; i < 2; i++ {
-		err = <-proxyErr
-	}
+	err := <-proxyErr
 
 	return err
 }

@@ -9,8 +9,11 @@ import (
 	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	config "github.com/SuzukiHonoka/spaceship/pkg/config/server"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+	"io"
 	"log"
 	"net"
 )
@@ -75,8 +78,13 @@ func (s *Server) Proxy(stream proto.Proxy_ProxyServer) error {
 	// create forwarder
 	f := NewForwarder(ctx, s.Users, stream)
 
-	if err := f.Start(); err != nil {
-		log.Printf("rpc: %v", err)
+	if err := f.Start(); err != nil && err != io.EOF {
+		if ev, ok := status.FromError(err); ok {
+			if ev.Code() == codes.Canceled {
+				return nil
+			}
+		}
+		log.Printf("rpc: forwarder error=%v", err)
 	}
 	// send session end to client
 	return stream.Send(&proto.ProxyDST{
