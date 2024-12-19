@@ -39,6 +39,12 @@ func (s *Server) ListenAndServe(_, addr string) error {
 }
 
 func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
+	// filter bad request
+	if r.URL.Host == "" {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+
 	if r.Method == http.MethodConnect {
 		s.handleConnect(w, r)
 		return
