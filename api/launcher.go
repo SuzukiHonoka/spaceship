@@ -79,6 +79,23 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 		}()
 	}
 
+	// create socks server for unix socket
+	if cfg.ListenSocksUnix != "" {
+		// support Linux abstract namespace
+		if cfg.ListenSocksUnix[0] != '/' {
+			cfg.ListenSocksUnix = "\x00" + cfg.ListenSocksUnix
+		}
+
+		socksCfg := new(socks.Config)
+		s := socks.New(ctx, socksCfg)
+		defer utils.Close(s)
+		go func() {
+			if err := s.ListenAndServe("unix", cfg.ListenSocksUnix); err != nil {
+				errChan <- fmt.Errorf("serve unix socks failed: %w", err)
+			}
+		}()
+	}
+
 	// create http server
 	if cfg.ListenHttp != "" {
 		h := http.New(ctx)

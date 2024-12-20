@@ -40,13 +40,12 @@ func New(ctx context.Context, conf *Config) *Server {
 }
 
 // ListenAndServe is used to create a listener and serve on it
-func (s *Server) ListenAndServe(_, addr string) error {
-	l, err := net.Listen("tcp", addr)
+func (s *Server) ListenAndServe(network, addr string) error {
+	l, err := net.Listen(network, addr)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to listen addr [%s] %s: %v", network, addr, err)
 	}
 	s.Listener = l
-	log.Printf("socks started at %s", addr)
 	return s.Serve()
 }
 
@@ -59,6 +58,7 @@ func (s *Server) Close() error {
 
 // Serve is used to serve connections from a listener
 func (s *Server) Serve() error {
+	log.Printf("socks started at %s", s.Listener.Addr())
 	for {
 		conn, err := s.Listener.Accept()
 		if err != nil {
@@ -120,7 +120,7 @@ func (s *Server) ServeConn(conn net.Conn) error {
 	}
 
 	// Process the client request
-	if err := s.handleRequest(request, conn); err != nil {
+	if err = s.handleRequest(request, conn); err != nil {
 		err = fmt.Errorf("failed to handle request: %v", err)
 		log.Printf("[ERR] socks: %v", err)
 		return err
