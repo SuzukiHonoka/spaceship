@@ -123,6 +123,6 @@ func (c *Client) Proxy(ctx context.Context, req *transport.Request, localAddr ch
 	case <-ctx.Done():
 	}
 
-	log.Printf("session: %s duration %v", req.Host, time.Since(start))
+	log.Printf("session: %s duration %v", req.Host, time.Since(start).Round(time.Millisecond))
 	return nil
 }
