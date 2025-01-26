@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-OS=("linux" "windows" "android")
+OS=("linux" "windows" "android" "darwin")
 ARCH=("arm64" "amd64")
 BUILD_DIR="build"
 
