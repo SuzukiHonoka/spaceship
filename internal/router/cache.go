@@ -4,9 +4,7 @@ import "github.com/SuzukiHonoka/spaceship/internal/transport"
 
 var (
 	routesCache Routes
-	table       = &syncedRoutesTable{
-		RoutesTable: make(RoutesTable),
-	}
+	table       = new(syncedRoutesTable)
 )
 
 func AddToFirstRoute(r *Route) {

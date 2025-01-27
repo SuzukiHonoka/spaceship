@@ -12,6 +12,7 @@ import (
 type Egress string
 
 const (
+	EgressUnknown   Egress = ""
 	EgressDirect    Egress = "direct"
 	EgressProxy     Egress = "proxy"
 	EgressForward   Egress = "forward"
@@ -21,6 +22,8 @@ const (
 
 func (e Egress) GetTransport() (transport.Transport, error) {
 	switch e {
+	case EgressUnknown:
+		return nil, fmt.Errorf("unknown transport")
 	case EgressDirect:
 		return direct.Transport, nil
 	case EgressProxy:

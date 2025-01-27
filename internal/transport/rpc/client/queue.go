@@ -36,7 +36,6 @@ func (q *ConnQueue) Add(conn *ConnWrapper) {
 func (q *ConnQueue) Init() error {
 	for i := 0; i < q.Size; i++ {
 		conn, err := q.Dial()
-
 		if err != nil {
 			return err
 		}

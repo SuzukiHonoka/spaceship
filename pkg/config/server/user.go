@@ -1,14 +1,16 @@
 package server
 
+import "sync"
+
 type User struct {
-	Remark string `json:"remark,omitempty"`
 	UUID   string `json:"uuid"` // user id
 	Limit  *Limit `json:"limit,omitempty"`
+	Remark string `json:"remark,omitempty"`
 }
 
-type Users []User
+type Users []*User
 
-func (u Users) IsNullOrEmpty() bool {
+func (u Users) NullOrEmpty() bool {
 	return u == nil || len(u) == 0
 }
 
@@ -21,4 +23,25 @@ func (u Users) Match(id string) bool {
 		}
 	}
 	return false
+}
+
+func (u Users) ToMatchMap() *UsersMatchMap {
+	return NewUsersMatchMap(u)
+}
+
+type UsersMatchMap struct {
+	m sync.Map
+}
+
+func NewUsersMatchMap(users Users) *UsersMatchMap {
+	m := new(UsersMatchMap)
+	for _, user := range users {
+		m.m.Store(user.UUID, struct{}{})
+	}
+	return m
+}
+
+func (m *UsersMatchMap) Match(id string) bool {
+	_, ok := m.m.Load(id)
+	return ok
 }

@@ -10,35 +10,44 @@ service Proxy{
 }
 
 message ProxySRC{
-  // user id
-  string id = 1;
-  // bytes
-  bytes data = 2;
-  // fqdn
-  string fqdn = 3;
-  // port
-  uint32 port = 4;
+  oneof header_or_payload{
+    ProxyHeader header = 1;
+    bytes payload = 2;
+  }
+
+  message ProxyHeader{
+    // user id
+    string id = 1;
+    // fqdn
+    string fqdn = 2;
+    // port
+    uint32 port = 3;
+  }
 }
 
 enum ProxyStatus{
-  Error     = 0;
-  Accepted  = 1;
-  Session   = 3;
-  EOF       = 4;
+  Session = 0;
+  Error     = 1;
+  Accepted  = 2;
+  EOF       = 3;
 }
 
 message ProxyDST{
-  // status
   ProxyStatus status = 1;
-  // data bytes
-  bytes data = 2; // EOF if failed
-  // bind addr
-  string addr = 3;
+
+  oneof header_or_payload{
+    ProxyHeader header = 2;
+    bytes payload = 3;
+  }
+
+  message ProxyHeader{
+    string addr = 2;
+  }
 }
 
 message DnsRequest{
-  // user uuid
-  string uuid = 1;
+  // user id
+  string id = 1;
   // fqdn name
   string fqdn = 2;
   // enable ipv6

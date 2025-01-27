@@ -11,4 +11,5 @@ var (
 	ErrBadRequest      = errors.New("bad request")
 	ErrBlocked         = errors.New("blocked")
 	ErrNotImplemented  = errors.New("not implemented")
+	ErrInvalidMessage  = errors.New("invalid message")
 )

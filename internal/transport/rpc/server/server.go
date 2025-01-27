@@ -27,7 +27,7 @@ type Server struct {
 
 func NewServer(ctx context.Context, users config.Users, ssl *config.SSL) (*Server, error) {
 	// check users
-	if users.IsNullOrEmpty() {
+	if users.NullOrEmpty() {
 		return nil, errors.New("users can not be empty")
 	}
 

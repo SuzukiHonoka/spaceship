@@ -5,19 +5,18 @@ import "sync"
 type RoutesTable map[string]Egress
 
 type syncedRoutesTable struct {
-	mu sync.RWMutex
-	RoutesTable
+	m sync.Map
 }
 
 func (t *syncedRoutesTable) Set(k string, egress Egress) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.RoutesTable[k] = egress
+	t.m.Store(k, egress)
 }
 
 func (t *syncedRoutesTable) Get(k string) (Egress, bool) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	egress, ok := t.RoutesTable[k]
-	return egress, ok
+	v, ok := t.m.Load(k)
+	if !ok {
+		return EgressUnknown, false
+	}
+	egress, _ := v.(Egress)
+	return egress, true
 }

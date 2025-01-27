@@ -47,8 +47,8 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 
 		// load custom cas if exist
 		for _, path := range cas {
-			var cert []byte
-			if cert, err = os.ReadFile(path); err != nil {
+			cert, err := os.ReadFile(path)
+			if err != nil {
 				log.Printf("read CA file from path: %s failed: %v", path, err)
 				continue
 			}

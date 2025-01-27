@@ -29,8 +29,9 @@ type MixedConfig struct {
 	CAs []string `json:"cas,omitempty"`
 	// LogMode is used for set up specific log mod, defaults to stdout.
 	LogMode logger.Mode `json:"log,omitempty"`
-	client.Client
-	server.Server
+
+	*client.Client
+	*server.Server
 }
 
 // NewFromConfigFile loads the config from the file in the specific path.
@@ -86,7 +87,6 @@ func (c *MixedConfig) Apply() error {
 	if c.Path != "" {
 		log.Printf("custom service name: %s", c.Path)
 		proto.SetServiceName(c.Path)
-
 	}
 
 	// client uuid

@@ -9,8 +9,22 @@ import (
 	"io"
 	"log"
 	"os"
+	"sync/atomic"
 	"time"
 )
+
+type Statistic struct {
+	Tx uint64
+	Rx uint64
+}
+
+func (s Statistic) AddTx(delta uint64) {
+	atomic.AddUint64(&s.Tx, delta)
+}
+
+func (s Statistic) AddRx(delta uint64) {
+	atomic.AddUint64(&s.Rx, delta)
+}
 
 type Forwarder struct {
 	ctx       context.Context
@@ -18,9 +32,9 @@ type Forwarder struct {
 	writer    io.Writer
 	reader    io.Reader
 	localAddr chan string
-	// statistics
-	totalTx uint64
-	totalRx uint64
+
+	// Statistic for TX and RX
+	Statistic *Statistic
 }
 
 func NewForwarder(ctx context.Context, s proxy.Proxy_ProxyClient, w io.Writer, r io.Reader) *Forwarder {
@@ -30,6 +44,7 @@ func NewForwarder(ctx context.Context, s proxy.Proxy_ProxyClient, w io.Writer, r
 		writer:    w,
 		reader:    r,
 		localAddr: make(chan string),
+		Statistic: new(Statistic),
 	}
 }
 
@@ -40,12 +55,14 @@ func (f *Forwarder) copySRCtoTarget(buf []byte) error {
 	if err != nil {
 		return err
 	}
-	f.totalTx += uint64(n)
+	f.Statistic.AddTx(uint64(n))
 
 	//fmt.Printf("<----- packet size: %d\n%s\n", n, buf)
 	// send to rpc
 	srcData := &proxy.ProxySRC{
-		Data: buf[:n],
+		HeaderOrPayload: &proxy.ProxySRC_Payload{
+			Payload: buf[:n],
+		},
 	}
 	return f.stream.Send(srcData)
 	//log.Println("rpc client msg forwarded")
@@ -65,9 +82,8 @@ func (f *Forwarder) CopyTargetToSRC() (err error) {
 	}
 }
 
-func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) error {
+func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) (err error) {
 	//log.Println("rpc server reading..")
-	var err error
 	if buf, err = f.stream.Recv(); err != nil {
 		return err
 	}
@@ -77,18 +93,27 @@ func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) error {
 	switch buf.Status {
 	case proxy.ProxyStatus_Session:
 		//log.Printf("target: %s", string(res.Data))
+		v, ok := buf.HeaderOrPayload.(*proxy.ProxyDST_Payload)
+		if !ok {
+			return transport.ErrInvalidMessage
+		}
 
 		// data size already aligned with transport.bufferSize, skip copy in trunk
-		n, err := f.writer.Write(buf.Data)
+		n, err := f.writer.Write(v.Payload)
 		if err != nil {
 			// log.Printf("error when sending client request to target stream: %v", err)
 			return err
 		}
-		f.totalRx += uint64(n)
+		f.Statistic.Rx += uint64(n)
 
 		//log.Println("rpc server msg forwarded")
 	case proxy.ProxyStatus_Accepted:
-		f.localAddr <- buf.Addr
+		v, ok := buf.HeaderOrPayload.(*proxy.ProxyDST_Header)
+		if !ok {
+			return transport.ErrInvalidMessage
+		}
+
+		f.localAddr <- v.Header.Addr
 	case proxy.ProxyStatus_EOF:
 		return io.EOF
 	case proxy.ProxyStatus_Error:
@@ -118,9 +143,13 @@ func (f *Forwarder) CopySRCtoTarget() (err error) {
 func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) error {
 	// handshake and get localAddr first
 	handshake := &proxy.ProxySRC{
-		Id:   uuid,
-		Fqdn: req.Host,
-		Port: uint32(req.Port),
+		HeaderOrPayload: &proxy.ProxySRC_Header{
+			Header: &proxy.ProxySRC_ProxyHeader{
+				Id:   uuid,
+				Fqdn: req.Host,
+				Port: uint32(req.Port),
+			},
+		},
 	}
 	if err := f.stream.Send(handshake); err != nil {
 		return fmt.Errorf("rpc: src -> server -> %s handshake failed: %w", req.Host, err)
@@ -165,6 +194,6 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 
 	err := <-proxyErr
 
-	log.Printf("session: %s: %d bytes sent, %d bytes received", req.Host, f.totalTx, f.totalRx)
+	log.Printf("session: %s: %d bytes sent, %d bytes received", req.Host, f.Statistic.Tx, f.Statistic.Rx)
 	return err
 }
