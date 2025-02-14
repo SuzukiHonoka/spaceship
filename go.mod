@@ -1,6 +1,6 @@
 module github.com/SuzukiHonoka/spaceship
 
-go 1.23
+go 1.24
 
 require (
 	github.com/google/uuid v1.6.0
@@ -12,5 +12,5 @@ require (
 require (
 	golang.org/x/sys v0.30.0 // indirect
 	golang.org/x/text v0.22.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20250124145028-65684f501c47 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250212204824-5a70512c5d8b // indirect
 )
