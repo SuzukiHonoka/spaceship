@@ -36,8 +36,10 @@ type Route struct {
 }
 
 type MatchCache struct {
-	Regexps []*regexp.Regexp
-	CIDRs   []*net.IPNet
+	ExactMap   map[string]struct{}
+	DomainMap  map[string]struct{}
+	RegexpList []*regexp.Regexp
+	CIDRList   []*net.IPNet
 }
 
 func (r *Route) GenerateCache() error {
@@ -55,14 +57,22 @@ func (r *Route) GenerateCache() error {
 	switch r.MatchType {
 	case TypeDefault:
 	case TypeExact:
+		r.cache.ExactMap = make(map[string]struct{}, len(r.Sources))
+		for _, src := range r.Sources {
+			r.cache.ExactMap[src] = struct{}{}
+		}
 	case TypeDomain:
+		r.cache.DomainMap = make(map[string]struct{}, len(r.Sources))
+		for _, src := range r.Sources {
+			r.cache.DomainMap[src] = struct{}{}
+		}
 	case TypeCIDR:
 		for _, cidr := range r.Sources {
 			_, IPNet, err := net.ParseCIDR(cidr)
 			if err != nil {
 				return fmt.Errorf("cidr: %s parse failed: %w", cidr, err)
 			}
-			r.cache.CIDRs = append(r.cache.CIDRs, IPNet)
+			r.cache.CIDRList = append(r.cache.CIDRList, IPNet)
 		}
 	case TypeRegex:
 		for _, rx := range r.Sources {
@@ -70,7 +80,7 @@ func (r *Route) GenerateCache() error {
 			if err != nil {
 				return fmt.Errorf("regex: %s parse failed: %w", rx, err)
 			}
-			r.cache.Regexps = append(r.cache.Regexps, regx)
+			r.cache.RegexpList = append(r.cache.RegexpList, regx)
 		}
 	default:
 		return fmt.Errorf("unknown route type: %s, cannot generate cache", r.MatchType)
@@ -83,30 +93,30 @@ func (r *Route) Match(dst string) bool {
 	case TypeDefault:
 		return true
 	case TypeExact:
-		for _, src := range r.Sources {
-			if src == dst {
+		if r.cache.ExactMap != nil {
+			if _, ok := r.cache.ExactMap[dst]; ok {
 				return true
 			}
 		}
 	case TypeDomain:
 		dst = utils.ExtractDomain(dst)
-		for _, domain := range r.Sources {
-			if domain == dst {
+		if r.cache.DomainMap != nil {
+			if _, ok := r.cache.DomainMap[dst]; ok {
 				return true
 			}
 		}
 	case TypeRegex:
-		if r.cache.Regexps != nil {
-			for _, regx := range r.cache.Regexps {
+		if r.cache.RegexpList != nil {
+			for _, regx := range r.cache.RegexpList {
 				if regx.MatchString(dst) {
 					return true
 				}
 			}
 		}
 	case TypeCIDR:
-		if r.cache.CIDRs != nil {
+		if r.cache.CIDRList != nil {
 			if ip := net.ParseIP(dst); ip != nil {
-				for _, cidr := range r.cache.CIDRs {
+				for _, cidr := range r.cache.CIDRList {
 					if cidr.Contains(ip) {
 						return true
 					}
