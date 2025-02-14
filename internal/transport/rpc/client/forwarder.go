@@ -76,6 +76,9 @@ func (f *Forwarder) CopyTargetToSRC() (err error) {
 			return nil
 		default:
 			if err = f.copyTargetToSRC(buf); err != nil {
+				if err == io.EOF {
+					return nil
+				}
 				return err
 			}
 		}
@@ -134,6 +137,9 @@ func (f *Forwarder) CopySRCtoTarget() (err error) {
 			return nil
 		default:
 			if err = f.copySRCtoTarget(buf); err != nil {
+				if err == io.EOF {
+					return nil
+				}
 				return err
 			}
 		}
@@ -161,7 +167,7 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 	// rpc stream receiver
 	go func() {
 		err := f.CopyTargetToSRC()
-		if err != nil && err != io.EOF {
+		if err != nil {
 			err = fmt.Errorf("rpc: src <- server <- %s: %w", req.Host, err)
 		}
 		proxyErr <- err
@@ -170,7 +176,7 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 	// rpc sender
 	go func() {
 		err := f.CopySRCtoTarget()
-		if err != nil && err != io.EOF {
+		if err != nil {
 			err = fmt.Errorf("rpc: src -> server -> %s: %w", req.Host, err)
 		}
 		proxyErr <- err
