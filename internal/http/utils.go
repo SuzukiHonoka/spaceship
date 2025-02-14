@@ -21,7 +21,7 @@ func ServeError(w io.Writer, err error) {
 		log.Printf("http: write error status: %v", err1)
 		return
 	}
-	if _, err1 = fmt.Fprintf(w, err.Error()); err1 != nil {
+	if _, err1 = fmt.Fprint(w, err.Error()); err1 != nil {
 		log.Printf("http: write error: %v", err1)
 	}
 }
