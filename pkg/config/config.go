@@ -103,7 +103,7 @@ func (c *MixedConfig) Apply() error {
 		if err != nil {
 			return err
 		}
-		forward.Transport.Attach(d)
+		forward.Attach(d)
 		log.Println("forward-proxy attached")
 	}
 
