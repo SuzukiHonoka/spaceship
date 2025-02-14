@@ -136,14 +136,14 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		r.Header.Set("Host", request.Host)
 	}
 
+	// filter sensitive headers
+	hopHeaders.RemoveHopHeaders(r.Header)
+
 	// raw headers, should filter sensitive headers
 	for k, v := range r.Header {
-		// filter sensitive headers
-		if hopHeaders.Filter(k) {
-			continue
-		}
 		buf.WriteString(k)
-		buf.WriteString(": ")
+		buf.WriteRune(':')
+		buf.WriteRune(' ')
 		buf.WriteString(strings.Join(v, ";")) // in case of multiple values
 		buf.WriteString(CRLF)
 	}
@@ -174,9 +174,6 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	forwardErr := make(chan error)
 	go func() {
 		_, err := io.CopyBuffer(pw, conn, transport.AllocateBuffer())
-		if err != nil && err != io.EOF {
-			ServeError(conn, fmt.Errorf("http: copy body failed for %s", r.Host))
-		}
 		forwardErr <- err
 	}()
 
@@ -185,10 +182,13 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	case <-s.Ctx.Done():
 		return
 	case err = <-forwardErr:
+		if err != nil && err != io.EOF {
+			ServeError(conn, fmt.Errorf("http: copy body failed for %s", r.Host))
+		}
 	case err = <-proxyErr:
-	}
-	if err != nil {
-		ServeError(conn, fmt.Errorf("http: proxy failed, err=%w", err))
+		if err != nil {
+			ServeError(conn, fmt.Errorf("http: proxy failed, err=%w", err))
+		}
 	}
 }
 
@@ -250,7 +250,6 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// wait for proxy to finish
 	select {
 	case <-s.Ctx.Done():
-		return
 	case err = <-proxyErr:
 		if err != nil {
 			ServeError(conn, fmt.Errorf("http: proxy failed: %w", err))

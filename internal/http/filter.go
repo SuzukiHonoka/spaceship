@@ -1,6 +1,9 @@
 package http
 
-import "strings"
+import (
+	"net/http"
+	"strings"
+)
 
 type Filter []string
 
@@ -27,4 +30,10 @@ func (f Filter) Filter(s string) bool {
 		}
 	}
 	return false
+}
+
+func (f Filter) RemoveHopHeaders(h http.Header) {
+	for k := range h {
+		h.Del(k)
+	}
 }
