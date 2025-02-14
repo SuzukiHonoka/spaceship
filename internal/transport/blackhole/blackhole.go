@@ -4,30 +4,53 @@ import (
 	"context"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"io"
 	"net"
 )
 
 const TransportName = "blackHole"
 
-var Transport = BlackHole{}
+// BlackHole is transport that discards all data
+type BlackHole struct {
+	cancel func()
+}
 
-type BlackHole struct{}
+func New() transport.Transport {
+	return &BlackHole{}
+}
 
-func (h BlackHole) String() string {
+func (h *BlackHole) String() string {
 	return TransportName
 }
 
-func (h BlackHole) Close() error {
+func (h *BlackHole) Close() error {
+	if h.cancel != nil {
+		h.cancel()
+	}
 	return nil
 }
 
-func (h BlackHole) Dial(_, _ string) (c net.Conn, err error) {
+func (h *BlackHole) Dial(_, _ string) (c net.Conn, err error) {
 	return nil, fmt.Errorf("%s: %w", h, transport.ErrNotImplemented)
 }
 
-func (h BlackHole) Proxy(_ context.Context, _ *transport.Request, localAddr chan<- string, _ io.Writer, src io.Reader) error {
+func (h *BlackHole) Proxy(ctx context.Context, _ *transport.Request, localAddr chan<- string, _ io.Writer, src io.Reader) error {
 	localAddr <- "127.0.0.1:0"
-	_, err := io.Copy(io.Discard, src)
-	return err
+
+	ctx, h.cancel = context.WithCancel(ctx)
+	defer utils.Close(h)
+
+	buf := transport.AllocateBuffer()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+			if _, err := src.Read(buf); err != nil && err != io.EOF {
+				return err
+			}
+		}
+	}
 }

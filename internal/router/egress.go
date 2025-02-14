@@ -25,13 +25,13 @@ func (e Egress) GetTransport() (transport.Transport, error) {
 	case EgressUnknown:
 		return nil, fmt.Errorf("unknown transport")
 	case EgressDirect:
-		return direct.Transport, nil
+		return direct.New(), nil
 	case EgressProxy:
-		return rpcClient.NewClient()
+		return rpcClient.New()
 	case EgressForward:
-		return forward.Transport, nil
+		return forward.New(), nil
 	case EgressBlackHole:
-		return blackhole.Transport, nil
+		return blackhole.New(), nil
 	case EgressBlock:
 		return nil, transport.ErrBlocked
 	}

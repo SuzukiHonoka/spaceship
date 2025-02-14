@@ -77,7 +77,7 @@ func (c *Client) Dial(_, _ string) (net.Conn, error) {
 	return nil, fmt.Errorf("%s: dial not implemented", c.String())
 }
 
-func NewClient() (*Client, error) {
+func New() (transport.Transport, error) {
 	client, doneFunc, err := connQueue.GetClient()
 	if err != nil {
 		return nil, err
@@ -117,7 +117,7 @@ func (c *Client) Proxy(ctx context.Context, req *transport.Request, localAddr ch
 	// block main
 	select {
 	case err = <-forwardError:
-		if err != nil && err != io.EOF {
+		if err != nil {
 			return fmt.Errorf("rpc client: proxy failed: %w", err)
 		}
 	case <-ctx.Done():
