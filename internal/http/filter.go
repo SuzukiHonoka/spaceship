@@ -2,38 +2,32 @@ package http
 
 import (
 	"net/http"
-	"strings"
 )
 
 type Filter []string
 
-// refer http://www.w3.org/Protocols/rfc2616/rfc2616-sec13.html
+// The following hopHeaders are copied from https://golang.org/src/net/http/httputil/reverseproxy.go
+// Hop-by-hop headers. These are removed when sent to the backend.
+// As of RFC 7230, hop-by-hop headers are required to appear in the
+// Connection header field. These are the headers defined by the
+// obsoleted RFC 2616 (section 13.5.1) and are used for backward
+// compatibility.
 var hopHeaders = Filter{
-	"connection",
-	"keep-alive",
-	"proxy-connection",
-	"proxy-authenticate",
-	"proxy-authorization",
-	"te",
-	"trailers",
-	"transfer-encoding",
-	"upgrade",
+	"Connection",
+	"Proxy-Connection", // non-standard but still sent by libcurl and rejected by e.g. google
+	"Keep-Alive",
+	"Proxy-Authenticate",
+	"Proxy-Authorization",
+	"Te",      // canonicalized version of "TE"
+	"Trailer", // not Trailers per URL above; https://www.rfc-editor.org/errata_search.php?eid=4522
+	"Transfer-Encoding",
+	"Upgrade",
 }
 
-// Filter checks if given header needed to be filtered
+// RemoveHopHeaders removes hop-by-hop headers from http.Header
 // note that only the request which not CONNECT one needs to do this
-func (f Filter) Filter(s string) bool {
-	s = strings.ToLower(s)
-	for _, v := range f {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
-
 func (f Filter) RemoveHopHeaders(h http.Header) {
-	for k := range h {
+	for _, k := range f {
 		h.Del(k)
 	}
 }
