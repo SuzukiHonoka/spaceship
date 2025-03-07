@@ -27,12 +27,7 @@ func LoadProxy(p string) (proxy.Dialer, error) {
 	if err != nil {
 		return nil, err
 	}
-	d, err := proxy.FromURL(u, nil)
-	if err != nil {
-		return nil, err
-	}
-	return d, nil
-	// todo: RegisterDialerType for other scheme
+	return proxy.FromURL(u, nil)
 }
 
 func ExtractDomain(s string) string {

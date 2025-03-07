@@ -11,10 +11,3 @@ func Close(closer io.Closer) {
 		log.Printf("closer: %v close failed, err=%s", closer, err)
 	}
 }
-
-// CloseAll close all closers
-func CloseAll(closers ...io.Closer) {
-	for _, closer := range closers {
-		Close(closer)
-	}
-}

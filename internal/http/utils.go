@@ -9,20 +9,25 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"syscall"
 )
 
 func ServeError(w io.Writer, err error) {
-	log.Println(err)
+	if err == nil || err == io.EOF || errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) {
+		return
+	}
+
+	log.Printf("serve error: %v", err)
 	if w == nil {
 		return
 	}
 	_, err1 := w.Write(MessageServiceUnavailable)
 	if err1 != nil {
-		log.Printf("http: write error status: %v", err1)
+		log.Printf("http: write error status failed: %v", err1)
 		return
 	}
-	if _, err1 = fmt.Fprint(w, err.Error()); err1 != nil {
-		log.Printf("http: write error: %v", err1)
+	if _, err1 = fmt.Fprint(w, err); err1 != nil {
+		log.Printf("http: write error message failed: %v", err1)
 	}
 }
 

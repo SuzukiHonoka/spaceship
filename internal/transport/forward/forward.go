@@ -6,9 +6,11 @@ import (
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"golang.org/x/net/proxy"
+	"golang.org/x/sync/errgroup"
 	"io"
 	"net"
 	"strconv"
+	"sync"
 )
 
 const TransportName = "forward"
@@ -22,6 +24,7 @@ func Attach(d proxy.Dialer) {
 type Forward struct {
 	dialer proxy.Dialer
 	conn   net.Conn
+	once   sync.Once
 }
 
 func New() transport.Transport {
@@ -36,8 +39,13 @@ func (f *Forward) String() string {
 	return TransportName
 }
 
-func (f *Forward) Close() error {
-	return nil
+func (f *Forward) Close() (err error) {
+	f.once.Do(func() {
+		if f.conn != nil {
+			err = f.conn.Close()
+		}
+	})
+	return err
 }
 
 func (f *Forward) Dial(network, addr string) (net.Conn, error) {
@@ -55,31 +63,26 @@ func (f *Forward) Proxy(ctx context.Context, req *transport.Request, localAddr c
 	if err != nil {
 		return err
 	}
+	localAddr <- f.conn.LocalAddr().String()
 	defer utils.Close(f)
 
-	localAddr <- f.conn.LocalAddr().String()
-	proxyErrCh := make(chan error, 2)
-
+	errGroup, ctx := errgroup.WithContext(ctx)
 	// src -> dst
-	go func() {
+	errGroup.Go(func() error {
 		_, err := io.CopyBuffer(f.conn, src, transport.AllocateBuffer())
-		proxyErrCh <- err
-	}()
-
-	// src <- dst
-	go func() {
-		_, err := io.CopyBuffer(dst, f.conn, transport.AllocateBuffer())
-		proxyErrCh <- err
-	}()
-
-	select {
-	case <-ctx.Done():
-		return err
-	case err = <-proxyErrCh:
 		if err != nil && err != io.EOF {
 			return fmt.Errorf("forward: %w", err)
 		}
-	}
+		return nil
+	})
+	// src <- dst
+	errGroup.Go(func() error {
+		_, err := io.CopyBuffer(dst, f.conn, transport.AllocateBuffer())
+		if err != nil && err != io.EOF {
+			return fmt.Errorf("forward: %w", err)
+		}
+		return nil
+	})
 
-	return nil
+	return errGroup.Wait()
 }

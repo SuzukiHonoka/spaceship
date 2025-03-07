@@ -77,6 +77,7 @@ func (s *Server) Proxy(stream proto.Proxy_ProxyServer) error {
 
 	// create forwarder
 	f := NewForwarder(ctx, s.Users, stream)
+	defer utils.Close(f)
 
 	if err := f.Start(); err != nil && err != io.EOF {
 		if ev, ok := status.FromError(err); ok {

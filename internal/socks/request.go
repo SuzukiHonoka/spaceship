@@ -2,6 +2,7 @@ package socks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/router"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
@@ -10,6 +11,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"syscall"
 )
 
 const (
@@ -140,7 +142,7 @@ func (s *Server) handleConnect(_ context.Context, conn ConnWriter, req *Request)
 
 	route, err := router.GetRoute(target)
 	if err != nil {
-		log.Printf("socks: get route for [%s] error: %v", target, err)
+		log.Printf("socks: get route for %s error: %v", target, err)
 		if err = sendReply(conn, ruleFailure, nil); err != nil {
 			return fmt.Errorf("failed to send reply: %w", err)
 		}
@@ -170,7 +172,10 @@ func (s *Server) handleConnect(_ context.Context, conn ConnWriter, req *Request)
 	}
 
 	// Send success
-	ip, port, _ := utils.SplitHostPort(local)
+	ip, port, err := utils.SplitHostPort(local)
+	if err != nil {
+		return fmt.Errorf("socks: failed to split host and port: %v", err)
+	}
 	bind := AddrSpec{IP: net.ParseIP(ip), Port: port}
 	if err = sendReply(conn, successReply, &bind); err != nil {
 		return fmt.Errorf("failed to send reply: %v", err)
@@ -178,7 +183,7 @@ func (s *Server) handleConnect(_ context.Context, conn ConnWriter, req *Request)
 	//log.Printf("proxy local addr: %s\n", local)
 	//log.Println("proxy local end")
 
-	if err = <-proxyError; err != nil {
+	if err = <-proxyError; err != nil && err != io.EOF && !errors.Is(err, syscall.EPIPE) && !errors.Is(err, syscall.ECONNRESET) {
 		log.Printf("socks: %v", err)
 	}
 	return nil

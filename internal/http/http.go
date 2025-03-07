@@ -10,6 +10,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 )
@@ -166,7 +167,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	// write raw messages to pipe
 	if _, err = buf.WriteTo(pw); err != nil {
-		ServeError(conn, fmt.Errorf("http: send heads failed for %s", r.Host))
+		ServeError(conn, fmt.Errorf("http: send heads failed for %s, err=%w", r.Host, err))
 		return
 	}
 
@@ -183,7 +184,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	case err = <-forwardErr:
 		if err != nil && err != io.EOF {
-			ServeError(conn, fmt.Errorf("http: copy body failed for %s", r.Host))
+			ServeError(conn, fmt.Errorf("http: copy body failed for %s， err=%w", r.Host, err))
 		}
 	case err = <-proxyErr:
 		if err != nil {
@@ -193,8 +194,14 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
+	host, _, err := net.SplitHostPort(r.Host)
+	if err != nil {
+		ServeError(w, fmt.Errorf("invalid host, err=%w", err))
+		return
+	}
+
 	// get route for host
-	route, err := router.GetRoute(r.Host)
+	route, err := router.GetRoute(host)
 	if err != nil {
 		ServeError(w, fmt.Errorf("http: get route for %s failed, error=%w", r.Host, err))
 		return

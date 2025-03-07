@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/utils"
+	"log"
 	"net"
 	"os"
 	"regexp"
@@ -43,7 +44,9 @@ type MatchCache struct {
 }
 
 func (r *Route) GenerateCache() error {
+	log.Printf("generating %s-route cache..", r.MatchType)
 	if r.Ext != "" {
+		log.Printf("reading route-ext from file: %s", r.Ext)
 		f, err := os.Open(r.Ext)
 		if err != nil {
 			return fmt.Errorf("read from path: %s failed: %w", r.Ext, err)
@@ -61,11 +64,13 @@ func (r *Route) GenerateCache() error {
 		for _, src := range r.Sources {
 			r.cache.ExactMap[src] = struct{}{}
 		}
+		log.Printf("exact-route count: %d", len(r.cache.ExactMap))
 	case TypeDomain:
 		r.cache.DomainMap = make(map[string]struct{}, len(r.Sources))
 		for _, src := range r.Sources {
 			r.cache.DomainMap[src] = struct{}{}
 		}
+		log.Printf("domain-route count: %d", len(r.cache.DomainMap))
 	case TypeCIDR:
 		for _, cidr := range r.Sources {
 			_, IPNet, err := net.ParseCIDR(cidr)
@@ -74,6 +79,7 @@ func (r *Route) GenerateCache() error {
 			}
 			r.cache.CIDRList = append(r.cache.CIDRList, IPNet)
 		}
+		log.Printf("cidr-route count: %d", len(r.cache.CIDRList))
 	case TypeRegex:
 		for _, rx := range r.Sources {
 			regx, err := regexp.Compile(rx)
@@ -82,6 +88,7 @@ func (r *Route) GenerateCache() error {
 			}
 			r.cache.RegexpList = append(r.cache.RegexpList, regx)
 		}
+		log.Printf("regex-route count: %d", len(r.cache.RegexpList))
 	default:
 		return fmt.Errorf("unknown route type: %s, cannot generate cache", r.MatchType)
 	}
@@ -89,6 +96,8 @@ func (r *Route) GenerateCache() error {
 }
 
 func (r *Route) Match(dst string) bool {
+	//log.Printf("route matching type: %s", r.MatchType)
+	ip := net.ParseIP(dst)
 	switch r.MatchType {
 	case TypeDefault:
 		return true
@@ -99,10 +108,12 @@ func (r *Route) Match(dst string) bool {
 			}
 		}
 	case TypeDomain:
-		dst = utils.ExtractDomain(dst)
-		if r.cache.DomainMap != nil {
-			if _, ok := r.cache.DomainMap[dst]; ok {
-				return true
+		if ip == nil {
+			dst = utils.ExtractDomain(dst)
+			if r.cache.DomainMap != nil {
+				if _, ok := r.cache.DomainMap[dst]; ok {
+					return true
+				}
 			}
 		}
 	case TypeRegex:
@@ -115,7 +126,7 @@ func (r *Route) Match(dst string) bool {
 		}
 	case TypeCIDR:
 		if r.cache.CIDRList != nil {
-			if ip := net.ParseIP(dst); ip != nil {
+			if ip != nil {
 				for _, cidr := range r.cache.CIDRList {
 					if cidr.Contains(ip) {
 						return true

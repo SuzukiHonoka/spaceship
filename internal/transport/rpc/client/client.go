@@ -108,19 +108,10 @@ func (c *Client) Proxy(ctx context.Context, req *transport.Request, localAddr ch
 	start := time.Now()
 
 	//log.Printf("sending proxy to rpc: %s", req.Host)
-	forwardError := make(chan error)
 	f := NewForwarder(sessionCtx, stream, w, r)
-	go func() {
-		forwardError <- f.Start(req, localAddr)
-	}()
-
-	// block main
-	select {
-	case err = <-forwardError:
-		if err != nil {
-			return fmt.Errorf("rpc client: proxy failed: %w", err)
-		}
-	case <-ctx.Done():
+	err = f.Start(req, localAddr)
+	if err != nil {
+		return fmt.Errorf("rpc client: proxy failed: %w", err)
 	}
 
 	log.Printf("session: %s duration %v", req.Host, time.Since(start).Round(time.Millisecond))

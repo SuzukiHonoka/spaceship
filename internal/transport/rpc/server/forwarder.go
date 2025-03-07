@@ -6,8 +6,8 @@ import (
 	"github.com/SuzukiHonoka/spaceship/internal/router"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	proto "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
-	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	config "github.com/SuzukiHonoka/spaceship/pkg/config/server"
+	"golang.org/x/sync/errgroup"
 	"io"
 	"log"
 	"net"
@@ -38,7 +38,7 @@ func (f *Forwarder) Close() error {
 	return nil
 }
 
-func (f *Forwarder) CopyTargetToClient() error {
+func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 	// only start if ack dial succeed
 	_, ok := <-f.Ack
 	if !ok {
@@ -65,11 +65,15 @@ func (f *Forwarder) CopyTargetToClient() error {
 	// loop read target and forward
 	for {
 		select {
-		case <-f.Ctx.Done():
+		case <-ctx.Done():
 			return nil
 		default:
-			if err := f.copyTargetToClient(buf); err != nil {
-				return err
+			err = f.copyTargetToClient(buf)
+			if err == io.EOF {
+				return nil
+			}
+			if err != nil {
+				return fmt.Errorf("copy target to client error: %w", err)
 			}
 		}
 	}
@@ -130,7 +134,7 @@ func (f *Forwarder) handshake() error {
 	return nil
 }
 
-func (f *Forwarder) CopyClientToTarget() error {
+func (f *Forwarder) CopyClientToTarget(ctx context.Context) error {
 	defer close(f.Ack)
 
 	// do the handshake first
@@ -146,11 +150,15 @@ func (f *Forwarder) CopyClientToTarget() error {
 	buf := new(proto.ProxySRC)
 	for {
 		select {
-		case <-f.Ctx.Done():
+		case <-ctx.Done():
 			return nil
 		default:
-			if err = f.copyClientToTarget(buf); err != nil {
-				return err
+			err = f.copyClientToTarget(buf)
+			if err == io.EOF {
+				return nil
+			}
+			if err != nil {
+				return fmt.Errorf("copy client to target error: %w", err)
 			}
 		}
 	}
@@ -174,37 +182,22 @@ func (f *Forwarder) copyClientToTarget(buf *proto.ProxySRC) (err error) {
 	//log.Printf("RX: %s", string(data))
 
 	// write to remote
-	_, err = f.Conn.Write(v.Payload)
+	var n int
+	n, err = f.Conn.Write(v.Payload)
+	if n < len(v.Payload) {
+		return io.ErrShortWrite
+	}
 	return err
 }
 
 func (f *Forwarder) Start() error {
-	// always close conn
-	defer utils.Close(f)
+	errGroup, ctx := errgroup.WithContext(f.Ctx)
+	errGroup.Go(func() error {
+		return f.CopyClientToTarget(ctx)
+	})
+	errGroup.Go(func() error {
+		return f.CopyTargetToClient(ctx)
+	})
 
-	// buffered err ch
-	proxyErr := make(chan error, 2)
-
-	// target <- client
-	go func() {
-		err := f.CopyClientToTarget()
-		if err != nil && err != io.EOF {
-			err = fmt.Errorf("stream copy failed: client -> target, err=%w", err)
-		}
-		proxyErr <- err
-	}()
-
-	// target -> client
-	go func() {
-		err := f.CopyTargetToClient()
-		if err != nil && err != io.EOF {
-			err = fmt.Errorf("stream copy failed: client <- target, err=%w", err)
-		}
-		proxyErr <- err
-	}()
-
-	// return the last error
-	err := <-proxyErr
-
-	return err
+	return errGroup.Wait()
 }
