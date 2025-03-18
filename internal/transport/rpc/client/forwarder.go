@@ -15,16 +15,16 @@ import (
 )
 
 type Statistic struct {
-	Tx uint64
-	Rx uint64
+	Tx atomic.Uint64
+	Rx atomic.Uint64
 }
 
-func (s Statistic) AddTx(delta uint64) {
-	atomic.AddUint64(&s.Tx, delta)
+func (s *Statistic) AddTx(delta uint64) {
+	s.Tx.Add(delta)
 }
 
-func (s Statistic) AddRx(delta uint64) {
-	atomic.AddUint64(&s.Rx, delta)
+func (s *Statistic) AddRx(delta uint64) {
+	s.Rx.Add(delta)
 }
 
 type Forwarder struct {
@@ -56,6 +56,7 @@ func (f *Forwarder) copySRCtoTarget(buf []byte) error {
 	if err != nil {
 		return err
 	}
+	f.Statistic.AddTx(uint64(n))
 
 	//fmt.Printf("<----- packet size: %d\n%s\n", n, buf)
 	// send to rpc
@@ -69,7 +70,6 @@ func (f *Forwarder) copySRCtoTarget(buf []byte) error {
 		return err
 	}
 
-	f.Statistic.AddTx(uint64(n))
 	return nil
 	//log.Println("rpc client msg forwarded")
 }
@@ -110,6 +110,7 @@ func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) (err error) {
 		if !ok {
 			return transport.ErrInvalidMessage
 		}
+		f.Statistic.AddRx(uint64(len(v.Payload)))
 
 		// data size already aligned with transport.bufferSize, skip copy in trunk
 		n, err := f.writer.Write(v.Payload)
@@ -121,7 +122,6 @@ func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) (err error) {
 		if n < len(v.Payload) {
 			return io.ErrShortWrite
 		}
-		f.Statistic.AddRx(uint64(n))
 		//log.Println("rpc server msg forwarded")
 	case proxy.ProxyStatus_Accepted:
 		v, ok := buf.HeaderOrPayload.(*proxy.ProxyDST_Header)
@@ -218,7 +218,7 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 	}
 
 	err := errGroup.Wait()
-	log.Printf("session: %s: %d bytes sent, %d bytes received", req.Host, f.Statistic.Tx, f.Statistic.Rx)
+	log.Printf("session: %s: %d bytes sent, %d bytes received", req.Host, f.Statistic.Tx.Load(), f.Statistic.Rx.Load())
 
 	if err != io.EOF {
 		return err
