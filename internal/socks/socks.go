@@ -8,6 +8,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"log"
 	"net"
+	"sync"
 )
 
 const (
@@ -25,16 +26,17 @@ type Config struct {
 // Server is responsible for accepting connections and handling
 // the details of the SOCKS5 protocol
 type Server struct {
-	Ctx      context.Context
-	Config   *Config
-	Listener net.Listener
+	ctx       context.Context
+	config    *Config
+	listener  net.Listener
+	closeOnce sync.Once
 }
 
 // New creates a new Server and potentially returns an error
-func New(ctx context.Context, conf *Config) *Server {
+func New(ctx context.Context, cfg *Config) *Server {
 	server := &Server{
-		Ctx:    ctx,
-		Config: conf,
+		ctx:    ctx,
+		config: cfg,
 	}
 	return server
 }
@@ -45,35 +47,60 @@ func (s *Server) ListenAndServe(network, addr string) error {
 	if err != nil {
 		return fmt.Errorf("failed to listen addr [%s] %s: %v", network, addr, err)
 	}
-	s.Listener = l
-	return s.Serve()
+	s.listener = l
+
+	// Create error channel for server errors
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- s.Serve()
+	}()
+
+	// Wait for context done or server error
+	select {
+	case err = <-serverErr:
+		return err
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
 }
 
-func (s *Server) Close() error {
-	if s.Listener != nil {
-		return s.Listener.Close()
+func (s *Server) Close() (err error) {
+	if s.listener == nil {
+		return nil
 	}
-	return nil
+
+	s.closeOnce.Do(func() {
+		log.Println("socks: shutting down")
+		err = s.listener.Close()
+	})
+	return err
 }
 
 // Serve is used to serve connections from a listener
 func (s *Server) Serve() error {
-	log.Printf("socks started at %s", s.Listener.Addr())
+	log.Printf("socks started at %s", s.listener.Addr())
 	for {
-		conn, err := s.Listener.Accept()
-		if err != nil {
-			select {
-			case <-s.Ctx.Done():
-				return nil
-			default:
+		select {
+		case <-s.ctx.Done():
+			return nil
+		default:
+			conn, err := s.listener.Accept()
+			if err != nil {
+				if errors.Is(err, net.ErrClosed) {
+					return nil // normal shutdown
+				}
+				var ne net.Error
+				if errors.As(err, &ne) && ne.Timeout() {
+					continue
+				}
 				return err
 			}
+			go func() {
+				if err := s.ServeConn(conn); err != nil {
+					log.Printf("[ERR] socks: %v", err)
+				}
+			}()
 		}
-		go func() {
-			if err := s.ServeConn(conn); err != nil {
-				log.Printf("[ERR] socks: %v", err)
-			}
-		}()
 	}
 }
 

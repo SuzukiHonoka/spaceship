@@ -56,7 +56,6 @@ func (f *Forwarder) copySRCtoTarget(buf []byte) error {
 	if err != nil {
 		return err
 	}
-	f.Statistic.AddTx(uint64(n))
 
 	//fmt.Printf("<----- packet size: %d\n%s\n", n, buf)
 	// send to rpc
@@ -65,24 +64,34 @@ func (f *Forwarder) copySRCtoTarget(buf []byte) error {
 			Payload: buf[:n],
 		},
 	}
-	return f.stream.Send(srcData)
+
+	if err = f.stream.Send(srcData); err != nil {
+		return err
+	}
+
+	f.Statistic.AddTx(uint64(n))
+	return nil
 	//log.Println("rpc client msg forwarded")
 }
 
 func (f *Forwarder) CopyTargetToSRC(ctx context.Context) (err error) {
-	buf := new(proxy.ProxyDST)
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-			if err = f.copyTargetToSRC(buf); err != nil {
-				if err == io.EOF {
-					return nil
-				}
-				return err
+	errCh := make(chan struct{}, 1)
+	go func() {
+		buf := new(proxy.ProxyDST)
+		for {
+			err = f.copyTargetToSRC(buf)
+			if err != nil {
+				errCh <- struct{}{}
+				return
 			}
 		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-errCh:
+		return err
 	}
 }
 
@@ -112,8 +121,7 @@ func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) (err error) {
 		if n < len(v.Payload) {
 			return io.ErrShortWrite
 		}
-
-		f.Statistic.Rx += uint64(n)
+		f.Statistic.AddRx(uint64(n))
 		//log.Println("rpc server msg forwarded")
 	case proxy.ProxyStatus_Accepted:
 		v, ok := buf.HeaderOrPayload.(*proxy.ProxyDST_Header)
@@ -134,20 +142,24 @@ func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) (err error) {
 }
 
 func (f *Forwarder) CopySRCtoTarget(ctx context.Context) (err error) {
-	// buffer
-	buf := transport.AllocateBuffer()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-			if err = f.copySRCtoTarget(buf); err != nil {
-				if err == io.EOF {
-					return nil
-				}
-				return err
+	errCh := make(chan struct{}, 1)
+	go func() {
+		// buffer
+		buf := transport.AllocateBuffer()
+		for {
+			err = f.copySRCtoTarget(buf)
+			if err != nil {
+				errCh <- struct{}{}
+				return
 			}
 		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-errCh:
+		return err
 	}
 }
 
@@ -166,22 +178,24 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 		return fmt.Errorf("rpc: send handshake to server: %s failed: %w", req.Host, err)
 	}
 
-	ctx, cancel := context.WithCancel(f.ctx)
-	defer cancel()
-
-	errGroup, ctx := errgroup.WithContext(ctx)
+	errGroup, ctx := errgroup.WithContext(f.ctx)
 	// rpc stream receiver
 	errGroup.Go(func() error {
-		err := f.CopyTargetToSRC(ctx)
-		if err != nil {
+		if err := f.CopyTargetToSRC(ctx); err != nil {
+			if err == io.EOF {
+				return err
+			}
 			return fmt.Errorf("copy target to src error: %w", err)
 		}
 		return nil
 	})
+
 	// rpc stream sender
 	errGroup.Go(func() error {
-		err := f.CopySRCtoTarget(ctx)
-		if err != nil {
+		if err := f.CopySRCtoTarget(ctx); err != nil {
+			if err == io.EOF {
+				return err
+			}
 			return fmt.Errorf("copy src to target error: %w", err)
 		}
 		return nil
@@ -204,7 +218,10 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 	}
 
 	err := errGroup.Wait()
-
 	log.Printf("session: %s: %d bytes sent, %d bytes received", req.Host, f.Statistic.Tx, f.Statistic.Rx)
-	return err
+
+	if err != io.EOF {
+		return err
+	}
+	return nil
 }

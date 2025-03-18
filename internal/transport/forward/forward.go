@@ -55,6 +55,21 @@ func (f *Forward) Dial(network, addr string) (net.Conn, error) {
 	return nil, fmt.Errorf("%s: dialer not attached", f)
 }
 
+func (f *Forward) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader) error {
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := io.CopyBuffer(dst, src, transport.AllocateBuffer())
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (f *Forward) Proxy(ctx context.Context, req *transport.Request, localAddr chan<- string, dst io.Writer, src io.Reader) (err error) {
 	defer close(localAddr)
 
@@ -69,20 +84,15 @@ func (f *Forward) Proxy(ctx context.Context, req *transport.Request, localAddr c
 	errGroup, ctx := errgroup.WithContext(ctx)
 	// src -> dst
 	errGroup.Go(func() error {
-		_, err := io.CopyBuffer(f.conn, src, transport.AllocateBuffer())
-		if err != nil && err != io.EOF {
-			return fmt.Errorf("forward: %w", err)
-		}
-		return nil
+		return f.copyBuffer(ctx, f.conn, src)
 	})
 	// src <- dst
 	errGroup.Go(func() error {
-		_, err := io.CopyBuffer(dst, f.conn, transport.AllocateBuffer())
-		if err != nil && err != io.EOF {
-			return fmt.Errorf("forward: %w", err)
-		}
-		return nil
+		return f.copyBuffer(ctx, dst, f.conn)
 	})
 
-	return errGroup.Wait()
+	if err = errGroup.Wait(); err != nil && err != io.EOF {
+		return fmt.Errorf("forward: %w", err)
+	}
+	return nil
 }

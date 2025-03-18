@@ -11,6 +11,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"github.com/SuzukiHonoka/spaceship/pkg/config"
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 	"log"
 	"strings"
 )
@@ -21,7 +22,7 @@ type Launcher struct {
 
 func NewLauncher() *Launcher {
 	return &Launcher{
-		sigStop: make(chan struct{}),
+		sigStop: make(chan struct{}, 1),
 	}
 }
 
@@ -52,31 +53,34 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 		return fmt.Errorf("init client failed: %w", err)
 	}
 
-	// error channel for http/socks server
-	errChan := make(chan error)
-
-	// create socks server
-	if cfg.ListenSocks != "" {
-		socksCfg := new(socks.Config)
-
-		// setup auth if set
-		if cfg.BasicAuth != "" {
-			user, password, ok := strings.Cut(cfg.BasicAuth, ":")
+	// setup auth if set
+	var basicAuth map[string]string
+	if len(cfg.BasicAuth) > 0 {
+		basicAuth = make(map[string]string, len(cfg.BasicAuth))
+		for _, s := range cfg.BasicAuth {
+			user, password, ok := strings.Cut(s, ":")
 			if !ok {
 				return errors.New("basic auth format error")
 			}
-			socksCfg.Credentials = map[string]string{
-				user: password,
-			}
+			basicAuth[user] = password
 		}
+		log.Printf("basic auth enabled, users count: %d", len(basicAuth))
+	}
 
+	errGroup, ctx := errgroup.WithContext(ctx)
+
+	// create socks server
+	if cfg.ListenSocks != "" {
+		socksCfg := &socks.Config{Credentials: basicAuth}
 		s := socks.New(ctx, socksCfg)
 		defer utils.Close(s)
-		go func() {
+
+		errGroup.Go(func() error {
 			if err := s.ListenAndServe("tcp", cfg.ListenSocks); err != nil {
-				errChan <- fmt.Errorf("serve socks failed: %w", err)
+				return fmt.Errorf("serve socks failed: %w", err)
 			}
-		}()
+			return nil
+		})
 	}
 
 	// create socks server for unix socket
@@ -85,38 +89,41 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 		if cfg.ListenSocksUnix[0] != '/' {
 			cfg.ListenSocksUnix = "\x00" + cfg.ListenSocksUnix
 		}
-
-		socksCfg := new(socks.Config)
+		socksCfg := &socks.Config{Credentials: basicAuth}
 		s := socks.New(ctx, socksCfg)
 		defer utils.Close(s)
-		go func() {
+
+		errGroup.Go(func() error {
 			if err := s.ListenAndServe("unix", cfg.ListenSocksUnix); err != nil {
-				errChan <- fmt.Errorf("serve unix socks failed: %w", err)
+				return fmt.Errorf("serve unix socks failed: %w", err)
 			}
-		}()
+			return nil
+		})
 	}
 
 	// create http server
 	if cfg.ListenHttp != "" {
-		h := http.New(ctx)
+		httpCfg := &http.Config{Credentials: basicAuth}
+		h := http.New(ctx, httpCfg)
 		defer utils.Close(h)
-		go func() {
+
+		errGroup.Go(func() error {
 			if err := h.ListenAndServe("tcp", cfg.ListenHttp); err != nil {
-				errChan <- fmt.Errorf("serve http failed: %w", err)
+				return fmt.Errorf("serve http failed: %w", err)
 			}
-		}()
+			return nil
+		})
 	}
 
 	// listen interrupts
-	go func() {
-		l.listenSignal()
-	}()
+	errGroup.Go(func() error {
+		return l.listenSignal(ctx)
+	})
 
 	// blocks main
-	select {
-	case err := <-errChan:
+	err := errGroup.Wait()
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, ErrSignalArrived) {
 		return fmt.Errorf("inbound process error: %w", err)
-	case <-l.sigStop:
 	}
 	return nil
 }

@@ -13,30 +13,92 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 )
 
+// Config is used to set up and configure a Server
+type Config struct {
+	// If provided, username/password authentication is enabled,
+	// by appending a UserPassAuthenticator to AuthMethods. If not provided,
+	// and AUthMethods is nil, then "auth-less" mode is enabled.
+	Credentials StaticCredentials
+}
+
 type Server struct {
-	Ctx context.Context
-	srv *http.Server
+	ctx       context.Context
+	config    *Config
+	srv       *http.Server
+	closeOnce sync.Once
 }
 
-func New(ctx context.Context) *Server {
+func New(ctx context.Context, cfg *Config) *Server {
 	return &Server{
-		Ctx: ctx,
+		ctx:    ctx,
+		config: cfg,
 	}
 }
 
-func (s *Server) Close() error {
-	if s.srv != nil {
-		return s.srv.Close()
+func (s *Server) Close() (err error) {
+	if s.srv == nil {
+		return nil
 	}
-	return nil
+	s.closeOnce.Do(func() {
+		log.Println("http: shutting down")
+		// Graceful shutdown with timeout
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		err = s.srv.Shutdown(shutdownCtx)
+	})
+	return err
 }
 
 func (s *Server) ListenAndServe(_, addr string) error {
 	log.Printf("http will listen at %s", addr)
-	s.srv = &http.Server{Addr: addr, Handler: http.HandlerFunc(s.Handle)}
-	return s.srv.ListenAndServe()
+	s.srv = &http.Server{Addr: addr, Handler: s.proxyAuth(http.HandlerFunc(s.Handle))}
+	// Create error channel for server errors
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- s.srv.ListenAndServe()
+	}()
+
+	// Wait for context done or server error
+	select {
+	case err := <-serverErr:
+		return err
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
+}
+
+// proxyAuth middleware for HTTP proxy authentication
+func (s *Server) proxyAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.config.Credentials == nil || len(s.config.Credentials) == 0 {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Extract credentials from the Proxy-Authorization header
+		proxyAuth := r.Header.Get("Proxy-Authorization")
+		if proxyAuth == "" {
+			// No auth provided, request authentication
+			w.Header().Set("Proxy-Authenticate", `Basic realm="Proxy"`)
+			w.WriteHeader(http.StatusProxyAuthRequired)
+			return
+		}
+
+		// We'd need to manually parse the Proxy-Authorization header here
+		user, pass, ok := parseBasicAuth(proxyAuth)
+		if !ok || !s.config.Credentials.Valid([]byte(user), []byte(pass)) {
+			w.Header().Set("Proxy-Authenticate", `Basic realm="Proxy"`)
+			w.WriteHeader(http.StatusProxyAuthRequired)
+			return
+		}
+
+		// Authentication successful, continue to the actual proxy handling
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +170,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	//	}
 	//}()
 
-	proxyCtx, cancel := context.WithCancel(s.Ctx)
+	proxyCtx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 
 	go func() {
@@ -180,7 +242,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	// wait for proxy to finish
 	select {
-	case <-s.Ctx.Done():
+	case <-s.ctx.Done():
 		return
 	case err = <-forwardErr:
 		if err != nil && err != io.EOF {
@@ -234,7 +296,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	proxyErr := make(chan error)
 	proxyLocalAddr := make(chan string)
 
-	proxyCtx, cancel := context.WithCancel(s.Ctx)
+	proxyCtx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 
 	go func() {
@@ -256,7 +318,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	// wait for proxy to finish
 	select {
-	case <-s.Ctx.Done():
+	case <-s.ctx.Done():
 	case err = <-proxyErr:
 		if err != nil {
 			ServeError(conn, fmt.Errorf("http: proxy failed: %w", err))

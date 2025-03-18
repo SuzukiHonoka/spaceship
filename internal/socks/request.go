@@ -117,11 +117,11 @@ func (s *Server) handleRequest(req *Request, conn ConnWriter) error {
 	// Switch on the command
 	switch req.Command {
 	case ConnectCommand:
-		return s.handleConnect(s.Ctx, conn, req)
+		return s.handleConnect(s.ctx, conn, req)
 	case BindCommand:
-		return s.handleBind(s.Ctx, conn, req)
+		return s.handleBind(s.ctx, conn, req)
 	case AssociateCommand:
-		return s.handleAssociate(s.Ctx, conn, req)
+		return s.handleAssociate(s.ctx, conn, req)
 	default:
 		if err := sendReply(conn, commandNotSupported, nil); err != nil {
 			return fmt.Errorf("failed to send reply: %v", err)
@@ -157,7 +157,7 @@ func (s *Server) handleConnect(_ context.Context, conn ConnWriter, req *Request)
 	localAdder := make(chan string)
 	proxyError := make(chan error)
 
-	proxyCtx, cancel := context.WithCancel(s.Ctx)
+	proxyCtx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 
 	go func() {

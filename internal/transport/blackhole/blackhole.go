@@ -47,7 +47,7 @@ func (h *BlackHole) Proxy(ctx context.Context, _ *transport.Request, localAddr c
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return ctx.Err()
 		default:
 			if _, err = src.Read(buf); err != nil {
 				if err == io.EOF {

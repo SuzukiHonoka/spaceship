@@ -79,7 +79,7 @@ func (s *Server) Proxy(stream proto.Proxy_ProxyServer) error {
 	f := NewForwarder(ctx, s.Users, stream)
 	defer utils.Close(f)
 
-	if err := f.Start(); err != nil && err != io.EOF {
+	if err := f.Start(); err != nil && err != io.EOF && !errors.Is(err, context.Canceled) {
 		if ev, ok := status.FromError(err); ok {
 			if ev.Code() == codes.Canceled {
 				return nil

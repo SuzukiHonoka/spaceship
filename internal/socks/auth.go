@@ -92,7 +92,7 @@ func (a UserPassAuthenticator) Authenticate(reader io.Reader, writer io.Writer) 
 	}
 
 	// Verify the password
-	if a.Credentials.Valid(string(user), string(pass)) {
+	if a.Credentials.Valid(user, pass) {
 		if _, err := writer.Write([]byte{userAuthVersion, authSuccess}); err != nil {
 			return nil, err
 		}
@@ -115,13 +115,13 @@ func (s *Server) authenticate(conn io.Writer, bufConn io.Reader) (*AuthContext, 
 		return nil, fmt.Errorf("failed to get auth methods: %v", err)
 	}
 	// if credentials not exist
-	if s.Config.Credentials == nil {
+	if s.config.Credentials == nil || len(s.config.Credentials) == 0 {
 		return NoAuthAuthenticator{}.Authenticate(bufConn, conn)
 	}
 	// check client whether supported user-password auth
 	for _, method := range methods {
 		if method == UserPassAuth {
-			return UserPassAuthenticator{s.Config.Credentials}.Authenticate(bufConn, conn)
+			return UserPassAuthenticator{s.config.Credentials}.Authenticate(bufConn, conn)
 		}
 	}
 	// no usable method found

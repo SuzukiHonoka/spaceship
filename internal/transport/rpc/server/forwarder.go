@@ -59,23 +59,25 @@ func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 		return fmt.Errorf("send local addr to client error: %w", err)
 	}
 
-	// buffer
-	buf := transport.AllocateBuffer()
 	//log.Println("reading from target connection started")
 	// loop read target and forward
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
+	errCh := make(chan struct{}, 1)
+	go func() {
+		buf := transport.AllocateBuffer()
+		for {
 			err = f.copyTargetToClient(buf)
-			if err == io.EOF {
-				return nil
-			}
 			if err != nil {
-				return fmt.Errorf("copy target to client error: %w", err)
+				errCh <- struct{}{}
+				return
 			}
 		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-errCh:
+		return err
 	}
 }
 
@@ -147,20 +149,23 @@ func (f *Forwarder) CopyClientToTarget(ctx context.Context) error {
 	f.Ack <- struct{}{}
 
 	// loop read client and forward
-	buf := new(proto.ProxySRC)
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
+	errCh := make(chan struct{}, 1)
+	go func() {
+		buf := new(proto.ProxySRC)
+		for {
 			err = f.copyClientToTarget(buf)
-			if err == io.EOF {
-				return nil
-			}
 			if err != nil {
-				return fmt.Errorf("copy client to target error: %w", err)
+				errCh <- struct{}{}
+				return
 			}
 		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-errCh:
+		return err
 	}
 }
 
@@ -193,10 +198,22 @@ func (f *Forwarder) copyClientToTarget(buf *proto.ProxySRC) (err error) {
 func (f *Forwarder) Start() error {
 	errGroup, ctx := errgroup.WithContext(f.Ctx)
 	errGroup.Go(func() error {
-		return f.CopyClientToTarget(ctx)
+		if err := f.CopyClientToTarget(ctx); err != nil {
+			if err == io.EOF {
+				return err
+			}
+			return fmt.Errorf("copy client to target error: %w", err)
+		}
+		return nil
 	})
 	errGroup.Go(func() error {
-		return f.CopyTargetToClient(ctx)
+		if err := f.CopyTargetToClient(ctx); err != nil {
+			if err == io.EOF {
+				return err
+			}
+			return fmt.Errorf("copy target to client error: %w", err)
+		}
+		return nil
 	})
 
 	return errGroup.Wait()
