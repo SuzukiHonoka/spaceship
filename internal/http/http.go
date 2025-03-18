@@ -55,7 +55,14 @@ func (s *Server) Close() (err error) {
 
 func (s *Server) ListenAndServe(_, addr string) error {
 	log.Printf("http will listen at %s", addr)
-	s.srv = &http.Server{Addr: addr, Handler: s.proxyAuth(http.HandlerFunc(s.Handle))}
+	handlerFunc := func() http.Handler {
+		if s.config.Credentials != nil && len(s.config.Credentials) > 0 {
+			return s.proxyAuth(http.HandlerFunc(s.Handle))
+		}
+		return http.HandlerFunc(s.Handle)
+	}()
+
+	s.srv = &http.Server{Addr: addr, Handler: handlerFunc}
 	// Create error channel for server errors
 	serverErr := make(chan error, 1)
 	go func() {
@@ -74,11 +81,6 @@ func (s *Server) ListenAndServe(_, addr string) error {
 // proxyAuth middleware for HTTP proxy authentication
 func (s *Server) proxyAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.config.Credentials == nil || len(s.config.Credentials) == 0 {
-			next.ServeHTTP(w, r)
-			return
-		}
-
 		// Extract credentials from the Proxy-Authorization header
 		proxyAuth := r.Header.Get("Proxy-Authorization")
 		if proxyAuth == "" {
