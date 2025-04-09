@@ -16,6 +16,7 @@ steps:
       GOPATH: /go
       CGO_ENABLED: 1
     commands:
+      - apk add --no-cache gcc musl-dev
       - go vet ./...
       - go test -race -coverprofile=coverage.out -covermode=atomic ./...
       - go tool cover -func=coverage.out
