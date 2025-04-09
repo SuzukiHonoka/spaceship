@@ -11,6 +11,8 @@ import (
 	"sync"
 )
 
+var ErrIllegalRequest = errors.New("illegal request")
+
 const (
 	socks5Version = uint8(5)
 )
@@ -143,6 +145,9 @@ func (s *Server) ServeConn(conn net.Conn) error {
 	}
 	request.AuthContext = authContext
 	if client, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+		if client.Port < 0 || client.Port > 65535 {
+			return fmt.Errorf("%w: invalid port: %d", ErrIllegalRequest, client.Port)
+		}
 		request.RemoteAddr = &AddrSpec{IP: client.IP, Port: uint16(client.Port)}
 	}
 

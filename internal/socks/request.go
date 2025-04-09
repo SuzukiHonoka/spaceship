@@ -254,7 +254,7 @@ func readAddrSpec(r io.Reader) (*AddrSpec, error) {
 	if _, err := io.ReadAtLeast(r, port, 2); err != nil {
 		return nil, err
 	}
-	d.Port = uint16((int(port[0]) << 8) | int(port[1]))
+	d.Port = (uint16(port[0]) << 8) | uint16(port[1])
 
 	return d, nil
 }

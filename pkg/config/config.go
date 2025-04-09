@@ -16,6 +16,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/pkg/logger"
 	"log"
 	"os"
+	"path/filepath"
 )
 
 // MixedConfig is a server/client mixed config, along with general config.
@@ -36,7 +37,11 @@ type MixedConfig struct {
 
 // NewFromConfigFile loads the config from the file in the specific path.
 func NewFromConfigFile(path string) (*MixedConfig, error) {
-	f, err := os.Open(path)
+	// Clean the path to remove any directory traversal attempts
+	cleanPath := filepath.Clean(path)
+
+	// Read the config file
+	f, err := os.Open(cleanPath)
 	if err != nil {
 		return nil, err
 	}

@@ -56,6 +56,9 @@ func (f *Forwarder) copySRCtoTarget(buf []byte) error {
 	if err != nil {
 		return err
 	}
+	if n <= 0 {
+		return io.EOF
+	}
 	f.Statistic.AddTx(uint64(n))
 
 	//fmt.Printf("<----- packet size: %d\n%s\n", n, buf)
@@ -110,7 +113,10 @@ func (f *Forwarder) copyTargetToSRC() error {
 		if !ok {
 			return transport.ErrInvalidMessage
 		}
-		f.Statistic.AddRx(uint64(len(v.Payload)))
+
+		if len(v.Payload) <= 0 {
+			return io.EOF
+		}
 
 		// data size already aligned with transport.bufferSize, skip copy in trunk
 		n, err := f.writer.Write(v.Payload)
@@ -118,6 +124,8 @@ func (f *Forwarder) copyTargetToSRC() error {
 			// log.Printf("error when sending client request to target stream: %v", err)
 			return err
 		}
+		f.Statistic.AddRx(uint64(n))
+
 		// data integrity check
 		if n < len(v.Payload) {
 			return io.ErrShortWrite

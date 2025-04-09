@@ -14,6 +14,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -46,16 +47,10 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 		}
 
 		// load custom cas if exist
-		for _, path := range cas {
-			cert, err := os.ReadFile(path)
-			if err != nil {
-				log.Printf("read CA file from path: %s failed: %v", path, err)
-				continue
-			}
-			if !pool.AppendCertsFromPEM(cert) {
-				log.Printf("CA: [%s] add to cert pool failed", path)
-			}
+		if err = loadCertificateAuthorities(pool, cas); err != nil {
+			return fmt.Errorf("load custom ca failed: %w", err)
 		}
+
 		// error handling omitted
 		credential = credentials.NewClientTLSFromCert(pool, hostName)
 	} else {
@@ -64,6 +59,24 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 	params := NewParams(server, append(rpc.DialOptions, grpc.WithTransportCredentials(credential))...)
 	connQueue = NewConnQueue(int(mux), params)
 	return connQueue.Init()
+}
+
+func loadCertificateAuthorities(pool *x509.CertPool, cas []string) error {
+	for _, path := range cas {
+		// Clean the path to remove any directory traversal attempts
+		cleanPath := filepath.Clean(path)
+
+		// Read the CA file
+		cert, err := os.ReadFile(cleanPath)
+		if err != nil {
+			return err
+		}
+
+		if !pool.AppendCertsFromPEM(cert) {
+			return fmt.Errorf("failed to append %s to CA certificates", cleanPath)
+		}
+	}
+	return nil
 }
 
 func Destroy() {

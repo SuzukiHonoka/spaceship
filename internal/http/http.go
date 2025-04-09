@@ -62,7 +62,12 @@ func (s *Server) ListenAndServe(_, addr string) error {
 		return http.HandlerFunc(s.Handle)
 	}()
 
-	s.srv = &http.Server{Addr: addr, Handler: handlerFunc}
+	s.srv = &http.Server{
+		Addr:              addr,
+		Handler:           handlerFunc,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
 	// Create error channel for server errors
 	serverErr := make(chan error, 1)
 	go func() {
