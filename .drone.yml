@@ -1,0 +1,54 @@
+kind: pipeline
+type: docker
+name: golang-lint-and-coverage
+
+steps:
+  - name: lint
+    image: golangci/golangci-lint:v2.0.2-alpine
+    commands:
+      - golangci-lint run --timeout=5m ./...
+
+  - name: test-with-coverage
+    image: golang:alpine
+    environment:
+      GO111MODULE: on
+      GOCACHE: /go/cache
+      GOPATH: /go
+    commands:
+      - go test -race -coverprofile=coverage.out -covermode=atomic ./...
+      - go tool cover -func=coverage.out
+      # Set the build to fail if coverage is below threshold
+      - |
+        COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+        THRESHOLD=80
+        echo "Code coverage is $COVERAGE%, threshold is $THRESHOLD%"
+        if (( $(echo "$COVERAGE < $THRESHOLD" | bc -l) )); then
+          echo "Code coverage is below threshold"
+          exit 1
+        fi
+      
+  - name: coverage-report
+    image: plugins/codecov
+    settings:
+      token:
+        from_secret: codecov_token
+      files:
+        - coverage.out
+    depends_on:
+      - test-with-coverage
+    when:
+      branch:
+        - main
+        - master
+      event:
+        - push
+        - pull_request
+
+volumes:
+  - name: go-cache
+    temp: {}
+
+trigger:
+  event:
+    - push
+    - pull_request
