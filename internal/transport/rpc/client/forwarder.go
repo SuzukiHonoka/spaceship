@@ -57,9 +57,8 @@ func (f *Forwarder) copySRCtoTarget(buf []byte) error {
 		return err
 	}
 	if n <= 0 {
-		return io.EOF
+		return transport.ErrInvalidPayload
 	}
-	f.Statistic.AddTx(uint64(n))
 
 	//fmt.Printf("<----- packet size: %d\n%s\n", n, buf)
 	// send to rpc
@@ -73,6 +72,7 @@ func (f *Forwarder) copySRCtoTarget(buf []byte) error {
 		return err
 	}
 
+	f.Statistic.AddTx(uint64(n))
 	return nil
 	//log.Println("rpc client msg forwarded")
 }
@@ -113,9 +113,8 @@ func (f *Forwarder) copyTargetToSRC() error {
 		if !ok {
 			return transport.ErrInvalidMessage
 		}
-
 		if len(v.Payload) <= 0 {
-			return io.EOF
+			return transport.ErrInvalidPayload
 		}
 
 		// data size already aligned with transport.bufferSize, skip copy in trunk
@@ -124,15 +123,13 @@ func (f *Forwarder) copyTargetToSRC() error {
 			// log.Printf("error when sending client request to target stream: %v", err)
 			return err
 		}
-		if n <= 0 {
-			return io.ErrUnexpectedEOF
-		}
-		f.Statistic.AddRx(uint64(n))
 
 		// data integrity check
-		if n < len(v.Payload) {
+		if n <= 0 || n < len(v.Payload) {
 			return io.ErrShortWrite
 		}
+
+		f.Statistic.AddRx(uint64(n))
 		//log.Println("rpc server msg forwarded")
 	case proxy.ProxyStatus_Accepted:
 		v, ok := buf.HeaderOrPayload.(*proxy.ProxyDST_Header)
