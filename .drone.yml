@@ -16,7 +16,7 @@ steps:
       GOPATH: /go
       CGO_ENABLED: 1
     commands:
-      - apk add --no-cache gcc musl-dev
+      - apk add --no-cache bc gcc musl-dev
       - go vet ./...
       - go test -race -coverprofile=coverage.out -covermode=atomic ./...
       - go tool cover -func=coverage.out
@@ -31,7 +31,7 @@ steps:
         fi
       
   - name: coverage-report
-    image: plugins/codecov
+    image: robertstettner/drone-codecov
     settings:
       token:
         from_secret: codecov_token
