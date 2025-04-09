@@ -16,6 +16,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/pkg/logger"
 	"log"
 	"os"
+	"path/filepath"
 )
 
 // MixedConfig is a server/client mixed config, along with general config.
@@ -24,7 +25,7 @@ type MixedConfig struct {
 	// supported roles: "server", "client"
 	Role `json:"role"`
 	// DNS is used for set up the custom dns as an upstream of global resolver.
-	*dns.DNS `json:"dns,omitempty"`
+	DNS *dns.DNS `json:"dns,omitempty"`
 	// CAs is used for append the custom CA to the system cert pool.
 	CAs []string `json:"cas,omitempty"`
 	// LogMode is used for set up specific log mod, defaults to stdout.
@@ -36,7 +37,11 @@ type MixedConfig struct {
 
 // NewFromConfigFile loads the config from the file in the specific path.
 func NewFromConfigFile(path string) (*MixedConfig, error) {
-	f, err := os.Open(path)
+	// Clean the path to remove any directory traversal attempts
+	cleanPath := filepath.Clean(path)
+
+	// Read the config file
+	f, err := os.Open(cleanPath)
 	if err != nil {
 		return nil, err
 	}

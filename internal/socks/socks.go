@@ -11,6 +11,8 @@ import (
 	"sync"
 )
 
+var ErrIllegalRequest = errors.New("illegal request")
+
 const (
 	socks5Version = uint8(5)
 )
@@ -134,7 +136,7 @@ func (s *Server) ServeConn(conn net.Conn) error {
 
 	request, err := NewRequest(bufConn)
 	if err != nil {
-		if errors.Is(err, unrecognizedAddrType) {
+		if errors.Is(err, ErrUnrecognizedAddrType) {
 			if err := sendReply(conn, addrTypeNotSupported, nil); err != nil {
 				return fmt.Errorf("failed to send reply: %v", err)
 			}
@@ -143,6 +145,9 @@ func (s *Server) ServeConn(conn net.Conn) error {
 	}
 	request.AuthContext = authContext
 	if client, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+		if client.Port < 0 || client.Port > 65535 {
+			return fmt.Errorf("%w: invalid port: %d", ErrIllegalRequest, client.Port)
+		}
 		request.RemoteAddr = &AddrSpec{IP: client.IP, Port: uint16(client.Port)}
 	}
 

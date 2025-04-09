@@ -10,4 +10,5 @@ var (
 	ErrBlocked         = errors.New("blocked")
 	ErrNotImplemented  = errors.New("not implemented")
 	ErrInvalidMessage  = errors.New("invalid message")
+	ErrInvalidPayload  = errors.New("invalid payload")
 )

@@ -15,8 +15,8 @@ const (
 )
 
 var (
-	UserAuthFailed  = fmt.Errorf("user authentication failed")
-	NoSupportedAuth = fmt.Errorf("no supported authentication mechanism")
+	ErrUserAuthFailed  = fmt.Errorf("user authentication failed")
+	ErrNoSupportedAuth = fmt.Errorf("no supported authentication mechanism")
 )
 
 // AuthContext A Request encapsulates authentication state provided during negotiation
@@ -100,7 +100,7 @@ func (a UserPassAuthenticator) Authenticate(reader io.Reader, writer io.Writer) 
 		if _, err := writer.Write([]byte{userAuthVersion, authFailure}); err != nil {
 			return nil, err
 		}
-		return nil, UserAuthFailed
+		return nil, ErrUserAuthFailed
 	}
 
 	// Done
@@ -115,7 +115,7 @@ func (s *Server) authenticate(conn io.Writer, bufConn io.Reader) (*AuthContext, 
 		return nil, fmt.Errorf("failed to get auth methods: %v", err)
 	}
 	// if credentials not exist
-	if s.config.Credentials == nil || len(s.config.Credentials) == 0 {
+	if len(s.config.Credentials) == 0 {
 		return NoAuthAuthenticator{}.Authenticate(bufConn, conn)
 	}
 	// check client whether supported user-password auth
@@ -132,7 +132,7 @@ func (s *Server) authenticate(conn io.Writer, bufConn io.Reader) (*AuthContext, 
 // authentication mechanism
 func noAcceptableAuth(conn io.Writer) error {
 	_, _ = conn.Write([]byte{socks5Version, noAcceptable})
-	return NoSupportedAuth
+	return ErrNoSupportedAuth
 }
 
 // readMethods is used to read the number of methods and proceeding auth methods

@@ -56,7 +56,9 @@ func (f *Forwarder) copySRCtoTarget(buf []byte) error {
 	if err != nil {
 		return err
 	}
-	f.Statistic.AddTx(uint64(n))
+	if n <= 0 {
+		return transport.ErrInvalidPayload
+	}
 
 	//fmt.Printf("<----- packet size: %d\n%s\n", n, buf)
 	// send to rpc
@@ -70,6 +72,7 @@ func (f *Forwarder) copySRCtoTarget(buf []byte) error {
 		return err
 	}
 
+	f.Statistic.AddTx(uint64(n))
 	return nil
 	//log.Println("rpc client msg forwarded")
 }
@@ -77,9 +80,8 @@ func (f *Forwarder) copySRCtoTarget(buf []byte) error {
 func (f *Forwarder) CopyTargetToSRC(ctx context.Context) (err error) {
 	errCh := make(chan struct{}, 1)
 	go func() {
-		buf := new(proxy.ProxyDST)
 		for {
-			err = f.copyTargetToSRC(buf)
+			err = f.copyTargetToSRC()
 			if err != nil {
 				errCh <- struct{}{}
 				return
@@ -95,9 +97,10 @@ func (f *Forwarder) CopyTargetToSRC(ctx context.Context) (err error) {
 	}
 }
 
-func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) (err error) {
+func (f *Forwarder) copyTargetToSRC() error {
 	//log.Println("rpc server reading..")
-	if buf, err = f.stream.Recv(); err != nil {
+	buf, err := f.stream.Recv()
+	if err != nil {
 		return err
 	}
 
@@ -110,7 +113,9 @@ func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) (err error) {
 		if !ok {
 			return transport.ErrInvalidMessage
 		}
-		f.Statistic.AddRx(uint64(len(v.Payload)))
+		if len(v.Payload) <= 0 {
+			return transport.ErrInvalidPayload
+		}
 
 		// data size already aligned with transport.bufferSize, skip copy in trunk
 		n, err := f.writer.Write(v.Payload)
@@ -118,10 +123,13 @@ func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) (err error) {
 			// log.Printf("error when sending client request to target stream: %v", err)
 			return err
 		}
+
 		// data integrity check
-		if n < len(v.Payload) {
+		if n <= 0 || n < len(v.Payload) {
 			return io.ErrShortWrite
 		}
+
+		f.Statistic.AddRx(uint64(n))
 		//log.Println("rpc server msg forwarded")
 	case proxy.ProxyStatus_Accepted:
 		v, ok := buf.HeaderOrPayload.(*proxy.ProxyDST_Header)

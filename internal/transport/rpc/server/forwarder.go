@@ -151,9 +151,8 @@ func (f *Forwarder) CopyClientToTarget(ctx context.Context) error {
 	// loop read client and forward
 	errCh := make(chan struct{}, 1)
 	go func() {
-		buf := new(proto.ProxySRC)
 		for {
-			err = f.copyClientToTarget(buf)
+			err = f.copyClientToTarget()
 			if err != nil {
 				errCh <- struct{}{}
 				return
@@ -169,9 +168,10 @@ func (f *Forwarder) CopyClientToTarget(ctx context.Context) error {
 	}
 }
 
-func (f *Forwarder) copyClientToTarget(buf *proto.ProxySRC) (err error) {
+func (f *Forwarder) copyClientToTarget() error {
 	//log.Println("rpc server receiving...")
-	if buf, err = f.Stream.Recv(); err != nil {
+	buf, err := f.Stream.Recv()
+	if err != nil {
 		return err
 	}
 
@@ -181,7 +181,7 @@ func (f *Forwarder) copyClientToTarget(buf *proto.ProxySRC) (err error) {
 	}
 
 	// return EOF if client closed or invalid message being received
-	if v.Payload == nil || len(v.Payload) == 0 {
+	if len(v.Payload) == 0 {
 		return io.EOF
 	}
 	//log.Printf("RX: %s", string(data))

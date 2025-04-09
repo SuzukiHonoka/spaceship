@@ -10,10 +10,6 @@ type User struct {
 
 type Users []*User
 
-func (u Users) NullOrEmpty() bool {
-	return u == nil || len(u) == 0
-}
-
 // Match returns true if the user id is in the users list
 // may use map for fast lookup in the future
 func (u Users) Match(id string) bool {

@@ -1,0 +1,73 @@
+kind: pipeline
+type: docker
+name: golang-ci
+
+steps:
+  - name: lint
+    image: golangci/golangci-lint:v2.0.2-alpine
+    commands:
+      - golangci-lint run --timeout=5m ./...
+
+  - name: format-check
+    image: golang:alpine
+    commands:
+      - apk add --no-cache bash
+      - gofmt -l . | tee /dev/stderr
+      - test -z "$(gofmt -l .)" # Fail if any files are not formatted
+
+  - name: dependency-check
+    image: golang:alpine
+    commands:
+      - apk add --no-cache git
+      - go mod tidy
+      - git diff --exit-code # Ensure no changes were made
+      - go mod verify
+
+  - name: security-scan
+    image: securego/gosec
+    commands:
+      - gosec ./...
+
+  - name: test-with-coverage
+    image: golang:alpine
+    environment:
+      GO111MODULE: on
+      GOCACHE: /go/cache
+      GOPATH: /go
+      CGO_ENABLED: 1
+    commands:
+      - apk add --no-cache gcc musl-dev
+      - go vet ./...
+      - go test -race -coverprofile=coverage.out -covermode=atomic ./...
+      - go tool cover -func=coverage.out
+      - |
+        COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+        THRESHOLD=80
+        echo "Code coverage is $COVERAGE%, threshold is $THRESHOLD%"
+        echo "Skipping coverage threshold check during early development"
+
+  - name: coverage-report
+    image: robertstettner/drone-codecov
+    settings:
+      token:
+        from_secret: codecov_token
+      files:
+        - coverage.out
+    depends_on:
+      - test-with-coverage
+    when:
+      branch:
+        - main
+        - master
+      event:
+        - push
+        - pull_request
+
+volumes:
+  - name: go-cache
+    temp: {}
+
+trigger:
+  event:
+    - push
+    - pull_request

@@ -22,7 +22,7 @@ func (m Mode) Set() {
 		log.Println("log disabled")
 		log.SetOutput(io.Discard)
 	default:
-		fd, err := os.OpenFile(string(m), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		fd, err := os.OpenFile(string(m), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {
 			log.Printf("Error when opening logfile: %v", err)
 			ModeDefault.Set()

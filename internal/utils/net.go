@@ -19,6 +19,10 @@ func SplitHostPort(s string) (string, uint16, error) {
 	if err != nil {
 		return "", 0, err
 	}
+	// Check if port is in valid range for uint16
+	if port < 0 || port > 65535 {
+		return "", 0, &net.AddrError{Err: "invalid port", Addr: sport}
+	}
 	return host, uint16(port), nil
 }
 

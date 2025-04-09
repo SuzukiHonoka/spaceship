@@ -36,7 +36,7 @@ const (
 )
 
 var (
-	unrecognizedAddrType = fmt.Errorf("unrecognized address type")
+	ErrUnrecognizedAddrType = fmt.Errorf("unrecognized address type")
 )
 
 // AddrSpec is used to return the target AddrSpec
@@ -57,7 +57,7 @@ func (a *AddrSpec) String() string {
 // Address returns a string suitable to dial; prefer returning IP-based
 // address, fallback to FQDN
 func (a *AddrSpec) Address() string {
-	if 0 != len(a.IP) {
+	if len(a.IP) != 0 {
 		return net.JoinHostPort(a.IP.String(), strconv.Itoa(int(a.Port)))
 	}
 	return net.JoinHostPort(a.FQDN, strconv.Itoa(int(a.Port)))
@@ -246,7 +246,7 @@ func readAddrSpec(r io.Reader) (*AddrSpec, error) {
 		d.FQDN = string(fqdn)
 
 	default:
-		return nil, unrecognizedAddrType
+		return nil, ErrUnrecognizedAddrType
 	}
 
 	// Read the port
@@ -254,7 +254,7 @@ func readAddrSpec(r io.Reader) (*AddrSpec, error) {
 	if _, err := io.ReadAtLeast(r, port, 2); err != nil {
 		return nil, err
 	}
-	d.Port = uint16((int(port[0]) << 8) | int(port[1]))
+	d.Port = (uint16(port[0]) << 8) | uint16(port[1])
 
 	return d, nil
 }
