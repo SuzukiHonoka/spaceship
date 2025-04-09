@@ -77,9 +77,8 @@ func (f *Forwarder) copySRCtoTarget(buf []byte) error {
 func (f *Forwarder) CopyTargetToSRC(ctx context.Context) (err error) {
 	errCh := make(chan struct{}, 1)
 	go func() {
-		buf := new(proxy.ProxyDST)
 		for {
-			err = f.copyTargetToSRC(buf)
+			err = f.copyTargetToSRC()
 			if err != nil {
 				errCh <- struct{}{}
 				return
@@ -95,9 +94,10 @@ func (f *Forwarder) CopyTargetToSRC(ctx context.Context) (err error) {
 	}
 }
 
-func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) (err error) {
+func (f *Forwarder) copyTargetToSRC() error {
 	//log.Println("rpc server reading..")
-	if buf, err = f.stream.Recv(); err != nil {
+	buf, err := f.stream.Recv()
+	if err != nil {
 		return err
 	}
 

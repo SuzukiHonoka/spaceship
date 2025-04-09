@@ -24,7 +24,7 @@ type MixedConfig struct {
 	// supported roles: "server", "client"
 	Role `json:"role"`
 	// DNS is used for set up the custom dns as an upstream of global resolver.
-	*dns.DNS `json:"dns,omitempty"`
+	DNS *dns.DNS `json:"dns,omitempty"`
 	// CAs is used for append the custom CA to the system cert pool.
 	CAs []string `json:"cas,omitempty"`
 	// LogMode is used for set up specific log mod, defaults to stdout.
