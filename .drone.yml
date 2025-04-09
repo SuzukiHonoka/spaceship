@@ -18,6 +18,7 @@ steps:
   - name: dependency-check
     image: golang:alpine
     commands:
+      - apk add --no-cache git
       - go mod tidy
       - git diff --exit-code # Ensure no changes were made
       - go mod verify
