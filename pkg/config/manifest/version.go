@@ -1,3 +1,3 @@
 package manifest
 
-const VersionCode = "1.9.7"
+const VersionCode = "1.9.8"
