@@ -124,6 +124,9 @@ func (f *Forwarder) copyTargetToSRC() error {
 			// log.Printf("error when sending client request to target stream: %v", err)
 			return err
 		}
+		if n <= 0 {
+			return io.ErrUnexpectedEOF
+		}
 		f.Statistic.AddRx(uint64(n))
 
 		// data integrity check
