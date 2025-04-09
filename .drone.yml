@@ -1,12 +1,31 @@
 kind: pipeline
 type: docker
-name: golang-lint-and-coverage
+name: golang-ci
 
 steps:
   - name: lint
     image: golangci/golangci-lint:v2.0.2-alpine
     commands:
       - golangci-lint run --timeout=5m ./...
+
+  - name: format-check
+    image: golang:alpine
+    commands:
+      - apk add --no-cache bash
+      - gofmt -l . | tee /dev/stderr
+      - test -z "$(gofmt -l .)" # Fail if any files are not formatted
+
+  - name: dependency-check
+    image: golang:alpine
+    commands:
+      - go mod tidy
+      - git diff --exit-code # Ensure no changes were made
+      - go mod verify
+
+  - name: security-scan
+    image: securego/gosec
+    commands:
+      - gosec ./...
 
   - name: test-with-coverage
     image: golang:alpine
@@ -20,7 +39,6 @@ steps:
       - go vet ./...
       - go test -race -coverprofile=coverage.out -covermode=atomic ./...
       - go tool cover -func=coverage.out
-      # Set the build to fail if coverage is below threshold
       - |
         COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
         THRESHOLD=80
