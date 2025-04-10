@@ -27,7 +27,7 @@ func NewForwarder(ctx context.Context, users config.Users, stream proto.Proxy_Pr
 		Ctx:           ctx,
 		UsersMatchMap: users.ToMatchMap(),
 		Stream:        stream,
-		Ack:           make(chan interface{}),
+		Ack:           make(chan interface{}, 1),
 	}
 }
 
@@ -55,7 +55,7 @@ func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 			},
 		},
 	}
-	if err := f.Stream.Send(msgAccept); err != nil {
+	if err = f.Stream.Send(msgAccept); err != nil {
 		return fmt.Errorf("send local addr to client error: %w", err)
 	}
 
@@ -63,7 +63,9 @@ func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 	// loop read target and forward
 	errCh := make(chan struct{}, 1)
 	go func() {
-		buf := transport.AllocateBuffer()
+		buf := transport.Buffer()
+		defer transport.PutBuffer(buf)
+
 		for {
 			err = f.copyTargetToClient(buf)
 			if err != nil {

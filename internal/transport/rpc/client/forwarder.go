@@ -44,7 +44,7 @@ func NewForwarder(ctx context.Context, s proxy.Proxy_ProxyClient, w io.Writer, r
 		stream:    s,
 		writer:    w,
 		reader:    r,
-		localAddr: make(chan string),
+		localAddr: make(chan string, 1),
 		Statistic: new(Statistic),
 	}
 }
@@ -153,7 +153,8 @@ func (f *Forwarder) CopySRCtoTarget(ctx context.Context) (err error) {
 	errCh := make(chan struct{}, 1)
 	go func() {
 		// buffer
-		buf := transport.AllocateBuffer()
+		buf := transport.Buffer()
+		defer transport.PutBuffer(buf)
 		for {
 			err = f.copySRCtoTarget(buf)
 			if err != nil {
@@ -211,6 +212,8 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 
 	// ack timeout
 	t := time.NewTimer(rpc.GeneralTimeout)
+	defer t.Stop()
+
 	select {
 	case <-t.C:
 		// timed out
@@ -220,7 +223,6 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 			return fmt.Errorf("rpc: server to %s ack failed", req.Host)
 		}
 		localAddrChan <- localAddr
-		t.Stop()
 		// done
 		//log.Printf("rpc: server -> %s -> %s success", req.Host, localAddr)
 	}
