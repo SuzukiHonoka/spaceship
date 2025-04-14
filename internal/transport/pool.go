@@ -13,5 +13,6 @@ func Buffer() []byte {
 }
 
 func PutBuffer(buf []byte) {
+	//nolint:staticcheck
 	BufferPool.Put(buf)
 }
