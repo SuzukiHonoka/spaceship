@@ -25,5 +25,7 @@ func (l *Launcher) listenSignal(ctx context.Context) error {
 }
 
 func (l *Launcher) Stop() {
-	close(l.sigStop)
+	l.stopOnce.Do(func() {
+		close(l.sigStop)
+	})
 }

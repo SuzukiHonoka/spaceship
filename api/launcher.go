@@ -16,11 +16,13 @@ import (
 	"golang.org/x/sync/errgroup"
 	"log"
 	"strings"
+	"sync"
 )
 
 type Launcher struct {
 	sigStop             chan struct{}
 	skipInternalLogging bool
+	stopOnce            sync.Once
 }
 
 func NewLauncher() *Launcher {
