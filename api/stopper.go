@@ -25,5 +25,5 @@ func (l *Launcher) listenSignal(ctx context.Context) error {
 }
 
 func (l *Launcher) Stop() {
-	l.sigStop <- struct{}{}
+	close(l.sigStop)
 }

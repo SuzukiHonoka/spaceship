@@ -32,15 +32,29 @@ func (d *Direct) Dial(network, addr string) (net.Conn, error) {
 	return net.DialTimeout(network, addr, transport.DialTimeout)
 }
 
-func (d *Direct) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader) error {
-	errCh := make(chan error, 1)
+func (d *Direct) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, direction transport.Direction) error {
+	buf := transport.Buffer()
+	defer transport.PutBuffer(buf)
+
+	var n int64
+	var err error
+
+	copyDone := make(chan struct{})
 	go func() {
-		_, err := io.CopyBuffer(dst, src, transport.AllocateBuffer())
-		errCh <- err
+		n, err = io.CopyBuffer(dst, src, buf)
+		close(copyDone)
 	}()
 
 	select {
-	case err := <-errCh:
+	case <-copyDone:
+		if n > 0 {
+			switch direction {
+			case transport.DirectionIn:
+				transport.GlobalStats.AddRx(uint64(n))
+			case transport.DirectionOut:
+				transport.GlobalStats.AddTx(uint64(n))
+			}
+		}
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
@@ -50,7 +64,6 @@ func (d *Direct) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader) e
 // Proxy the traffic locally
 func (d *Direct) Proxy(ctx context.Context, req *transport.Request, localAddr chan<- string, dst io.Writer, src io.Reader) (err error) {
 	defer close(localAddr)
-
 	target := net.JoinHostPort(req.Host, strconv.Itoa(int(req.Port)))
 	d.conn, err = d.Dial(transport.Network, target)
 	if err != nil {
@@ -62,11 +75,11 @@ func (d *Direct) Proxy(ctx context.Context, req *transport.Request, localAddr ch
 	errGroup, ctx := errgroup.WithContext(ctx)
 	// src -> dst
 	errGroup.Go(func() error {
-		return d.copyBuffer(ctx, d.conn, src)
+		return d.copyBuffer(ctx, d.conn, src, transport.DirectionOut)
 	})
 	// src <- dst
 	errGroup.Go(func() error {
-		return d.copyBuffer(ctx, dst, d.conn)
+		return d.copyBuffer(ctx, dst, d.conn, transport.DirectionIn)
 	})
 
 	if err = errGroup.Wait(); err != nil && err != io.EOF {

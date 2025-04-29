@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/http"
 	"github.com/SuzukiHonoka/spaceship/internal/socks"
+	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc/client"
 	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc/server"
 	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"github.com/SuzukiHonoka/spaceship/pkg/config"
+	"github.com/SuzukiHonoka/spaceship/pkg/logger"
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 	"log"
@@ -17,13 +19,19 @@ import (
 )
 
 type Launcher struct {
-	sigStop chan struct{}
+	sigStop             chan struct{}
+	skipInternalLogging bool
 }
 
 func NewLauncher() *Launcher {
 	return &Launcher{
-		sigStop: make(chan struct{}, 1),
+		sigStop: make(chan struct{}),
 	}
+}
+
+func (l *Launcher) WithSkipInternalLogging() *Launcher {
+	l.skipInternalLogging = true
+	return l
 }
 
 func (l *Launcher) launchServer(ctx context.Context, cfg *config.MixedConfig) error {
@@ -150,9 +158,22 @@ func (l *Launcher) LaunchWithError(cfg *config.MixedConfig) error {
 }
 
 func (l *Launcher) Launch(c *config.MixedConfig) bool {
+	if l.skipInternalLogging {
+		// override configured mode
+		c.LogMode = logger.ModeSkip
+	}
+
 	if err := l.LaunchWithError(c); err != nil {
 		log.Printf("launch error: %v", err)
 		return false
 	}
 	return true
+}
+
+func (l *Launcher) Total() (uint64, uint64) {
+	return transport.GlobalStats.Total()
+}
+
+func (l *Launcher) Stats() (float64, float64) {
+	return transport.GlobalStats.CalculateSpeed()
 }
