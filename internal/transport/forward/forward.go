@@ -2,6 +2,7 @@ package forward
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/internal/utils"
@@ -22,9 +23,9 @@ func Attach(d proxy.Dialer) {
 }
 
 type Forward struct {
-	dialer proxy.Dialer
-	conn   net.Conn
-	once   sync.Once
+	dialer    proxy.Dialer
+	conn      net.Conn
+	closeOnce sync.Once
 }
 
 func New() transport.Transport {
@@ -40,7 +41,7 @@ func (f *Forward) String() string {
 }
 
 func (f *Forward) Close() (err error) {
-	f.once.Do(func() {
+	f.closeOnce.Do(func() {
 		if f.conn != nil {
 			err = f.conn.Close()
 		}
@@ -52,18 +53,32 @@ func (f *Forward) Dial(network, addr string) (net.Conn, error) {
 	if f.dialer != nil {
 		return f.dialer.Dial(network, addr)
 	}
-	return nil, fmt.Errorf("%s: dialer not attached", f)
+	return nil, errors.New("forward: dialer not attached")
 }
 
-func (f *Forward) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader) error {
-	errCh := make(chan error, 1)
+func (f *Forward) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, direction transport.Direction) error {
+	buf := transport.Buffer()
+	defer transport.PutBuffer(buf)
+
+	var n int64
+	var err error
+
+	copyDone := make(chan struct{})
 	go func() {
-		_, err := io.CopyBuffer(dst, src, transport.AllocateBuffer())
-		errCh <- err
+		n, err = io.CopyBuffer(dst, src, buf)
+		close(copyDone)
 	}()
 
 	select {
-	case err := <-errCh:
+	case <-copyDone:
+		if n > 0 {
+			switch direction {
+			case transport.DirectionIn:
+				transport.GlobalStats.AddRx(uint64(n))
+			case transport.DirectionOut:
+				transport.GlobalStats.AddTx(uint64(n))
+			}
+		}
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
@@ -84,11 +99,11 @@ func (f *Forward) Proxy(ctx context.Context, req *transport.Request, localAddr c
 	errGroup, ctx := errgroup.WithContext(ctx)
 	// src -> dst
 	errGroup.Go(func() error {
-		return f.copyBuffer(ctx, f.conn, src)
+		return f.copyBuffer(ctx, f.conn, src, transport.DirectionOut)
 	})
 	// src <- dst
 	errGroup.Go(func() error {
-		return f.copyBuffer(ctx, dst, f.conn)
+		return f.copyBuffer(ctx, dst, f.conn, transport.DirectionIn)
 	})
 
 	if err = errGroup.Wait(); err != nil && err != io.EOF {

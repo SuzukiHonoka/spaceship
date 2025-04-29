@@ -11,6 +11,7 @@ type Mode string
 const (
 	ModeDefault Mode = ""
 	ModeDiscard Mode = "null"
+	ModeSkip    Mode = "skip"
 )
 
 func (m Mode) Set() {
@@ -21,6 +22,8 @@ func (m Mode) Set() {
 	case ModeDiscard:
 		log.Println("log disabled")
 		log.SetOutput(io.Discard)
+	case ModeSkip:
+		return
 	default:
 		fd, err := os.OpenFile(string(m), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {

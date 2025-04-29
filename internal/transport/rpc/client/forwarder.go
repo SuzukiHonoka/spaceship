@@ -8,7 +8,6 @@ import (
 	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
 	"golang.org/x/sync/errgroup"
 	"io"
-	"log"
 	"os"
 	"sync/atomic"
 	"time"
@@ -72,7 +71,7 @@ func (f *Forwarder) copySRCtoTarget(buf []byte) error {
 		return err
 	}
 
-	f.Statistic.AddTx(uint64(n))
+	f.addTx(n)
 	return nil
 	//log.Println("rpc client msg forwarded")
 }
@@ -129,7 +128,7 @@ func (f *Forwarder) copyTargetToSRC() error {
 			return io.ErrShortWrite
 		}
 
-		f.Statistic.AddRx(uint64(n))
+		f.addRx(n)
 		//log.Println("rpc server msg forwarded")
 	case proxy.ProxyStatus_Accepted:
 		v, ok := buf.HeaderOrPayload.(*proxy.ProxyDST_Header)
@@ -227,11 +226,20 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 		//log.Printf("rpc: server -> %s -> %s success", req.Host, localAddr)
 	}
 
-	err := errGroup.Wait()
-	log.Printf("session: %s: %d bytes sent, %d bytes received", req.Host, f.Statistic.Tx.Load(), f.Statistic.Rx.Load())
-
-	if err != io.EOF {
+	if err := errGroup.Wait(); err != io.EOF {
 		return err
 	}
 	return nil
+}
+
+func (f *Forwarder) addTx(n int) {
+	tx := uint64(n)
+	f.Statistic.AddTx(tx)
+	transport.GlobalStats.AddTx(tx)
+}
+
+func (f *Forwarder) addRx(n int) {
+	rx := uint64(n)
+	f.Statistic.AddRx(rx)
+	transport.GlobalStats.AddRx(rx)
 }

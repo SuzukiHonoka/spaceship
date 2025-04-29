@@ -122,11 +122,11 @@ func (c *Client) Proxy(ctx context.Context, req *transport.Request, localAddr ch
 
 	//log.Printf("sending proxy to rpc: %s", req.Host)
 	f := NewForwarder(sessionCtx, stream, w, r)
-	err = f.Start(req, localAddr)
-	if err != nil {
+	if err = f.Start(req, localAddr); err != nil {
 		return fmt.Errorf("rpc client: proxy failed: %w", err)
 	}
 
-	log.Printf("session: %s duration %v", req.Host, time.Since(start).Round(time.Millisecond))
+	log.Printf("session: %s duration %v, %d bytes sent, %d bytes received",
+		req.Host, time.Since(start).Round(time.Millisecond), f.Statistic.Tx.Load(), f.Statistic.Rx.Load())
 	return nil
 }
