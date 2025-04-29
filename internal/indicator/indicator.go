@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"sync"
-	"syscall"
 )
 
 var ansiNewlineByte = []byte{'\n'}
@@ -49,10 +48,12 @@ func NewIndicator() *Indicator {
 	}
 
 	// Set up terminal resize signal handling
-	signal.Notify(sw.resizeChan, syscall.SIGWINCH)
-
-	// Start a goroutine to handle terminal resize events
-	go sw.handleResize()
+	sig := SIGWINCH()
+	if sig != -1 {
+		signal.Notify(sw.resizeChan, sig)
+		// Start a goroutine to handle terminal resize events
+		go sw.handleResize()
+	}
 
 	// Hide cursor and clear screen
 	fmt.Print(escapeSeqHideCursor)
