@@ -4,7 +4,7 @@
 package main
 
 import (
-	"github.com/SuzukiHonoka/spaceship/pkg/dns"
+	"github.com/SuzukiHonoka/spaceship/v2/pkg/dns"
 )
 
 // defaultDnsServer is the default dns server for android, use the dns server from dnspod for now.

@@ -1,7 +1,7 @@
 package client
 
 import (
-	"github.com/SuzukiHonoka/spaceship/internal/router"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
 )
 
 type Client struct {

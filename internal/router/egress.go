@@ -2,11 +2,11 @@ package router
 
 import (
 	"fmt"
-	"github.com/SuzukiHonoka/spaceship/internal/transport"
-	"github.com/SuzukiHonoka/spaceship/internal/transport/blackhole"
-	"github.com/SuzukiHonoka/spaceship/internal/transport/direct"
-	"github.com/SuzukiHonoka/spaceship/internal/transport/forward"
-	rpcClient "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/client"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/blackhole"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/direct"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/forward"
+	rpcClient "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
 )
 
 type Egress string

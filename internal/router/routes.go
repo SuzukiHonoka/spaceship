@@ -2,7 +2,7 @@ package router
 
 import (
 	"fmt"
-	"github.com/SuzukiHonoka/spaceship/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 )
 
 type Routes []*Route

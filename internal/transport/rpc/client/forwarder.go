@@ -3,9 +3,9 @@ package client
 import (
 	"context"
 	"fmt"
-	"github.com/SuzukiHonoka/spaceship/internal/transport"
-	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc"
-	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
+	proxy "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	"golang.org/x/sync/errgroup"
 	"io"
 	"os"

@@ -1,4 +1,4 @@
-module github.com/SuzukiHonoka/spaceship
+module github.com/SuzukiHonoka/spaceship/v2
 
 go 1.24
 

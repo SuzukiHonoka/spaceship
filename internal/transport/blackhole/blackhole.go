@@ -3,8 +3,8 @@ package blackhole
 import (
 	"context"
 	"fmt"
-	"github.com/SuzukiHonoka/spaceship/internal/transport"
-	"github.com/SuzukiHonoka/spaceship/internal/utils"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"io"
 	"net"
 )

@@ -1,7 +1,7 @@
 package api
 
 import (
-	"github.com/SuzukiHonoka/spaceship/pkg/config"
+	"github.com/SuzukiHonoka/spaceship/v2/pkg/config"
 	"log"
 )
 

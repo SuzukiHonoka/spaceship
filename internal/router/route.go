@@ -3,7 +3,7 @@ package router
 import (
 	"bufio"
 	"fmt"
-	"github.com/SuzukiHonoka/spaceship/internal/utils"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"log"
 	"net"
 	"os"
