@@ -7,6 +7,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/internal/transport/rpc"
 	proxy "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto"
+	"github.com/SuzukiHonoka/spaceship/internal/utils"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -126,7 +127,8 @@ func (c *Client) Proxy(ctx context.Context, req *transport.Request, localAddr ch
 		return fmt.Errorf("rpc client: proxy failed: %w", err)
 	}
 
-	log.Printf("session: %s duration %v, %d bytes sent, %d bytes received",
-		req.Host, time.Since(start).Round(time.Millisecond), f.Statistic.Tx.Load(), f.Statistic.Rx.Load())
+	log.Printf("session: %s duration %v, %s sent, %s received",
+		req.Host, time.Since(start).Round(time.Millisecond),
+		utils.PrettyByteSize(float64(f.Statistic.Tx.Load())), utils.PrettyByteSize(float64(f.Statistic.Rx.Load())))
 	return nil
 }

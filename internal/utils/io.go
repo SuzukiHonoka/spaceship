@@ -16,7 +16,7 @@ func Close(closer io.Closer) {
 func PrettyByteSize(b float64) string {
 	const unit = 1024
 	if b < unit {
-		return fmt.Sprintf("%.0f B", b)
+		return fmt.Sprintf("%.0fB", b)
 	}
 	div, exp := int64(unit), 0
 	for n := b / unit; n >= unit; n /= unit {
