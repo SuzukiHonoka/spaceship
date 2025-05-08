@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/http"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/socks"
-	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/server"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
@@ -170,12 +169,4 @@ func (l *Launcher) Launch(c *config.MixedConfig) bool {
 		return false
 	}
 	return true
-}
-
-func (l *Launcher) Total() (uint64, uint64) {
-	return transport.GlobalStats.Total()
-}
-
-func (l *Launcher) Stats() (float64, float64) {
-	return transport.GlobalStats.CalculateSpeed()
 }
