@@ -30,9 +30,8 @@ func NewLauncher() *Launcher {
 	}
 }
 
-func (l *Launcher) WithSkipInternalLogging() *Launcher {
+func (l *Launcher) SkipInternalLogging() {
 	l.skipInternalLogging = true
-	return l
 }
 
 func (l *Launcher) launchServer(ctx context.Context, cfg *config.MixedConfig) error {
@@ -137,7 +136,12 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 	return nil
 }
 
-func (l *Launcher) LaunchWithError(cfg *config.MixedConfig) error {
+func (l *Launcher) Launch(cfg *config.MixedConfig) error {
+	if l.skipInternalLogging {
+		// override configured mode
+		cfg.LogMode = logger.ModeSkip
+	}
+
 	// apply config
 	if err := cfg.Apply(); err != nil {
 		return err
@@ -156,17 +160,4 @@ func (l *Launcher) LaunchWithError(cfg *config.MixedConfig) error {
 	default:
 		return fmt.Errorf("unrecognized role: %s", cfg.Role)
 	}
-}
-
-func (l *Launcher) Launch(c *config.MixedConfig) bool {
-	if l.skipInternalLogging {
-		// override configured mode
-		c.LogMode = logger.ModeSkip
-	}
-
-	if err := l.LaunchWithError(c); err != nil {
-		log.Printf("launch error: %v", err)
-		return false
-	}
-	return true
 }

@@ -38,7 +38,7 @@ func main() {
 	if *showStats {
 		if term.IsTerminal(int(os.Stdout.Fd())) {
 			// Skip internal logging
-			launcher = launcher.WithSkipInternalLogging()
+			launcher.SkipInternalLogging()
 
 			ir := indicator.NewIndicator()
 			defer utils.Close(ir)
@@ -61,7 +61,9 @@ func main() {
 		"any kind of illegal intention by using this program are strongly forbidden.\n", manifest.VersionCode)
 
 	// default launch from file
-	launcher.LaunchFromFile(*configPath)
+	if err := launcher.LaunchFromFile(*configPath); err != nil {
+		log.Fatalf("launch failed, err=%v", err)
+	}
 }
 
 func showStatsFunc(ctx context.Context, interval time.Duration, ir *indicator.Indicator) {

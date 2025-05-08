@@ -1,15 +1,14 @@
 package api
 
 import (
+	"fmt"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config"
-	"log"
 )
 
-func (l *Launcher) LaunchFromString(c string) bool {
+func (l *Launcher) LaunchFromString(c string) error {
 	m, err := config.NewFromString(c)
 	if err != nil {
-		log.Printf("Load configuration from string err: %v", err)
-		return false
+		return fmt.Errorf("load configuration from string failed, err=%w", err)
 	}
 	return l.Launch(m)
 }
