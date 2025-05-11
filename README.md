@@ -10,10 +10,13 @@ Spaceship is a tool designed to create secure tunnels to remote networks.
 ## Usage
 
 ```shell
-# ./spaceship -h
-Usage spaceship:
+# spaceship -h
+Usage of spaceship:
   -c string
         config path (default "./config.json")
+  -interval duration
+        show stats interval in seconds (default 1s)
+  -s    show stats
   -v    show spaceship version
 ```
 
