@@ -210,21 +210,25 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 	})
 
 	// ack timeout
-	t := time.NewTimer(rpc.GeneralTimeout)
-	defer t.Stop()
+	errGroup.Go(func() error {
+		t := time.NewTimer(rpc.GeneralTimeout)
+		defer t.Stop()
 
-	select {
-	case <-t.C:
-		// timed out
-		return fmt.Errorf("rpc: server to %s ack timed out: %w", req.Host, os.ErrDeadlineExceeded)
-	case localAddr, ok := <-f.localAddr:
-		if !ok {
-			return fmt.Errorf("rpc: server to %s ack failed", req.Host)
+		select {
+		case <-t.C:
+			// timed out
+			return fmt.Errorf("rpc: server to %s ack timed out: %w", req.Host, os.ErrDeadlineExceeded)
+		case localAddr, ok := <-f.localAddr:
+			if !ok {
+				return fmt.Errorf("rpc: server to %s ack failed", req.Host)
+			}
+			localAddrChan <- localAddr
+			// done
+			//log.Printf("rpc: server -> %s -> %s success", req.Host, localAddr)
 		}
-		localAddrChan <- localAddr
-		// done
-		//log.Printf("rpc: server -> %s -> %s success", req.Host, localAddr)
-	}
+
+		return nil
+	})
 
 	if err := errGroup.Wait(); err != io.EOF {
 		return err

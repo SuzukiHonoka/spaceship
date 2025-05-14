@@ -58,5 +58,5 @@ message DnsResponse{
   // fqdn name
   string domain = 1;
   // fqdn resolved result
-  string result = 2;
+  repeated string result = 2;
 }

@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
@@ -123,7 +124,7 @@ func (c *Client) Proxy(ctx context.Context, req *transport.Request, localAddr ch
 
 	//log.Printf("sending proxy to rpc: %s", req.Host)
 	f := NewForwarder(sessionCtx, stream, w, r)
-	if err = f.Start(req, localAddr); err != nil {
+	if err = f.Start(req, localAddr); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("rpc client: proxy failed: %w", err)
 	}
 

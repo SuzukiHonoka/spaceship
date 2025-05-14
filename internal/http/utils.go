@@ -9,15 +9,15 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"syscall"
 )
 
 func ServeError(w io.Writer, err error) {
-	if err == nil || err == io.EOF || errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) {
+	// errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET)
+	if err == nil || errors.Is(err, io.EOF) {
 		return
 	}
 
-	log.Printf("serve error: %v", err)
+	log.Println(err)
 	if w == nil {
 		return
 	}

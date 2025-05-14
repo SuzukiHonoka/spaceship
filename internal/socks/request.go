@@ -7,11 +7,11 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
+	"golang.org/x/sync/errgroup"
 	"io"
 	"log"
 	"net"
 	"strconv"
-	"syscall"
 )
 
 const (
@@ -131,7 +131,7 @@ func (s *Server) handleRequest(req *Request, conn ConnWriter) error {
 }
 
 // handleConnect is used to handle a connect command
-func (s *Server) handleConnect(_ context.Context, conn ConnWriter, req *Request) error {
+func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Request) error {
 	// set target dst
 	var target string
 	if req.DestAddr.FQDN != "" {
@@ -154,36 +154,38 @@ func (s *Server) handleConnect(_ context.Context, conn ConnWriter, req *Request)
 
 	// start proxy
 	request := transport.NewRequest(target, req.DestAddr.Port)
-	localAdder := make(chan string)
-	proxyError := make(chan error)
 
-	proxyCtx, cancel := context.WithCancel(s.ctx)
-	defer cancel()
+	errGroup, ctx := errgroup.WithContext(ctx)
 
-	go func() {
-		proxyError <- route.Proxy(proxyCtx, request, localAdder, conn, req.bufConn)
-	}()
-	local, ok := <-localAdder
-	if !ok || local == "" {
-		if err = sendReply(conn, networkUnreachable, nil); err != nil {
+	localAddr := make(chan string)
+	errGroup.Go(func() error {
+		return route.Proxy(ctx, request, localAddr, conn, req.bufConn)
+	})
+
+	errGroup.Go(func() (err error) {
+		local, ok := <-localAddr
+		if !ok || local == "" {
+			if err = sendReply(conn, networkUnreachable, nil); err != nil {
+				return fmt.Errorf("failed to send reply: %v", err)
+			}
+			return fmt.Errorf("proxy handshake failed for %s", target)
+		}
+
+		// Send success
+		ip, port, err := utils.SplitHostPort(local)
+		if err != nil {
+			return fmt.Errorf("failed to split host and port: %v", err)
+		}
+		bind := AddrSpec{IP: net.ParseIP(ip), Port: port}
+		if err = sendReply(conn, successReply, &bind); err != nil {
 			return fmt.Errorf("failed to send reply: %v", err)
 		}
+		//log.Printf("proxy local addr: %s\n", local)
+		//log.Println("proxy local end")
 		return nil
-	}
+	})
 
-	// Send success
-	ip, port, err := utils.SplitHostPort(local)
-	if err != nil {
-		return fmt.Errorf("socks: failed to split host and port: %v", err)
-	}
-	bind := AddrSpec{IP: net.ParseIP(ip), Port: port}
-	if err = sendReply(conn, successReply, &bind); err != nil {
-		return fmt.Errorf("failed to send reply: %v", err)
-	}
-	//log.Printf("proxy local addr: %s\n", local)
-	//log.Println("proxy local end")
-
-	if err = <-proxyError; err != nil && err != io.EOF && !errors.Is(err, syscall.EPIPE) && !errors.Is(err, syscall.ECONNRESET) {
+	if err = errGroup.Wait(); err != nil && !errors.Is(err, io.EOF) {
 		log.Printf("socks: %v", err)
 	}
 	return nil

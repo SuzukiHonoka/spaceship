@@ -8,6 +8,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
+	"golang.org/x/sync/errgroup"
 	"io"
 	"log"
 	"net"
@@ -154,8 +155,6 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// actual proxy
-	proxyErr := make(chan error)
-	proxyLocalAddr := make(chan string)
 
 	pr, pw := io.Pipe()
 	defer utils.Close(pw)
@@ -177,95 +176,88 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	//	}
 	//}()
 
-	proxyCtx, cancel := context.WithCancel(s.ctx)
-	defer cancel()
+	errGroup, ctx := errgroup.WithContext(s.ctx)
 
-	go func() {
-		proxyErr <- route.Proxy(proxyCtx, request, proxyLocalAddr, conn, pr)
-	}()
+	proxyLocalAddr := make(chan string)
+	errGroup.Go(func() error {
+		return route.Proxy(ctx, request, proxyLocalAddr, conn, pr)
+	})
 
-	// wait for proxy handshake
-	localAddr, ok := <-proxyLocalAddr
-	if !ok || localAddr == "" {
-		ServeError(conn, fmt.Errorf("http: proxy handshake failed for %s", r.Host))
-		return
-	}
+	errGroup.Go(func() error {
+		// wait for proxy handshake
+		localAddr, ok := <-proxyLocalAddr
+		if !ok || localAddr == "" {
+			return transport.ErrProxyHandshakeFailed
+		}
+		return nil
+	})
 
-	// write tcp raw msg to pipe, construct HTTP message
-	// raw head eg:  GET / HTTP/1.1
-	buf := new(bytes.Buffer)
-	for _, seg := range []string{r.Method, r.URL.Path} {
-		buf.WriteString(seg)
-		buf.WriteRune(' ')
-	}
-	buf.WriteString("HTTP/1.1")
-	buf.WriteString(CRLF)
-
-	// Host maybe missing in headers, and will cause bad request errors, rewrite it
-	if r.Header.Get("Host") == "" {
-		r.Header.Set("Host", request.Host)
-	}
-
-	// filter sensitive headers
-	hopHeaders.RemoveHopHeaders(r.Header)
-
-	// raw headers, should filter sensitive headers
-	for k, v := range r.Header {
-		buf.WriteString(k)
-		buf.WriteRune(':')
-		buf.WriteRune(' ')
-		buf.WriteString(strings.Join(v, ";")) // in case of multiple values
+	errGroup.Go(func() error {
+		// write tcp raw msg to pipe, construct HTTP message
+		// raw head eg:  GET / HTTP/1.1
+		buf := new(bytes.Buffer)
+		for _, seg := range []string{r.Method, r.URL.Path} {
+			buf.WriteString(seg)
+			buf.WriteRune(' ')
+		}
+		buf.WriteString("HTTP/1.1")
 		buf.WriteString(CRLF)
-	}
 
-	// write rest unprocessed body to pipe if any, the body should small, no need to consider performance issue
-	if unprocessed.Reader.Buffered() > 0 {
-		if _, err = buf.ReadFrom(unprocessed.Reader); err != nil {
-			ServeError(conn, fmt.Errorf("http: read unprocessed body failed for %s", r.Host))
-			return
+		// Host maybe missing in headers, and will cause bad request errors, rewrite it
+		if r.Header.Get("Host") == "" {
+			r.Header.Set("Host", request.Host)
 		}
-	}
 
-	// assume headers field ends
-	buf.WriteString(CRLF)
+		// filter sensitive headers
+		hopHeaders.RemoveHopHeaders(r.Header)
 
-	// DEBUG ONLY
-	//msg := string(buf.Bytes())
-	//fmt.Println(msg)
-	//buf.WriteString(msg)
-
-	// write raw messages to pipe
-	if _, err = buf.WriteTo(pw); err != nil {
-		ServeError(conn, fmt.Errorf("http: send heads failed for %s, err=%w", r.Host, err))
-		return
-	}
-
-	// forward the connection
-	forwardErr := make(chan error)
-	go func() {
-		_, err := io.CopyBuffer(pw, conn, transport.AllocateBuffer())
-		forwardErr <- err
-	}()
-
-	// wait for proxy to finish
-	select {
-	case <-s.ctx.Done():
-		return
-	case err = <-forwardErr:
-		if err != nil && err != io.EOF {
-			ServeError(conn, fmt.Errorf("http: copy body failed for %s， err=%w", r.Host, err))
+		// raw headers, should filter sensitive headers
+		for k, v := range r.Header {
+			buf.WriteString(k)
+			buf.WriteRune(':')
+			buf.WriteRune(' ')
+			buf.WriteString(strings.Join(v, ";")) // in case of multiple values
+			buf.WriteString(CRLF)
 		}
-	case err = <-proxyErr:
-		if err != nil {
-			ServeError(conn, fmt.Errorf("http: proxy failed, err=%w", err))
+
+		// write rest unprocessed body to pipe if any, the body should small, no need to consider performance issue
+		if bufferedCount := unprocessed.Reader.Buffered(); bufferedCount > 0 {
+			if _, err := buf.ReadFrom(unprocessed.Reader); err != nil {
+				return fmt.Errorf("read unprocessed %d bytes failed: %w", bufferedCount, err)
+			}
 		}
+
+		// assume headers field ends
+		buf.WriteString(CRLF)
+
+		// DEBUG ONLY
+		//msg := string(buf.Bytes())
+		//fmt.Println(msg)
+		//buf.WriteString(msg)
+
+		// write raw messages to pipe
+		if _, err := buf.WriteTo(pw); err != nil {
+			return fmt.Errorf("send heads failed: %w", err)
+		}
+		return nil
+	})
+
+	errGroup.Go(func() error {
+		if _, err := io.CopyBuffer(pw, conn, transport.Buffer()); err != nil {
+			return fmt.Errorf("copy data failed: %w", err)
+		}
+		return io.EOF
+	})
+
+	if err = errGroup.Wait(); err != nil {
+		ServeError(conn, fmt.Errorf("http: proxy failed for %s, err=%w", r.Host, err))
 	}
 }
 
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	host, _, err := net.SplitHostPort(r.Host)
 	if err != nil {
-		ServeError(w, fmt.Errorf("invalid host, err=%w", err))
+		ServeError(w, fmt.Errorf("http: invalid host, err=%w", err))
 		return
 	}
 
@@ -296,39 +288,33 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	request, err := BuildRemoteRequest(r)
 	if err != nil {
 		ServeError(conn, fmt.Errorf("http: build remote request failed: %w", err))
-		return
 	}
 
 	// actual proxy
-	proxyErr := make(chan error)
+	errGroup, ctx := errgroup.WithContext(s.ctx)
+
 	proxyLocalAddr := make(chan string)
+	errGroup.Go(func() error {
+		return route.Proxy(ctx, request, proxyLocalAddr, conn, conn)
+	})
 
-	proxyCtx, cancel := context.WithCancel(s.ctx)
-	defer cancel()
+	errGroup.Go(func() error {
+		// wait for proxy handshake
+		localAddr, ok := <-proxyLocalAddr
+		if !ok || localAddr == "" {
+			return transport.ErrProxyHandshakeFailed
+		}
 
-	go func() {
-		proxyErr <- route.Proxy(proxyCtx, request, proxyLocalAddr, conn, conn)
-	}()
+		// send proxy OK
+		if _, err = conn.Write(MessageConnectionEstablished); err != nil {
+			return fmt.Errorf("send connection established failed: %w", err)
+		}
 
-	// wait for proxy handshake
-	localAddr, ok := <-proxyLocalAddr
-	if !ok || localAddr == "" {
-		ServeError(conn, fmt.Errorf("http: proxy handshake failed for %s", r.Host))
-		return
-	}
-
-	// send proxy OK
-	if _, err = conn.Write(MessageConnectionEstablished); err != nil {
-		log.Printf("http: send connection established failed for %s", r.Host)
-		return
-	}
+		return nil
+	})
 
 	// wait for proxy to finish
-	select {
-	case <-s.ctx.Done():
-	case err = <-proxyErr:
-		if err != nil {
-			ServeError(conn, fmt.Errorf("http: proxy failed: %w", err))
-		}
+	if err = errGroup.Wait(); err != nil {
+		ServeError(conn, fmt.Errorf("http: proxy failed for %s, err=%w", r.Host, err))
 	}
 }
