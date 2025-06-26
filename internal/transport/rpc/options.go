@@ -30,6 +30,7 @@ var DialOptions = []grpc.DialOption{
 	grpc.WithWriteBufferSize(0),
 	grpc.WithReadBufferSize(0),
 	grpc.WithIdleTimeout(30 * time.Minute),
+	grpc.WithDisableServiceConfig(),
 	grpc.WithUserAgent("spaceship/" + manifest.VersionCode),
 }
 
