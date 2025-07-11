@@ -8,6 +8,10 @@ var BufferPool = sync.Pool{
 	},
 }
 
+func AllocateBuffer() []byte {
+	return make([]byte, BufferSize)
+}
+
 func Buffer() []byte {
 	return BufferPool.Get().([]byte)
 }

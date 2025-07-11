@@ -17,6 +17,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // MixedConfig is a server/client mixed config, along with general config.
@@ -66,10 +67,8 @@ func NewFromString(c string) (*MixedConfig, error) {
 // Apply applies the MixedConfig
 func (c *MixedConfig) Apply() error {
 	// role check
-	switch c.Role {
-	case RoleClient, RoleServer:
-	default:
-		return fmt.Errorf("unknown role: %s", c.Role)
+	if c.Role != RoleClient && c.Role != RoleServer {
+		return fmt.Errorf("invalid role: %s", c.Role)
 	}
 
 	// log mode
@@ -132,6 +131,12 @@ func (c *MixedConfig) Apply() error {
 		}
 		router.AddToFirstRoute(router.RouteBlockIPv6)
 		log.Println("ipv6 disabled")
+	}
+
+	// idle timeout
+	if c.IdleTimeout >= 0 {
+		log.Printf("custom idle timeout: %ds", c.IdleTimeout)
+		transport.SetIdleTimeout(time.Duration(c.IdleTimeout) * time.Second)
 	}
 
 	return router.GenerateCache()

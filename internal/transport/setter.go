@@ -1,5 +1,7 @@
 package transport
 
+import "time"
+
 // SetBufferSize in KB
 func SetBufferSize(size uint16) {
 	BufferSize = int(size) * 1024
@@ -13,4 +15,9 @@ func SetNetwork(network string) {
 // DisableIPv6 for dial
 func DisableIPv6() {
 	SetNetwork("tcp4")
+}
+
+// SetIdleTimeout for transport of direct
+func SetIdleTimeout(timeout time.Duration) {
+	IdleTimeout = timeout
 }

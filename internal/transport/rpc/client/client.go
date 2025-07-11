@@ -58,7 +58,8 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 	} else {
 		credential = insecure.NewCredentials()
 	}
-	params := NewParams(server, append(rpc.DialOptions, grpc.WithTransportCredentials(credential))...)
+	params := NewParams(server, append(rpc.DialOptions, grpc.WithTransportCredentials(credential),
+		grpc.WithIdleTimeout(transport.IdleTimeout))...)
 	connQueue = NewConnQueue(int(mux), params)
 	return connQueue.Init()
 }
