@@ -14,12 +14,23 @@ echo "build for [${1}]"
 
 for s in "${OS[@]}"; do
   for a in "${ARCH[@]}"; do
+    # Skip unsupported combinations
+        if [ "$s" == "android" ] && [ "$a" == "amd64" ]; then
+          echo "Skipping $s $a (requires CGO and Android SDK setup)"
+          continue
+        fi
+
     out="spaceship_${s}_${a}"
     if [ "$s" == "windows" ] ;then
       out="${out}.exe"
-    fi;
-    GOOS=$s GOARCH=$a go build -ldflags "-s -w" -o "$out" "../$1"
-    chmod +x "$out"
-    echo "build process for $s $a complete"
+    fi
+
+    echo "Building for $s $a..."
+    if GOOS=$s GOARCH=$a go build -ldflags "-s -w" -o "$out" "../$1"; then
+      chmod +x "$out"
+      echo "build process for $s $a complete"
+    else
+      echo "build process for $s $a failed"
+    fi
   done
 done
