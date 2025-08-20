@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config"
 )
 

@@ -5,10 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"log"
 	"net"
 	"sync"
+
+	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 )
 
 var ErrIllegalRequest = errors.New("illegal request")

@@ -3,10 +3,11 @@ package indicator
 import (
 	"bytes"
 	"fmt"
-	"golang.org/x/term"
 	"os"
 	"os/signal"
 	"sync"
+
+	"golang.org/x/term"
 )
 
 var ansiNewlineByte = []byte{'\n'}

@@ -5,6 +5,13 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"net"
+	"os"
+	"path/filepath"
+	"time"
+
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
 	proxy "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
@@ -12,12 +19,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-	"io"
-	"log"
-	"net"
-	"os"
-	"path/filepath"
-	"time"
 )
 
 const TransportName = "proxy"

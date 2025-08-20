@@ -3,11 +3,12 @@ package router
 import (
 	"bufio"
 	"fmt"
-	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"log"
 	"net"
 	"os"
 	"regexp"
+
+	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 )
 
 var (

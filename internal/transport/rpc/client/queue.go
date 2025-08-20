@@ -2,10 +2,11 @@ package client
 
 import (
 	"fmt"
+	"log"
+
 	proxy "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"google.golang.org/grpc/connectivity"
-	"log"
 )
 
 type ConnQueue struct {

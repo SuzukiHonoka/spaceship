@@ -4,6 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"time"
+
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/forward"
@@ -14,10 +19,6 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config/server"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/dns"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/logger"
-	"log"
-	"os"
-	"path/filepath"
-	"time"
 )
 
 // MixedConfig is a server/client mixed config, along with general config.

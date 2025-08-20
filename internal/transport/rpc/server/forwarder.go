@@ -3,15 +3,16 @@ package server
 import (
 	"context"
 	"fmt"
+	"io"
+	"log"
+	"net"
+	"strconv"
+
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	config "github.com/SuzukiHonoka/spaceship/v2/pkg/config/server"
 	"golang.org/x/sync/errgroup"
-	"io"
-	"log"
-	"net"
-	"strconv"
 )
 
 type Forwarder struct {

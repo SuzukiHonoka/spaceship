@@ -2,12 +2,13 @@ package rpc
 
 import (
 	"context"
+	"net"
+	"time"
+
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config/manifest"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/keepalive"
-	"net"
-	"time"
 )
 
 const GeneralTimeout = 15 * time.Second

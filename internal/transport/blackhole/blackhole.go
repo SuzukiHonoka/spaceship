@@ -3,10 +3,11 @@ package blackhole
 import (
 	"context"
 	"fmt"
-	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
-	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"io"
 	"net"
+
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 )
 
 const TransportName = "blackHole"

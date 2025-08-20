@@ -4,14 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
-	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
-	"golang.org/x/net/proxy"
-	"golang.org/x/sync/errgroup"
 	"io"
 	"net"
 	"strconv"
 	"sync"
+
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
+	"golang.org/x/net/proxy"
+	"golang.org/x/sync/errgroup"
 )
 
 const TransportName = "forward"

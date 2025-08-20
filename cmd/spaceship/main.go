@@ -4,15 +4,16 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
+	"os"
+	"time"
+
 	"github.com/SuzukiHonoka/spaceship/v2/api"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/indicator"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config/manifest"
 	"golang.org/x/term"
-	"log"
-	"os"
-	"time"
 )
 
 var (

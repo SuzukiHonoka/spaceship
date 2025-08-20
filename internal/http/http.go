@@ -5,10 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
-	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
-	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
-	"golang.org/x/sync/errgroup"
 	"io"
 	"log"
 	"net"
@@ -16,6 +12,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
+	"golang.org/x/sync/errgroup"
 )
 
 // Config is used to set up and configure a Server

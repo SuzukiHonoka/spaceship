@@ -2,6 +2,7 @@ package router
 
 import (
 	"fmt"
+
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 )
 

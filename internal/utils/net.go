@@ -1,12 +1,13 @@
 package utils
 
 import (
-	"golang.org/x/net/proxy"
-	"golang.org/x/net/publicsuffix"
 	"net"
 	"net/url"
 	"strconv"
 	"strings"
+
+	"golang.org/x/net/proxy"
+	"golang.org/x/net/publicsuffix"
 )
 
 // SplitHostPort uses net.SplitHostPort but converts port to uint16 format

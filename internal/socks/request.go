@@ -4,14 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
-	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
-	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
-	"golang.org/x/sync/errgroup"
 	"io"
 	"log"
 	"net"
 	"strconv"
+
+	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
+	"golang.org/x/sync/errgroup"
 )
 
 const (

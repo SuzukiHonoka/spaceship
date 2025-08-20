@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/binary"
 	"fmt"
+
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 )

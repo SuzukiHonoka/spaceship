@@ -65,7 +65,7 @@ steps:
 
 volumes:
   - name: go-cache
-    temp: {}
+    temp: { }
 
 trigger:
   event:

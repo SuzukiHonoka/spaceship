@@ -1,10 +1,11 @@
 package client
 
 import (
-	"google.golang.org/grpc"
 	"log"
 	"math"
 	"sync/atomic"
+
+	"google.golang.org/grpc"
 )
 
 type ConnWrapper struct {

@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"strings"
+	"sync"
+
 	"github.com/SuzukiHonoka/spaceship/v2/internal/http"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/socks"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
@@ -13,9 +17,6 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/logger"
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
-	"log"
-	"strings"
-	"sync"
 )
 
 type Launcher struct {

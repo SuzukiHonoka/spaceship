@@ -3,12 +3,13 @@ package http
 import (
 	"errors"
 	"fmt"
-	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
-	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"io"
 	"log"
 	"net"
 	"net/http"
+
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 )
 
 func ServeError(w io.Writer, err error) {

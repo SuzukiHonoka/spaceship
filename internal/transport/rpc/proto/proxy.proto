@@ -27,9 +27,9 @@ message ProxySRC{
 
 enum ProxyStatus{
   Session = 0;
-  Error     = 1;
-  Accepted  = 2;
-  EOF       = 3;
+  Error = 1;
+  Accepted = 2;
+  EOF = 3;
 }
 
 message ProxyDST{

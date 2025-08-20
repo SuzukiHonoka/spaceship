@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"net"
+
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
 	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
@@ -13,9 +17,6 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
-	"io"
-	"log"
-	"net"
 )
 
 type Server struct {
