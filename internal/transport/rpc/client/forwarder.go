@@ -238,12 +238,18 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 }
 
 func (f *Forwarder) addTx(n int) {
+	if n <= 0 {
+		return // no data to add
+	}
 	tx := uint64(n)
 	f.Statistic.AddTx(tx)
 	transport.GlobalStats.AddTx(tx)
 }
 
 func (f *Forwarder) addRx(n int) {
+	if n <= 0 {
+		return // no data to add
+	}
 	rx := uint64(n)
 	f.Statistic.AddRx(rx)
 	transport.GlobalStats.AddRx(rx)

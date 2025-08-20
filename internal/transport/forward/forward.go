@@ -75,9 +75,9 @@ func (f *Forward) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, 
 		if n > 0 {
 			switch direction {
 			case transport.DirectionIn:
-				transport.GlobalStats.AddRx(uint64(n))
+				transport.GlobalStats.AddRx(uint64(n)) // #nosec G115
 			case transport.DirectionOut:
-				transport.GlobalStats.AddTx(uint64(n))
+				transport.GlobalStats.AddTx(uint64(n)) // #nosec G115
 			}
 		}
 		return err
