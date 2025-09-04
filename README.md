@@ -50,9 +50,3 @@ The program is still under development. Contributions via pull requests are grea
 This program is provided "as is," with no warranties or guarantees. It is available only to repository members, and
 sharing it with others is strictly prohibited. Users must adhere to the laws of their respective countries. **Any
 illegal use of this program is strictly prohibited.**
-
-## Acknowledgements
-
-We would like to extend our heartfelt thanks to JetBrains for their generous support through the Open Source Development
-License. Your tools have been instrumental in the development of this project, and we deeply appreciate your commitment
-to the open-source community.
