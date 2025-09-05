@@ -12,8 +12,8 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/forward"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
 	rpcClient "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
-	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config/client"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config/server"
@@ -91,7 +91,8 @@ func (c *MixedConfig) Apply() error {
 	// custom grpc service name
 	if c.Path != "" {
 		log.Printf("custom service name: %s", c.Path)
-		proto.SetServiceName(c.Path)
+		// Use the new RPC configuration system
+		rpc.SetServiceName(c.Path)
 	}
 
 	// client uuid

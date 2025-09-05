@@ -245,21 +245,150 @@ func (*ProxyDST_Header) isProxyDST_HeaderOrPayload() {}
 
 func (*ProxyDST_Payload) isProxyDST_HeaderOrPayload() {}
 
+type DnsRequestItem struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Fqdn          string                 `protobuf:"bytes,1,opt,name=fqdn,proto3" json:"fqdn,omitempty"`
+	QType         uint32                 `protobuf:"varint,2,opt,name=qType,proto3" json:"qType,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DnsRequestItem) Reset() {
+	*x = DnsRequestItem{}
+	mi := &file_proxy_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DnsRequestItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DnsRequestItem) ProtoMessage() {}
+
+func (x *DnsRequestItem) ProtoReflect() protoreflect.Message {
+	mi := &file_proxy_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DnsRequestItem.ProtoReflect.Descriptor instead.
+func (*DnsRequestItem) Descriptor() ([]byte, []int) {
+	return file_proxy_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *DnsRequestItem) GetFqdn() string {
+	if x != nil {
+		return x.Fqdn
+	}
+	return ""
+}
+
+func (x *DnsRequestItem) GetQType() uint32 {
+	if x != nil {
+		return x.QType
+	}
+	return 0
+}
+
+// Complete DNS Resource Record
+type RR_Record struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Wire format of the complete DNS RR (recommended approach)
+	WireData []byte `protobuf:"bytes,1,opt,name=wire_data,json=wireData,proto3" json:"wire_data,omitempty"`
+	// Metadata for easier processing (optional)
+	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Rrtype        uint32 `protobuf:"varint,3,opt,name=rrtype,proto3" json:"rrtype,omitempty"`
+	Class         uint32 `protobuf:"varint,4,opt,name=class,proto3" json:"class,omitempty"`
+	Ttl           uint32 `protobuf:"varint,5,opt,name=ttl,proto3" json:"ttl,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RR_Record) Reset() {
+	*x = RR_Record{}
+	mi := &file_proxy_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RR_Record) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RR_Record) ProtoMessage() {}
+
+func (x *RR_Record) ProtoReflect() protoreflect.Message {
+	mi := &file_proxy_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RR_Record.ProtoReflect.Descriptor instead.
+func (*RR_Record) Descriptor() ([]byte, []int) {
+	return file_proxy_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *RR_Record) GetWireData() []byte {
+	if x != nil {
+		return x.WireData
+	}
+	return nil
+}
+
+func (x *RR_Record) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *RR_Record) GetRrtype() uint32 {
+	if x != nil {
+		return x.Rrtype
+	}
+	return 0
+}
+
+func (x *RR_Record) GetClass() uint32 {
+	if x != nil {
+		return x.Class
+	}
+	return 0
+}
+
+func (x *RR_Record) GetTtl() uint32 {
+	if x != nil {
+		return x.Ttl
+	}
+	return 0
+}
+
 type DnsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// user id
 	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	// fqdn name
-	Fqdn string `protobuf:"bytes,2,opt,name=fqdn,proto3" json:"fqdn,omitempty"`
-	// enable ipv6
-	Ipv6          bool `protobuf:"varint,3,opt,name=ipv6,proto3" json:"ipv6,omitempty"`
+	// dns query items
+	Items         []*DnsRequestItem `protobuf:"bytes,2,rep,name=items,proto3" json:"items,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DnsRequest) Reset() {
 	*x = DnsRequest{}
-	mi := &file_proxy_proto_msgTypes[2]
+	mi := &file_proxy_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -271,7 +400,7 @@ func (x *DnsRequest) String() string {
 func (*DnsRequest) ProtoMessage() {}
 
 func (x *DnsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proto_msgTypes[2]
+	mi := &file_proxy_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -284,7 +413,7 @@ func (x *DnsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DnsRequest.ProtoReflect.Descriptor instead.
 func (*DnsRequest) Descriptor() ([]byte, []int) {
-	return file_proxy_proto_rawDescGZIP(), []int{2}
+	return file_proxy_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *DnsRequest) GetId() string {
@@ -294,33 +423,78 @@ func (x *DnsRequest) GetId() string {
 	return ""
 }
 
-func (x *DnsRequest) GetFqdn() string {
+func (x *DnsRequest) GetItems() []*DnsRequestItem {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+type DnsResult struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// fqdn
+	Fqdn string `protobuf:"bytes,1,opt,name=fqdn,proto3" json:"fqdn,omitempty"`
+	// resolved DNS records (updated to use complete RR format)
+	Records       []*RR_Record `protobuf:"bytes,2,rep,name=records,proto3" json:"records,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DnsResult) Reset() {
+	*x = DnsResult{}
+	mi := &file_proxy_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DnsResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DnsResult) ProtoMessage() {}
+
+func (x *DnsResult) ProtoReflect() protoreflect.Message {
+	mi := &file_proxy_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DnsResult.ProtoReflect.Descriptor instead.
+func (*DnsResult) Descriptor() ([]byte, []int) {
+	return file_proxy_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *DnsResult) GetFqdn() string {
 	if x != nil {
 		return x.Fqdn
 	}
 	return ""
 }
 
-func (x *DnsRequest) GetIpv6() bool {
+func (x *DnsResult) GetRecords() []*RR_Record {
 	if x != nil {
-		return x.Ipv6
+		return x.Records
 	}
-	return false
+	return nil
 }
 
 type DnsResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// fqdn name
-	Domain string `protobuf:"bytes,1,opt,name=domain,proto3" json:"domain,omitempty"`
 	// fqdn resolved result
-	Result        []string `protobuf:"bytes,2,rep,name=result,proto3" json:"result,omitempty"`
+	Result        []*DnsResult `protobuf:"bytes,1,rep,name=result,proto3" json:"result,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DnsResponse) Reset() {
 	*x = DnsResponse{}
-	mi := &file_proxy_proto_msgTypes[3]
+	mi := &file_proxy_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -332,7 +506,7 @@ func (x *DnsResponse) String() string {
 func (*DnsResponse) ProtoMessage() {}
 
 func (x *DnsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proto_msgTypes[3]
+	mi := &file_proxy_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -345,17 +519,10 @@ func (x *DnsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DnsResponse.ProtoReflect.Descriptor instead.
 func (*DnsResponse) Descriptor() ([]byte, []int) {
-	return file_proxy_proto_rawDescGZIP(), []int{3}
+	return file_proxy_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *DnsResponse) GetDomain() string {
-	if x != nil {
-		return x.Domain
-	}
-	return ""
-}
-
-func (x *DnsResponse) GetResult() []string {
+func (x *DnsResponse) GetResult() []*DnsResult {
 	if x != nil {
 		return x.Result
 	}
@@ -366,17 +533,15 @@ type ProxySRC_ProxyHeader struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// user id
 	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	// fqdn
-	Fqdn string `protobuf:"bytes,2,opt,name=fqdn,proto3" json:"fqdn,omitempty"`
-	// port
-	Port          uint32 `protobuf:"varint,3,opt,name=port,proto3" json:"port,omitempty"`
+	// addr
+	Addr          string `protobuf:"bytes,2,opt,name=addr,proto3" json:"addr,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ProxySRC_ProxyHeader) Reset() {
 	*x = ProxySRC_ProxyHeader{}
-	mi := &file_proxy_proto_msgTypes[4]
+	mi := &file_proxy_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -388,7 +553,7 @@ func (x *ProxySRC_ProxyHeader) String() string {
 func (*ProxySRC_ProxyHeader) ProtoMessage() {}
 
 func (x *ProxySRC_ProxyHeader) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proto_msgTypes[4]
+	mi := &file_proxy_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -411,18 +576,11 @@ func (x *ProxySRC_ProxyHeader) GetId() string {
 	return ""
 }
 
-func (x *ProxySRC_ProxyHeader) GetFqdn() string {
+func (x *ProxySRC_ProxyHeader) GetAddr() string {
 	if x != nil {
-		return x.Fqdn
+		return x.Addr
 	}
 	return ""
-}
-
-func (x *ProxySRC_ProxyHeader) GetPort() uint32 {
-	if x != nil {
-		return x.Port
-	}
-	return 0
 }
 
 type ProxyDST_ProxyHeader struct {
@@ -434,7 +592,7 @@ type ProxyDST_ProxyHeader struct {
 
 func (x *ProxyDST_ProxyHeader) Reset() {
 	*x = ProxyDST_ProxyHeader{}
-	mi := &file_proxy_proto_msgTypes[5]
+	mi := &file_proxy_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -446,7 +604,7 @@ func (x *ProxyDST_ProxyHeader) String() string {
 func (*ProxyDST_ProxyHeader) ProtoMessage() {}
 
 func (x *ProxyDST_ProxyHeader) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proto_msgTypes[5]
+	mi := &file_proxy_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -473,14 +631,13 @@ var File_proxy_proto protoreflect.FileDescriptor
 
 const file_proxy_proto_rawDesc = "" +
 	"\n" +
-	"\vproxy.proto\x12\x05proxy\"\xb9\x01\n" +
+	"\vproxy.proto\x12\x05proxy\"\xa5\x01\n" +
 	"\bProxySRC\x125\n" +
 	"\x06header\x18\x01 \x01(\v2\x1b.proxy.ProxySRC.ProxyHeaderH\x00R\x06header\x12\x1a\n" +
-	"\apayload\x18\x02 \x01(\fH\x00R\apayload\x1aE\n" +
+	"\apayload\x18\x02 \x01(\fH\x00R\apayload\x1a1\n" +
 	"\vProxyHeader\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
-	"\x04fqdn\x18\x02 \x01(\tR\x04fqdn\x12\x12\n" +
-	"\x04port\x18\x03 \x01(\rR\x04portB\x13\n" +
+	"\x04addr\x18\x02 \x01(\tR\x04addrB\x13\n" +
 	"\x11header_or_payload\"\xc1\x01\n" +
 	"\bProxyDST\x12*\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x12.proxy.ProxyStatusR\x06status\x125\n" +
@@ -488,24 +645,34 @@ const file_proxy_proto_rawDesc = "" +
 	"\apayload\x18\x03 \x01(\fH\x00R\apayload\x1a!\n" +
 	"\vProxyHeader\x12\x12\n" +
 	"\x04addr\x18\x02 \x01(\tR\x04addrB\x13\n" +
-	"\x11header_or_payload\"D\n" +
+	"\x11header_or_payload\":\n" +
+	"\x0eDnsRequestItem\x12\x12\n" +
+	"\x04fqdn\x18\x01 \x01(\tR\x04fqdn\x12\x14\n" +
+	"\x05qType\x18\x02 \x01(\rR\x05qType\"|\n" +
+	"\tRR_Record\x12\x1b\n" +
+	"\twire_data\x18\x01 \x01(\fR\bwireData\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
+	"\x06rrtype\x18\x03 \x01(\rR\x06rrtype\x12\x14\n" +
+	"\x05class\x18\x04 \x01(\rR\x05class\x12\x10\n" +
+	"\x03ttl\x18\x05 \x01(\rR\x03ttl\"I\n" +
 	"\n" +
 	"DnsRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
-	"\x04fqdn\x18\x02 \x01(\tR\x04fqdn\x12\x12\n" +
-	"\x04ipv6\x18\x03 \x01(\bR\x04ipv6\"=\n" +
-	"\vDnsResponse\x12\x16\n" +
-	"\x06domain\x18\x01 \x01(\tR\x06domain\x12\x16\n" +
-	"\x06result\x18\x02 \x03(\tR\x06result*<\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12+\n" +
+	"\x05items\x18\x02 \x03(\v2\x15.proxy.DnsRequestItemR\x05items\"K\n" +
+	"\tDnsResult\x12\x12\n" +
+	"\x04fqdn\x18\x01 \x01(\tR\x04fqdn\x12*\n" +
+	"\arecords\x18\x02 \x03(\v2\x10.proxy.RR_RecordR\arecords\"7\n" +
+	"\vDnsResponse\x12(\n" +
+	"\x06result\x18\x01 \x03(\v2\x10.proxy.DnsResultR\x06result*<\n" +
 	"\vProxyStatus\x12\v\n" +
 	"\aSession\x10\x00\x12\t\n" +
 	"\x05Error\x10\x01\x12\f\n" +
 	"\bAccepted\x10\x02\x12\a\n" +
-	"\x03EOF\x10\x032s\n" +
-	"\x05Proxy\x129\n" +
+	"\x03EOF\x10\x032o\n" +
+	"\x05Proxy\x125\n" +
 	"\n" +
-	"DnsResolve\x12\x11.proxy.DnsRequest\x1a\x12.proxy.DnsResponse\"\x00(\x010\x01\x12/\n" +
-	"\x05Proxy\x12\x0f.proxy.ProxySRC\x1a\x0f.proxy.ProxyDST\"\x00(\x010\x01BFZDgithub.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto;proxyb\x06proto3"
+	"DnsResolve\x12\x11.proxy.DnsRequest\x1a\x12.proxy.DnsResponse\"\x00\x12/\n" +
+	"\x05Proxy\x12\x0f.proxy.ProxySRC\x1a\x0f.proxy.ProxyDST\"\x00(\x010\x01BIZGgithub.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto;proxyb\x06proto3"
 
 var (
 	file_proxy_proto_rawDescOnce sync.Once
@@ -520,29 +687,35 @@ func file_proxy_proto_rawDescGZIP() []byte {
 }
 
 var file_proxy_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proxy_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_proxy_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_proxy_proto_goTypes = []any{
 	(ProxyStatus)(0),             // 0: proxy.ProxyStatus
 	(*ProxySRC)(nil),             // 1: proxy.ProxySRC
 	(*ProxyDST)(nil),             // 2: proxy.ProxyDST
-	(*DnsRequest)(nil),           // 3: proxy.DnsRequest
-	(*DnsResponse)(nil),          // 4: proxy.DnsResponse
-	(*ProxySRC_ProxyHeader)(nil), // 5: proxy.ProxySRC.ProxyHeader
-	(*ProxyDST_ProxyHeader)(nil), // 6: proxy.ProxyDST.ProxyHeader
+	(*DnsRequestItem)(nil),       // 3: proxy.DnsRequestItem
+	(*RR_Record)(nil),            // 4: proxy.RR_Record
+	(*DnsRequest)(nil),           // 5: proxy.DnsRequest
+	(*DnsResult)(nil),            // 6: proxy.DnsResult
+	(*DnsResponse)(nil),          // 7: proxy.DnsResponse
+	(*ProxySRC_ProxyHeader)(nil), // 8: proxy.ProxySRC.ProxyHeader
+	(*ProxyDST_ProxyHeader)(nil), // 9: proxy.ProxyDST.ProxyHeader
 }
 var file_proxy_proto_depIdxs = []int32{
-	5, // 0: proxy.ProxySRC.header:type_name -> proxy.ProxySRC.ProxyHeader
+	8, // 0: proxy.ProxySRC.header:type_name -> proxy.ProxySRC.ProxyHeader
 	0, // 1: proxy.ProxyDST.status:type_name -> proxy.ProxyStatus
-	6, // 2: proxy.ProxyDST.header:type_name -> proxy.ProxyDST.ProxyHeader
-	3, // 3: proxy.Proxy.DnsResolve:input_type -> proxy.DnsRequest
-	1, // 4: proxy.Proxy.Proxy:input_type -> proxy.ProxySRC
-	4, // 5: proxy.Proxy.DnsResolve:output_type -> proxy.DnsResponse
-	2, // 6: proxy.Proxy.Proxy:output_type -> proxy.ProxyDST
-	5, // [5:7] is the sub-list for method output_type
-	3, // [3:5] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	9, // 2: proxy.ProxyDST.header:type_name -> proxy.ProxyDST.ProxyHeader
+	3, // 3: proxy.DnsRequest.items:type_name -> proxy.DnsRequestItem
+	4, // 4: proxy.DnsResult.records:type_name -> proxy.RR_Record
+	6, // 5: proxy.DnsResponse.result:type_name -> proxy.DnsResult
+	5, // 6: proxy.Proxy.DnsResolve:input_type -> proxy.DnsRequest
+	1, // 7: proxy.Proxy.Proxy:input_type -> proxy.ProxySRC
+	7, // 8: proxy.Proxy.DnsResolve:output_type -> proxy.DnsResponse
+	2, // 9: proxy.Proxy.Proxy:output_type -> proxy.ProxyDST
+	8, // [8:10] is the sub-list for method output_type
+	6, // [6:8] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_proxy_proto_init() }
@@ -564,7 +737,7 @@ func file_proxy_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proxy_proto_rawDesc), len(file_proxy_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   6,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

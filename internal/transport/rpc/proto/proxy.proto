@@ -2,10 +2,10 @@ syntax = "proto3";
 
 package proxy;
 
-option go_package = "github.com/SuzukiHonoka/spaceship/internal/transport/rpc/proto;proxy";
+option go_package = "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto;proxy";
 
 service Proxy{
-  rpc DnsResolve(stream DnsRequest) returns (stream DnsResponse) {};
+  rpc DnsResolve(DnsRequest) returns (DnsResponse) {};
   rpc Proxy(stream ProxySRC) returns (stream ProxyDST) {};
 }
 
@@ -18,10 +18,8 @@ message ProxySRC{
   message ProxyHeader{
     // user id
     string id = 1;
-    // fqdn
-    string fqdn = 2;
-    // port
-    uint32 port = 3;
+    // addr
+    string addr = 2;
   }
 }
 
@@ -45,18 +43,37 @@ message ProxyDST{
   }
 }
 
+message DnsRequestItem{
+  string fqdn = 1;
+  uint32 qType = 2;
+}
+
+// Complete DNS Resource Record
+message RR_Record {
+  // Wire format of the complete DNS RR (recommended approach)
+  bytes wire_data = 1;
+  // Metadata for easier processing (optional)
+  string name = 2;
+  uint32 rrtype = 3;
+  uint32 class = 4;
+  uint32 ttl = 5;
+}
+
 message DnsRequest{
   // user id
   string id = 1;
-  // fqdn name
-  string fqdn = 2;
-  // enable ipv6
-  bool ipv6 = 3;
+  // dns query items
+  repeated DnsRequestItem items = 2;
+}
+
+message DnsResult {
+  // fqdn
+  string fqdn = 1;
+  // resolved DNS records (updated to use complete RR format)
+  repeated RR_Record records = 2;
 }
 
 message DnsResponse{
-  // fqdn name
-  string domain = 1;
   // fqdn resolved result
-  repeated string result = 2;
+  repeated DnsResult result = 1;
 }

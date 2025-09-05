@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"strconv"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
@@ -23,10 +22,10 @@ type Forwarder struct {
 	Ack           chan interface{}
 }
 
-func NewForwarder(ctx context.Context, users config.Users, stream proto.Proxy_ProxyServer) *Forwarder {
+func NewForwarder(ctx context.Context, m *config.UsersMatchMap, stream proto.Proxy_ProxyServer) *Forwarder {
 	return &Forwarder{
 		Ctx:           ctx,
-		UsersMatchMap: users.ToMatchMap(),
+		UsersMatchMap: m,
 		Stream:        stream,
 		Ack:           make(chan interface{}, 1),
 	}
@@ -121,16 +120,18 @@ func (f *Forwarder) handshake() error {
 	}
 
 	//log.Printf("prepare for dialing: %s:%d", req.Host, req.Port)
-	route, err := router.GetRoute(header.Fqdn)
+	host, _, err := net.SplitHostPort(header.Addr)
 	if err != nil {
-		return fmt.Errorf("get route for %s error: %w", header.Fqdn, err)
+		return fmt.Errorf("invalid addr %s: %w", header.Addr, err)
 	}
-	log.Printf("proxy accepted: %s -> %s", header.Fqdn, route)
-
-	target := net.JoinHostPort(header.Fqdn, strconv.FormatUint(uint64(header.Port), 10))
+	route, err := router.GetRoute(host)
+	if err != nil {
+		return fmt.Errorf("get route for %s error: %w", host, err)
+	}
+	log.Printf("proxy accepted: %s -> %s", host, route)
 
 	// dial to target with 3 minutes timeout as default
-	if f.Conn, err = route.Dial(transport.Network, target); err != nil {
+	if f.Conn, err = route.Dial(transport.Network, header.Addr); err != nil {
 		_ = f.Stream.Send(&proto.ProxyDST{
 			Status: proto.ProxyStatus_Error,
 		})

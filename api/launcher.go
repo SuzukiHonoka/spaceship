@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/SuzukiHonoka/spaceship/v2/internal/dns"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/http"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/socks"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
@@ -39,7 +40,7 @@ func (l *Launcher) launchServer(ctx context.Context, cfg *config.MixedConfig) er
 	log.Println("server starting")
 
 	// create server
-	s, err := server.NewServer(ctx, cfg.Users, cfg.SSL)
+	s, err := server.NewServer(ctx, cfg.Users, cfg.SSL, cfg.DNS)
 	if err != nil {
 		return fmt.Errorf("create server failed: %w", err)
 	}
@@ -100,7 +101,6 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 		}
 		socksCfg := &socks.Config{Credentials: basicAuth}
 		s := socks.New(ctx, socksCfg)
-		defer utils.Close(s)
 
 		errGroup.Go(func() error {
 			if err := s.ListenAndServe("unix", cfg.ListenSocksUnix); err != nil {
@@ -114,11 +114,30 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 	if cfg.ListenHttp != "" {
 		httpCfg := &http.Config{Credentials: basicAuth}
 		h := http.New(ctx, httpCfg)
-		defer utils.Close(h)
 
 		errGroup.Go(func() error {
 			if err := h.ListenAndServe("tcp", cfg.ListenHttp); err != nil {
 				return fmt.Errorf("serve http failed: %w", err)
+			}
+			return nil
+		})
+	}
+
+	// create dns server
+	if cfg.ListenDns != "" {
+		dnsSrv, err := dns.NewServer(cfg.ListenDns)
+		if err != nil {
+			return fmt.Errorf("create dns server failed: %w", err)
+		}
+
+		go func() {
+			<-ctx.Done()
+			utils.Close(dnsSrv)
+		}()
+
+		errGroup.Go(func() error {
+			if err := dnsSrv.Start(); err != nil {
+				return fmt.Errorf("serve dns failed: %w", err)
 			}
 			return nil
 		})

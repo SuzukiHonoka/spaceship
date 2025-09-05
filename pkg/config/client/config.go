@@ -11,6 +11,7 @@ type Client struct {
 	ListenSocks     string        `json:"listen_socks,omitempty"`
 	ListenSocksUnix string        `json:"listen_socks_unix,omitempty"`
 	ListenHttp      string        `json:"listen_http,omitempty"`
+	ListenDns       string        `json:"listen_dns,omitempty"`
 	BasicAuth       []string      `json:"basic_auth,omitempty"` // user:password
 	Mux             uint8         `json:"mux"`                  // 0 -> disabled, n (>0) -> limited connection
 	EnableTLS       bool          `json:"tls"`

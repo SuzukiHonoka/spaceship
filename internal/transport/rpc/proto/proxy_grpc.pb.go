@@ -8,7 +8,6 @@ package proxy
 
 import (
 	context "context"
-	"fmt"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -19,22 +18,16 @@ import (
 // Requires gRPC-Go v1.64.0 or later.
 const _ = grpc.SupportPackageIsVersion9
 
-var (
+const (
 	Proxy_DnsResolve_FullMethodName = "/proxy.Proxy/DnsResolve"
 	Proxy_Proxy_FullMethodName      = "/proxy.Proxy/Proxy"
 )
-
-func SetServiceName(name string) {
-	Proxy_ServiceDesc.ServiceName = name
-	Proxy_DnsResolve_FullMethodName = fmt.Sprintf("/%s/DnsResolve", Proxy_ServiceDesc.ServiceName)
-	Proxy_Proxy_FullMethodName = fmt.Sprintf("/%s/Proxy", Proxy_ServiceDesc.ServiceName)
-}
 
 // ProxyClient is the client API for Proxy service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ProxyClient interface {
-	DnsResolve(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[DnsRequest, DnsResponse], error)
+	DnsResolve(ctx context.Context, in *DnsRequest, opts ...grpc.CallOption) (*DnsResponse, error)
 	Proxy(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ProxySRC, ProxyDST], error)
 }
 
@@ -46,22 +39,19 @@ func NewProxyClient(cc grpc.ClientConnInterface) ProxyClient {
 	return &proxyClient{cc}
 }
 
-func (c *proxyClient) DnsResolve(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[DnsRequest, DnsResponse], error) {
+func (c *proxyClient) DnsResolve(ctx context.Context, in *DnsRequest, opts ...grpc.CallOption) (*DnsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Proxy_ServiceDesc.Streams[0], Proxy_DnsResolve_FullMethodName, cOpts...)
+	out := new(DnsResponse)
+	err := c.cc.Invoke(ctx, Proxy_DnsResolve_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[DnsRequest, DnsResponse]{ClientStream: stream}
-	return x, nil
+	return out, nil
 }
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Proxy_DnsResolveClient = grpc.BidiStreamingClient[DnsRequest, DnsResponse]
 
 func (c *proxyClient) Proxy(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ProxySRC, ProxyDST], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Proxy_ServiceDesc.Streams[1], Proxy_Proxy_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Proxy_ServiceDesc.Streams[0], Proxy_Proxy_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +66,7 @@ type Proxy_ProxyClient = grpc.BidiStreamingClient[ProxySRC, ProxyDST]
 // All implementations must embed UnimplementedProxyServer
 // for forward compatibility.
 type ProxyServer interface {
-	DnsResolve(grpc.BidiStreamingServer[DnsRequest, DnsResponse]) error
+	DnsResolve(context.Context, *DnsRequest) (*DnsResponse, error)
 	Proxy(grpc.BidiStreamingServer[ProxySRC, ProxyDST]) error
 	mustEmbedUnimplementedProxyServer()
 }
@@ -88,8 +78,8 @@ type ProxyServer interface {
 // pointer dereference when methods are called.
 type UnimplementedProxyServer struct{}
 
-func (UnimplementedProxyServer) DnsResolve(grpc.BidiStreamingServer[DnsRequest, DnsResponse]) error {
-	return status.Errorf(codes.Unimplemented, "method DnsResolve not implemented")
+func (UnimplementedProxyServer) DnsResolve(context.Context, *DnsRequest) (*DnsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DnsResolve not implemented")
 }
 func (UnimplementedProxyServer) Proxy(grpc.BidiStreamingServer[ProxySRC, ProxyDST]) error {
 	return status.Errorf(codes.Unimplemented, "method Proxy not implemented")
@@ -115,12 +105,23 @@ func RegisterProxyServer(s grpc.ServiceRegistrar, srv ProxyServer) {
 	s.RegisterService(&Proxy_ServiceDesc, srv)
 }
 
-func _Proxy_DnsResolve_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(ProxyServer).DnsResolve(&grpc.GenericServerStream[DnsRequest, DnsResponse]{ServerStream: stream})
+func _Proxy_DnsResolve_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DnsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProxyServer).DnsResolve(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Proxy_DnsResolve_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProxyServer).DnsResolve(ctx, req.(*DnsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Proxy_DnsResolveServer = grpc.BidiStreamingServer[DnsRequest, DnsResponse]
 
 func _Proxy_Proxy_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(ProxyServer).Proxy(&grpc.GenericServerStream[ProxySRC, ProxyDST]{ServerStream: stream})
@@ -135,14 +136,13 @@ type Proxy_ProxyServer = grpc.BidiStreamingServer[ProxySRC, ProxyDST]
 var Proxy_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "proxy.Proxy",
 	HandlerType: (*ProxyServer)(nil),
-	Methods:     []grpc.MethodDesc{},
-	Streams: []grpc.StreamDesc{
+	Methods: []grpc.MethodDesc{
 		{
-			StreamName:    "DnsResolve",
-			Handler:       _Proxy_DnsResolve_Handler,
-			ServerStreams: true,
-			ClientStreams: true,
+			MethodName: "DnsResolve",
+			Handler:    _Proxy_DnsResolve_Handler,
 		},
+	},
+	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "Proxy",
 			Handler:       _Proxy_Proxy_Handler,
