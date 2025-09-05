@@ -82,12 +82,11 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) Close() error {
-	return s.Shutdown()
-}
-
-func (s *Server) Shutdown() error {
+	log.Println("dns: shutting down")
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	defer cancel()
 	if s.srv != nil {
-		return s.srv.Shutdown()
+		return s.srv.ShutdownContext(ctx)
 	}
 	return nil
 }
