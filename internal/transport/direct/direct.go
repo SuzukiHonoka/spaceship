@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strconv"
 	"sync"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
@@ -63,10 +62,10 @@ func (d *Direct) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, d
 }
 
 // Proxy the traffic locally
-func (d *Direct) Proxy(ctx context.Context, req *transport.Request, localAddr chan<- string, dst io.Writer, src io.Reader) (err error) {
+func (d *Direct) Proxy(ctx context.Context, addr string, localAddr chan<- string, dst io.Writer, src io.Reader) (err error) {
 	defer close(localAddr)
-	target := net.JoinHostPort(req.Host, strconv.Itoa(int(req.Port)))
-	d.conn, err = d.Dial(transport.Network, target)
+
+	d.conn, err = d.Dial(transport.Network, addr)
 	if err != nil {
 		return fmt.Errorf("direct: failed to dial: %w", err)
 	}

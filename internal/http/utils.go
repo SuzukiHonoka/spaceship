@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
@@ -32,13 +33,13 @@ func ServeError(w io.Writer, err error) {
 	}
 }
 
-func BuildRemoteRequest(r *http.Request) (*transport.Request, error) {
+func BuildRemoteAddr(r *http.Request) (string, string, error) {
 	host, port, err := utils.SplitHostPort(r.Host)
 	if err != nil {
 		// check if a standard port missing, eg: http
 		var addrErr *net.AddrError
-		if !errors.As(err, &addrErr) && addrErr.Err != "missing port in address" {
-			return nil, fmt.Errorf("http: split host port error: %w", err)
+		if !errors.As(err, &addrErr) || addrErr.Err != "missing port in address" {
+			return "", "", fmt.Errorf("http: split host port error: %w", err)
 		}
 
 		// missing port in address
@@ -46,11 +47,11 @@ func BuildRemoteRequest(r *http.Request) (*transport.Request, error) {
 		if r.URL.Scheme != "" {
 			var ok bool
 			if port, ok = ProtocolPortMap[r.URL.Scheme]; !ok {
-				return nil, fmt.Errorf("unkown scheme: %s %w", r.URL.Scheme, transport.ErrBadRequest)
+				return "", "", fmt.Errorf("unkown scheme: %s %w", r.URL.Scheme, transport.ErrBadRequest)
 			}
 		} else {
 			port = 80
 		}
 	}
-	return transport.NewRequest(host, port), nil
+	return host, net.JoinHostPort(host, strconv.FormatUint(uint64(port), 10)), nil
 }

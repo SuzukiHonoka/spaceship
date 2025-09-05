@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strconv"
 	"sync"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
@@ -86,11 +85,10 @@ func (f *Forward) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, 
 	}
 }
 
-func (f *Forward) Proxy(ctx context.Context, req *transport.Request, localAddr chan<- string, dst io.Writer, src io.Reader) (err error) {
+func (f *Forward) Proxy(ctx context.Context, addr string, localAddr chan<- string, dst io.Writer, src io.Reader) (err error) {
 	defer close(localAddr)
 
-	target := net.JoinHostPort(req.Host, strconv.Itoa(int(req.Port)))
-	f.conn, err = f.Dial(transport.Network, target)
+	f.conn, err = f.Dial(transport.Network, addr)
 	if err != nil {
 		return err
 	}

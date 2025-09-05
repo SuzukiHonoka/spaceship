@@ -172,19 +172,19 @@ func (f *Forwarder) CopySRCtoTarget(ctx context.Context) (err error) {
 	}
 }
 
-func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) error {
+func (f *Forwarder) Start(addr string, localAddrChan chan<- string) error {
 	// handshake and get localAddr first
+
 	handshake := &proxy.ProxySRC{
 		HeaderOrPayload: &proxy.ProxySRC_Header{
 			Header: &proxy.ProxySRC_ProxyHeader{
 				Id:   uuid,
-				Fqdn: req.Host,
-				Port: uint32(req.Port),
+				Addr: addr,
 			},
 		},
 	}
 	if err := f.stream.Send(handshake); err != nil {
-		return fmt.Errorf("rpc: send handshake to server: %s failed: %w", req.Host, err)
+		return fmt.Errorf("rpc: send handshake to server: %s failed: %w", addr, err)
 	}
 
 	errGroup, ctx := errgroup.WithContext(f.ctx)
@@ -218,10 +218,10 @@ func (f *Forwarder) Start(req *transport.Request, localAddrChan chan<- string) e
 		select {
 		case <-t.C:
 			// timed out
-			return fmt.Errorf("rpc: server to %s ack timed out: %w", req.Host, os.ErrDeadlineExceeded)
+			return fmt.Errorf("rpc: server to %s ack timed out: %w", addr, os.ErrDeadlineExceeded)
 		case localAddr, ok := <-f.localAddr:
 			if !ok {
-				return fmt.Errorf("rpc: server to %s ack failed", req.Host)
+				return fmt.Errorf("rpc: server to %s ack failed", addr)
 			}
 			localAddrChan <- localAddr
 			// done

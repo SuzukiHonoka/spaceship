@@ -101,5 +101,7 @@ func (q *ConnQueue) GetClient() (proxy.ProxyClient, func() error, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return proxy.NewProxyClient(conn), done, nil
+	// Use dynamic proxy client for configurable service names
+	dynamicClient := NewDynamicProxyClient(conn)
+	return dynamicClient, done, nil
 }

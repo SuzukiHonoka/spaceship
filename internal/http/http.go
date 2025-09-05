@@ -148,10 +148,10 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	defer utils.Close(conn)
 
-	// build remote request
-	request, err := BuildRemoteRequest(r)
+	// build remote addr
+	host, addr, err := BuildRemoteAddr(r)
 	if err != nil {
-		ServeError(conn, fmt.Errorf("http: build remote request failed: %w", err))
+		ServeError(conn, fmt.Errorf("http: build remote addr failed: %w", err))
 		return
 	}
 
@@ -181,7 +181,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	proxyLocalAddr := make(chan string)
 	errGroup.Go(func() error {
-		return route.Proxy(ctx, request, proxyLocalAddr, conn, pr)
+		return route.Proxy(ctx, addr, proxyLocalAddr, conn, pr)
 	})
 
 	errGroup.Go(func() error {
@@ -204,9 +204,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		buf.WriteString("HTTP/1.1")
 		buf.WriteString(CRLF)
 
-		// Host maybe missing in headers, and will cause bad request errors, rewrite it
+		// Host maybe missing in headers, and will cause bad addr errors, rewrite it
 		if r.Header.Get("Host") == "" {
-			r.Header.Set("Host", request.Host)
+			r.Header.Set("Host", host)
 		}
 
 		// filter sensitive headers
@@ -285,10 +285,10 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	defer utils.Close(conn)
 
-	// build remote request
-	request, err := BuildRemoteRequest(r)
+	// build remote addr
+	_, addr, err := BuildRemoteAddr(r)
 	if err != nil {
-		ServeError(conn, fmt.Errorf("http: build remote request failed: %w", err))
+		ServeError(conn, fmt.Errorf("http: build remote addr failed: %w", err))
 	}
 
 	// actual proxy
@@ -296,7 +296,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	proxyLocalAddr := make(chan string)
 	errGroup.Go(func() error {
-		return route.Proxy(ctx, request, proxyLocalAddr, conn, conn)
+		return route.Proxy(ctx, addr, proxyLocalAddr, conn, conn)
 	})
 
 	errGroup.Go(func() error {

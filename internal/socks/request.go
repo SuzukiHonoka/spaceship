@@ -10,7 +10,6 @@ import (
 	"strconv"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
-	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"golang.org/x/sync/errgroup"
 )
@@ -133,17 +132,15 @@ func (s *Server) handleRequest(req *Request, conn ConnWriter) error {
 
 // handleConnect is used to handle a connect command
 func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Request) error {
-	// set target dst
-	var target string
-	if req.DestAddr.FQDN != "" {
-		target = req.DestAddr.FQDN
-	} else {
-		target = req.DestAddr.IP.String()
+	// set host dst
+	host := req.DestAddr.FQDN
+	if host == "" {
+		host = req.DestAddr.IP.String()
 	}
 
-	route, err := router.GetRoute(target)
+	route, err := router.GetRoute(host)
 	if err != nil {
-		log.Printf("socks: get route for %s error: %v", target, err)
+		log.Printf("socks: get route for %s error: %v", host, err)
 		if err = sendReply(conn, ruleFailure, nil); err != nil {
 			return fmt.Errorf("failed to send reply: %w", err)
 		}
@@ -151,16 +148,14 @@ func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Reques
 	}
 	defer utils.Close(route)
 
-	log.Printf("socks: %s:%d -> %s", target, req.DestAddr.Port, route)
+	log.Printf("socks: %s:%d -> %s", host, req.DestAddr.Port, route)
 
 	// start proxy
-	request := transport.NewRequest(target, req.DestAddr.Port)
-
+	addr := net.JoinHostPort(host, strconv.FormatUint(uint64(req.DestAddr.Port), 10))
 	errGroup, ctx := errgroup.WithContext(ctx)
-
 	localAddr := make(chan string)
 	errGroup.Go(func() error {
-		return route.Proxy(ctx, request, localAddr, conn, req.bufConn)
+		return route.Proxy(ctx, addr, localAddr, conn, req.bufConn)
 	})
 
 	errGroup.Go(func() (err error) {
@@ -169,7 +164,7 @@ func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Reques
 			if err = sendReply(conn, networkUnreachable, nil); err != nil {
 				return fmt.Errorf("failed to send reply: %v", err)
 			}
-			return fmt.Errorf("proxy handshake failed for %s", target)
+			return fmt.Errorf("proxy handshake failed for %s", host)
 		}
 
 		// Send success
