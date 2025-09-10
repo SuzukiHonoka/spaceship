@@ -3,10 +3,13 @@ package dns
 import (
 	"context"
 	"log"
+	"time"
 
 	rpcClient "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
 	"github.com/miekg/dns"
 )
+
+var DefaultShutdownTimeout = 3 * time.Second
 
 type Server struct {
 	srv    *dns.Server
@@ -83,7 +86,7 @@ func (s *Server) Start() error {
 
 func (s *Server) Close() error {
 	log.Println("dns: shutting down")
-	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultShutdownTimeout)
 	defer cancel()
 	if s.srv != nil {
 		return s.srv.ShutdownContext(ctx)
