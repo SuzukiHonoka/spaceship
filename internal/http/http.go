@@ -47,7 +47,7 @@ func (s *Server) Close() (err error) {
 	}
 	s.closeOnce.Do(func() {
 		log.Println("http: shutting down")
-		utils.Close(s.srv)
+		err = s.srv.Close()
 	})
 	return err
 }
