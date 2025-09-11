@@ -13,7 +13,6 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/socks"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/server"
-	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/logger"
 	"github.com/google/uuid"
@@ -83,7 +82,6 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 	if cfg.ListenSocks != "" {
 		socksCfg := &socks.Config{Credentials: basicAuth}
 		s := socks.New(ctx, socksCfg)
-		defer utils.Close(s)
 
 		errGroup.Go(func() error {
 			if err := s.ListenAndServe("tcp", cfg.ListenSocks); err != nil {
@@ -130,13 +128,8 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 			return fmt.Errorf("create dns server failed: %w", err)
 		}
 
-		go func() {
-			<-ctx.Done()
-			utils.Close(dnsSrv)
-		}()
-
 		errGroup.Go(func() error {
-			if err := dnsSrv.Start(); err != nil {
+			if err := dnsSrv.Start(ctx); err != nil {
 				return fmt.Errorf("serve dns failed: %w", err)
 			}
 			return nil

@@ -78,6 +78,7 @@ func (s *Server) ListenAndServe(_, addr string) error {
 	case err := <-serverErr:
 		return err
 	case <-s.ctx.Done():
+		utils.Close(s)
 		return s.ctx.Err()
 	}
 }

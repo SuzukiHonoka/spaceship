@@ -63,6 +63,7 @@ func (s *Server) ListenAndServe(network, addr string) error {
 	case err = <-serverErr:
 		return err
 	case <-s.ctx.Done():
+		utils.Close(s)
 		return s.ctx.Err()
 	}
 }

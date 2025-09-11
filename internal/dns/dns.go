@@ -6,6 +6,7 @@ import (
 	"time"
 
 	rpcClient "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"github.com/miekg/dns"
 )
 
@@ -79,9 +80,23 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 }
 
-func (s *Server) Start() error {
+func (s *Server) Start(ctx context.Context) error {
 	log.Printf("dns will listen at %s", s.srv.Addr)
-	return s.srv.ListenAndServe()
+
+	// Create error channel for server errors
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- s.srv.ListenAndServe()
+	}()
+
+	// Wait for context done or server error
+	select {
+	case err := <-serverErr:
+		return err
+	case <-ctx.Done():
+		utils.Close(s)
+		return ctx.Err()
+	}
 }
 
 func (s *Server) Close() error {
