@@ -47,10 +47,7 @@ func (s *Server) Close() (err error) {
 	}
 	s.closeOnce.Do(func() {
 		log.Println("http: shutting down")
-		// Graceful shutdown with timeout
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		err = s.srv.Shutdown(shutdownCtx)
+		utils.Close(s.srv)
 	})
 	return err
 }
