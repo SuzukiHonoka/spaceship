@@ -2,11 +2,15 @@ package client
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
@@ -16,6 +20,8 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"github.com/miekg/dns"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 const TransportName = "rpc"
@@ -34,8 +40,68 @@ func SetUUID(uid string) {
 	uuid = uid
 }
 
+func setupGrpcCredential(tls bool, hostName string, customCA ...string) (credentials.TransportCredentials, error) {
+	if !tls {
+		return insecure.NewCredentials(), nil
+	}
+
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		if len(customCA) == 0 {
+			return nil, fmt.Errorf("addtional ca not found while system cert pool can not be copied: %w", err)
+		}
+		log.Println("copy system cert pool failed, creating new empty pool")
+		pool = x509.NewCertPool()
+	}
+
+	// load custom cas if exist
+	if err = loadCertificateAuthorities(pool, customCA); err != nil {
+		return nil, fmt.Errorf("load custom ca failed: %w", err)
+	}
+
+	tlsConfig, err := buildClientTLSConfig(pool, hostName)
+	if err != nil {
+		return nil, fmt.Errorf("build client tls config failed: %w", err)
+	}
+	return credentials.NewTLS(tlsConfig), nil
+}
+
+func loadCertificateAuthorities(pool *x509.CertPool, customCAList []string) error {
+	for _, path := range customCAList {
+		// Clean the path to remove any directory traversal attempts
+		cleanPath := filepath.Clean(path)
+
+		// Read the CA file
+		cert, err := os.ReadFile(cleanPath)
+		if err != nil {
+			return err
+		}
+
+		if !pool.AppendCertsFromPEM(cert) {
+			return fmt.Errorf("failed to append %s to CA certificates", cleanPath)
+		}
+	}
+	return nil
+}
+
+func buildClientTLSConfig(cp *x509.CertPool, serverNameOverride string) (*tls.Config, error) {
+	tlsConfig := &tls.Config{
+		ServerName:         serverNameOverride,
+		RootCAs:            cp,
+		ClientSessionCache: tls.NewLRUClientSessionCache(128),
+		MinVersion:         tls.VersionTLS13,
+		MaxVersion:         tls.VersionTLS13,
+		CurvePreferences:   rpc.DefaultCurvePreferences,
+		CipherSuites:       []uint16{tls.TLS_AES_128_GCM_SHA256},
+	}
+
+	tls.CipherSuites()
+
+	return tlsConfig, nil
+}
+
 func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
-	credential, err := utils.SetupGrpcCredential(tls, hostName, cas...)
+	credential, err := setupGrpcCredential(tls, hostName, cas...)
 	if err != nil {
 		return fmt.Errorf("setup grpc credential failed: %w", err)
 	}

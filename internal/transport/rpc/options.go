@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"crypto/tls"
 	"net"
 	"time"
 
@@ -12,6 +13,11 @@ import (
 )
 
 const GeneralTimeout = 15 * time.Second
+
+var DefaultCurvePreferences = []tls.CurveID{
+	tls.X25519,
+	tls.CurveP256,
+}
 
 var DialOptions = []grpc.DialOption{
 	grpc.WithKeepaliveParams(keepalive.ClientParameters{

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -30,6 +31,21 @@ type Server struct {
 	dnsAddr       string
 }
 
+func buildTLSConfig(certFile, keyFile string) (*tls.Config, error) {
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, err
+	}
+	tlsConfig := &tls.Config{
+		Certificates:     []tls.Certificate{cert},
+		MinVersion:       tls.VersionTLS13,
+		MaxVersion:       tls.VersionTLS13,
+		CurvePreferences: rpc.DefaultCurvePreferences,
+	}
+
+	return tlsConfig, nil
+}
+
 func NewServer(ctx context.Context, users config.Users, ssl *config.SSL, dnsConfig *dns.DNS) (*Server, error) {
 	// check users
 	if len(users) == 0 {
@@ -41,12 +57,12 @@ func NewServer(ctx context.Context, users config.Users, ssl *config.SSL, dnsConf
 
 	// apply tls if set
 	if ssl != nil {
-		credential, err := credentials.NewServerTLSFromFile(ssl.PublicKey, ssl.PrivateKey)
+		tlsConfig, err := buildTLSConfig(ssl.PublicKey, ssl.PrivateKey)
 		if err != nil {
 			return nil, fmt.Errorf("setup tls failed, err=%w", err)
 		}
 		log.Println("using secure grpc [h2]")
-		transportOption = grpc.Creds(credential)
+		transportOption = grpc.Creds(credentials.NewTLS(tlsConfig))
 	} else {
 		log.Println("using insecure grpc [h2c]")
 		transportOption = grpc.Creds(insecure.NewCredentials())
