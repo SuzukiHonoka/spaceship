@@ -140,10 +140,32 @@ func (sw *Indicator) Close() error {
 	signal.Stop(sw.resizeChan)
 	close(sw.resizeChan)
 
-	// Show cursor again and print a final newline
-	fmt.Println(escapeSeqShowCursor)
+	// Clear the screen and reset cursor position
+	fmt.Print(escapeSeqClear)
+	fmt.Print(escapeSeqShowCursor)
 
 	return nil
+}
+
+// wrapLine wraps a line to fit within the given width
+func wrapLine(line string, width int) []string {
+	if width <= 0 {
+		return []string{line}
+	}
+
+	if len(line) <= width {
+		return []string{line}
+	}
+
+	var wrapped []string
+	for len(line) > width {
+		wrapped = append(wrapped, line[:width])
+		line = line[width:]
+	}
+	if len(line) > 0 {
+		wrapped = append(wrapped, line)
+	}
+	return wrapped
 }
 
 // render redraws the entire visible area with logs and status
@@ -157,17 +179,22 @@ func (sw *Indicator) render() {
 	// Print log buffer
 	maxToShow := min(len(sw.logBuffer), sw.maxLogs)
 	startIdx := len(sw.logBuffer) - maxToShow
+	linesUsed := 0
 
-	for i := 0; i < maxToShow; i++ {
+	for i := 0; i < maxToShow && linesUsed < sw.maxLogs; i++ {
 		logLine := sw.logBuffer[startIdx+i]
+		wrappedLines := wrapLine(logLine, width)
 
-		// Truncate if longer than terminal width
-		if len(logLine) > width {
-			logLine = logLine[:width-3] + "..."
+		for _, line := range wrappedLines {
+			if linesUsed >= sw.maxLogs {
+				break
+			}
+			fmt.Println(line)
+			linesUsed++
 		}
-
-		fmt.Println(logLine)
 	}
+
+	maxToShow = linesUsed
 
 	// Print empty lines to fill the space
 	for i := maxToShow; i < sw.maxLogs+StatusMarginTopLines; i++ {
@@ -178,11 +205,20 @@ func (sw *Indicator) render() {
 	fmt.Print(escapeSeqClearLine) // Clear line
 	fmt.Print(ansiCarriageReturn) // Move to beginning of line
 
-	// Truncate status if needed
-	statusLine := sw.statusLine
-	if len(statusLine) > width {
-		statusLine = statusLine[:width-3] + "..."
-	}
+	// Handle status line with existing newlines and wrapping
+	statusParts := bytes.Split([]byte(sw.statusLine), []byte("\n"))
+	for partIdx, part := range statusParts {
+		if partIdx > 0 {
+			fmt.Print("\n")
+		}
 
-	fmt.Print(statusLine)
+		// Wrap each part if it's too long
+		wrappedLines := wrapLine(string(part), width)
+		for lineIdx, line := range wrappedLines {
+			if lineIdx > 0 {
+				fmt.Print("\n")
+			}
+			fmt.Print(line)
+		}
+	}
 }

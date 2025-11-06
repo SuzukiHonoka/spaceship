@@ -1,6 +1,7 @@
 package client
 
 import (
+	"fmt"
 	"log"
 	"sync/atomic"
 
@@ -9,7 +10,8 @@ import (
 
 type ConnWrapper struct {
 	*grpc.ClientConn
-	InUse uint32
+	ID    int    // Connection ID for display
+	InUse uint32 // How many external connections are currently using this gRPC connection
 }
 
 func NewConnWrapper(p *Params) (*ConnWrapper, error) {
@@ -19,6 +21,7 @@ func NewConnWrapper(p *Params) (*ConnWrapper, error) {
 	}
 	wrapper := &ConnWrapper{
 		ClientConn: conn,
+		// ID will be set by the queue when adding to pool
 	}
 	return wrapper, nil
 }
@@ -30,6 +33,11 @@ func (w *ConnWrapper) Use() {
 func (w *ConnWrapper) Done() error {
 	atomic.AddUint32(&w.InUse, ^uint32(0))
 	return nil
+}
+
+// GetCurrentLoad returns the current number of external connections using this gRPC connection
+func (w *ConnWrapper) GetCurrentLoad() uint32 {
+	return atomic.LoadUint32(&w.InUse)
 }
 
 func (w *ConnWrapper) Close() error {
@@ -66,4 +74,34 @@ func (w ConnWrappers) LogStatus() {
 		inuse[i] = wrapper.InUse
 	}
 	log.Printf("Inuse status: %v", inuse)
+}
+
+// GetDetailedStatus returns comprehensive status string like "1(10) 2(11) 3(5)"
+func (w ConnWrappers) GetDetailedStatus() string {
+	if len(w) == 0 {
+		return "No connections"
+	}
+
+	status := ""
+	for i, wrapper := range w {
+		if i > 0 {
+			status += " "
+		}
+		currentLoad := wrapper.GetCurrentLoad()
+		status += fmt.Sprintf("%d(%d)", wrapper.ID, currentLoad)
+	}
+	return status
+}
+
+// GetSummaryStats returns pool summary statistics
+func (w ConnWrappers) GetSummaryStats() (total int, active int, totalLoad uint32) {
+	total = len(w)
+	for _, wrapper := range w {
+		currentLoad := wrapper.GetCurrentLoad()
+		if currentLoad > 0 {
+			active++
+		}
+		totalLoad += currentLoad
+	}
+	return
 }

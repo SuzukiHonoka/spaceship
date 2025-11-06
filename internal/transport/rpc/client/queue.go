@@ -33,6 +33,7 @@ func NewConnQueue(size int, params *Params) *ConnQueue {
 }
 
 func (q *ConnQueue) Add(conn *ConnWrapper) {
+	conn.ID = len(q.Conn) + 1 // Assign sequential ID starting from 1
 	q.Conn = append(q.Conn, conn)
 }
 
@@ -117,4 +118,46 @@ func (q *ConnQueue) GetClient() (proxy.ProxyClient, func() error, error) {
 	// Use dynamic proxy client for configurable service names
 	dynamicClient := NewDynamicProxyClient(conn)
 	return dynamicClient, done, nil
+}
+
+// GetConnectionStatus returns detailed connection status string
+func (q *ConnQueue) GetConnectionStatus() string {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	if q.shutdown {
+		return "Connection pool shutdown"
+	}
+
+	return q.Conn.GetDetailedStatus()
+}
+
+// GetConnectionSummary returns comprehensive connection statistics
+func (q *ConnQueue) GetConnectionSummary() (total, active int, currentLoad uint32) {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	if q.shutdown {
+		return 0, 0, 0
+	}
+
+	return q.Conn.GetSummaryStats()
+}
+
+// LogConnectionStatus logs the detailed connection status
+func (q *ConnQueue) LogConnectionStatus() {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	if q.shutdown {
+		log.Println("gRPC Connection Pool: SHUTDOWN")
+		return
+	}
+
+	total, active, currentLoad := q.Conn.GetSummaryStats()
+	detailedStatus := q.Conn.GetDetailedStatus()
+
+	log.Printf("gRPC Pool Status: %d total, %d active, %d current load",
+		total, active, currentLoad)
+	log.Printf("Connection Usage: %s", detailedStatus)
 }

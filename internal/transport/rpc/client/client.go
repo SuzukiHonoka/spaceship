@@ -119,6 +119,41 @@ func Destroy() {
 	}
 }
 
+// GetConnectionStatus returns the current connection pool status
+func GetConnectionStatus() string {
+	if connQueue == nil {
+		return "Connection pool not initialized"
+	}
+	return connQueue.GetConnectionStatus()
+}
+
+// GetConnectionSummary returns connection pool statistics
+func GetConnectionSummary() (total, active int, currentLoad uint32) {
+	if connQueue == nil {
+		return 0, 0, 0
+	}
+	return connQueue.GetConnectionSummary()
+}
+
+// LogConnectionStatus logs detailed connection status
+func LogConnectionStatus() {
+	if connQueue == nil {
+		log.Println("gRPC Connection Pool: Not initialized")
+		return
+	}
+	connQueue.LogConnectionStatus()
+}
+
+// Example usage and explanation of connection status display:
+// If you have 8 gRPC connections to server, and they are being used by external clients:
+// - Connection 1 has 10 external clients using it
+// - Connection 2 has 11 external clients using it
+// - Connection 3 has 5 external clients using it
+// - etc.
+//
+// The status display will show: "1(10) 2(11) 3(5) 4(0) 5(2) 6(0) 7(8) 8(1)"
+// Format: ConnectionID(CurrentExternalConnections)
+
 func (c *Client) Dial(_, _ string) (net.Conn, error) {
 	return nil, fmt.Errorf("%s: dial not implemented", c.String())
 }
