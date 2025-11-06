@@ -249,6 +249,7 @@ type DnsRequestItem struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Fqdn          string                 `protobuf:"bytes,1,opt,name=fqdn,proto3" json:"fqdn,omitempty"`
 	QType         uint32                 `protobuf:"varint,2,opt,name=qType,proto3" json:"qType,omitempty"`
+	BlockIpv6     bool                   `protobuf:"varint,3,opt,name=blockIpv6,proto3" json:"blockIpv6,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -295,6 +296,13 @@ func (x *DnsRequestItem) GetQType() uint32 {
 		return x.QType
 	}
 	return 0
+}
+
+func (x *DnsRequestItem) GetBlockIpv6() bool {
+	if x != nil {
+		return x.BlockIpv6
+	}
+	return false
 }
 
 // Complete DNS Resource Record
@@ -645,10 +653,11 @@ const file_proxy_proto_rawDesc = "" +
 	"\apayload\x18\x03 \x01(\fH\x00R\apayload\x1a!\n" +
 	"\vProxyHeader\x12\x12\n" +
 	"\x04addr\x18\x02 \x01(\tR\x04addrB\x13\n" +
-	"\x11header_or_payload\":\n" +
+	"\x11header_or_payload\"X\n" +
 	"\x0eDnsRequestItem\x12\x12\n" +
 	"\x04fqdn\x18\x01 \x01(\tR\x04fqdn\x12\x14\n" +
-	"\x05qType\x18\x02 \x01(\rR\x05qType\"|\n" +
+	"\x05qType\x18\x02 \x01(\rR\x05qType\x12\x1c\n" +
+	"\tblockIpv6\x18\x03 \x01(\bR\tblockIpv6\"|\n" +
 	"\tRR_Record\x12\x1b\n" +
 	"\twire_data\x18\x01 \x01(\fR\bwireData\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +

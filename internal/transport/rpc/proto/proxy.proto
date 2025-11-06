@@ -46,6 +46,7 @@ message ProxyDST{
 message DnsRequestItem{
   string fqdn = 1;
   uint32 qType = 2;
+  bool blockIpv6 = 3;
 }
 
 // Complete DNS Resource Record

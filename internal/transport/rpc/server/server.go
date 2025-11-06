@@ -16,6 +16,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	config "github.com/SuzukiHonoka/spaceship/v2/pkg/config/server"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/dns"
+	mdns "github.com/miekg/dns"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -138,14 +139,46 @@ func (s *Server) DnsResolve(_ context.Context, request *proto.DnsRequest) (*prot
 	resp := new(proto.DnsResponse)
 
 	for _, item := range request.Items {
-		log.Printf("dns: resolving for %s (type %d)", item.Fqdn, item.QType)
+		log.Printf("dns: resolving for %s (type %d, blockIPv6: %t)", item.Fqdn, item.QType, item.BlockIpv6)
+
+		// Safely convert QType from uint32 to uint16 to prevent integer overflow
+		qtype, ok := safeUint32ToUint16(item.QType)
+		if !ok {
+			log.Printf("dns: invalid QType value %d: exceeds uint16 range", item.QType)
+			continue
+		}
+
+		// Skip IPv6 (AAAA) queries if blocking is enabled
+		if item.BlockIpv6 && qtype == mdns.TypeAAAA {
+			log.Printf("dns: blocking IPv6 query for %s (AAAA record)", item.Fqdn)
+			continue
+		}
 
 		// Perform actual DNS resolution using configured DNS server
-		records := s.resolveDNSRecords(item.Fqdn, uint16(item.QType))
+		records := s.resolveDNSRecords(item.Fqdn, qtype)
 
 		if len(records) == 0 {
 			log.Printf("dns: no records found for %s (type %d)", item.Fqdn, item.QType)
 			continue
+		}
+
+		// Filter out IPv6 (AAAA) records if blocking is enabled
+		if item.BlockIpv6 {
+			filteredRecords := make([]mdns.RR, 0, len(records))
+			for _, record := range records {
+				if record.Header().Rrtype != mdns.TypeAAAA {
+					filteredRecords = append(filteredRecords, record)
+				} else {
+					log.Printf("dns: filtered out IPv6 record for %s", item.Fqdn)
+				}
+			}
+			records = filteredRecords
+
+			// Check if we have any records left after filtering
+			if len(records) == 0 {
+				log.Printf("dns: no records left after IPv6 filtering for %s", item.Fqdn)
+				continue
+			}
 		}
 
 		// Convert DNS RR records to protobuf format using wire serialization
