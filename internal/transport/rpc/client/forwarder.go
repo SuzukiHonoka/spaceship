@@ -77,13 +77,12 @@ func (f *Forwarder) copySRCtoTarget(buf []byte) error {
 	//log.Println("rpc client msg forwarded")
 }
 
-func (f *Forwarder) CopyTargetToSRC(ctx context.Context) (err error) {
-	errCh := make(chan struct{}, 1)
+func (f *Forwarder) CopyTargetToSRC(ctx context.Context) error {
+	errCh := make(chan error, 1)
 	go func() {
 		for {
-			err = f.copyTargetToSRC()
-			if err != nil {
-				errCh <- struct{}{}
+			if readErr := f.copyTargetToSRC(); readErr != nil {
+				errCh <- readErr
 				return
 			}
 		}
@@ -92,7 +91,7 @@ func (f *Forwarder) CopyTargetToSRC(ctx context.Context) (err error) {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-errCh:
+	case err := <-errCh:
 		return err
 	}
 }

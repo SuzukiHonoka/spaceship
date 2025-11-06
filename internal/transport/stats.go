@@ -54,17 +54,22 @@ func (s *stats) CalculateSpeed() (txSpeed float64, rxSpeed float64) {
 
 	// Calculate the time difference in seconds
 	duration := now.Sub(s.lastCalculation).Seconds()
+	if duration == 0 {
+		return 0, 0 // Prevent division by zero
+	}
 	s.lastCalculation = now
 
 	// Calculate the speed
 	currentTx := s.tx.Load()
 	currentRx := s.rx.Load()
+	lastTx := s.lastTx.Load()
+	lastRx := s.lastRx.Load()
 
-	if currentTx > 0 {
-		txSpeed = float64(currentTx-s.lastTx.Load()) / duration
+	if currentTx > lastTx {
+		txSpeed = float64(currentTx-lastTx) / duration
 	}
-	if currentRx > 0 {
-		rxSpeed = float64(currentRx-s.lastRx.Load()) / duration
+	if currentRx > lastRx {
+		rxSpeed = float64(currentRx-lastRx) / duration
 	}
 
 	s.lastTx.Store(currentTx)

@@ -2,7 +2,6 @@ package client
 
 import (
 	"log"
-	"math"
 	"sync/atomic"
 
 	"google.golang.org/grpc"
@@ -43,11 +42,19 @@ func (w *ConnWrapper) Close() error {
 type ConnWrappers []*ConnWrapper
 
 func (w ConnWrappers) PickLRU() *ConnWrapper {
-	var conn *ConnWrapper
-	for lru, i := uint32(math.MaxUint32), 0; i < len(w); i++ {
-		if wrapper := w[i]; wrapper.InUse < lru {
-			lru = wrapper.InUse
-			conn = wrapper
+	if len(w) == 0 {
+		return nil
+	}
+
+	// For small connection pools, linear search is fine and simple
+	// For larger pools, this could be optimized with a heap or better data structure
+	conn := w[0]
+	minUsage := conn.InUse
+
+	for i := 1; i < len(w); i++ {
+		if w[i].InUse < minUsage {
+			minUsage = w[i].InUse
+			conn = w[i]
 		}
 	}
 	return conn

@@ -61,15 +61,14 @@ func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 
 	//log.Println("reading from target connection started")
 	// loop read target and forward
-	errCh := make(chan struct{}, 1)
+	errCh := make(chan error, 1)
 	go func() {
 		buf := transport.Buffer()
 		defer transport.PutBuffer(buf)
 
 		for {
-			err = f.copyTargetToClient(buf)
-			if err != nil {
-				errCh <- struct{}{}
+			if readErr := f.copyTargetToClient(buf); readErr != nil {
+				errCh <- readErr
 				return
 			}
 		}
@@ -78,7 +77,7 @@ func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-errCh:
+	case err = <-errCh:
 		return err
 	}
 }

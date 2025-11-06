@@ -17,6 +17,11 @@ func Buffer() []byte {
 }
 
 func PutBuffer(buf []byte) {
-	//nolint:staticcheck
-	BufferPool.Put(buf)
+	// Reset the buffer to original capacity to prevent memory bloat
+	if cap(buf) == BufferSize {
+		buf = buf[:BufferSize]
+		//nolint:staticcheck
+		BufferPool.Put(buf)
+	}
+	// Don't put back buffers that have different capacity
 }

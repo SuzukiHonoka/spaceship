@@ -3,6 +3,7 @@ package client
 import (
 	"fmt"
 	"log"
+	"sync"
 
 	proxy "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
@@ -14,6 +15,7 @@ type ConnQueue struct {
 	Size     int
 	Conn     ConnWrappers
 	shutdown bool
+	mu       sync.RWMutex // Protect concurrent access
 }
 
 type ConnNode struct {
@@ -59,6 +61,9 @@ func (q *ConnQueue) Dial() (*ConnWrapper, error) {
 
 // Destroy force disconnect all the connections
 func (q *ConnQueue) Destroy() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
 	q.shutdown = true
 	for i := 0; i < q.Size; i++ {
 		conn := q.Conn[i]
@@ -82,7 +87,15 @@ func (q *ConnQueue) GetConn() (*ConnWrapper, func() error, error) {
 	if q.Size == 0 {
 		return q.GetConnOutSide()
 	}
+
+	q.mu.RLock()
+	if q.shutdown {
+		q.mu.RUnlock()
+		return nil, nil, fmt.Errorf("connection queue is shutdown")
+	}
 	el := q.Conn.PickLRU()
+	q.mu.RUnlock()
+
 	el.Use()
 	// check if conn ok
 	switch el.GetState() {
