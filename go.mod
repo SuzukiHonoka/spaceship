@@ -6,7 +6,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/miekg/dns v1.1.68
 	golang.org/x/net v0.46.0
-	golang.org/x/sync v0.17.0
+	golang.org/x/sync v0.18.0
 	golang.org/x/term v0.36.0
 	google.golang.org/grpc v1.76.0
 	google.golang.org/protobuf v1.36.10
