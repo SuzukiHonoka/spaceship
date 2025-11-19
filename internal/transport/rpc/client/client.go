@@ -138,10 +138,18 @@ func GetConnectionSummary() (total, active int, currentLoad uint32) {
 // LogConnectionStatus logs detailed connection status
 func LogConnectionStatus() {
 	if connQueue == nil {
-		log.Println("gRPC Connection Pool: Not initialized")
+		log.Println("gRPC connection queue is not initialized")
 		return
 	}
 	connQueue.LogConnectionStatus()
+}
+
+// GetConnectionDetails returns individual connection information for web display
+func GetConnectionDetails() []ConnectionDetail {
+	if connQueue == nil {
+		return nil
+	}
+	return connQueue.GetConnectionDetails()
 }
 
 // Example usage and explanation of connection status display:
@@ -201,8 +209,9 @@ func (c *Client) Proxy(ctx context.Context, addr string, localAddr chan<- string
 }
 
 type DnsRequest struct {
-	Fqdn  string
-	QType uint16
+	Fqdn      string
+	QType     uint16
+	BlockIPv6 bool
 }
 
 func (c *Client) DnsResolve(ctx context.Context, requests []*DnsRequest) ([]dns.RR, error) {
@@ -217,8 +226,9 @@ func (c *Client) DnsResolve(ctx context.Context, requests []*DnsRequest) ([]dns.
 
 	for _, request := range requests {
 		dnsReq := &proto.DnsRequestItem{
-			Fqdn:  request.Fqdn,
-			QType: uint32(request.QType),
+			Fqdn:      request.Fqdn,
+			QType:     uint32(request.QType),
+			BlockIpv6: request.BlockIPv6,
 		}
 		req.Items = append(req.Items, dnsReq)
 	}

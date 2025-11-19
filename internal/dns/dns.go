@@ -13,18 +13,20 @@ import (
 var DefaultShutdownTimeout = 3 * time.Second
 
 type Server struct {
-	srv    *dns.Server
-	client *rpcClient.Client
+	srv          *dns.Server
+	client       *rpcClient.Client
+	blockIPv6DNS bool
 }
 
-func NewServer(addr string) (*Server, error) {
+func NewServer(addr string, blockIPv6DNS bool) (*Server, error) {
 	client, err := rpcClient.New()
 	if err != nil {
 		return nil, err
 	}
 
 	srv := &Server{
-		client: client,
+		client:       client,
+		blockIPv6DNS: blockIPv6DNS,
 	}
 	dnsSrv := &dns.Server{
 		Addr:    addr,
@@ -43,8 +45,9 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	dnsReqList := make([]*rpcClient.DnsRequest, 0, len(r.Question))
 	for _, question := range r.Question {
 		dnsReqList = append(dnsReqList, &rpcClient.DnsRequest{
-			Fqdn:  question.Name,
-			QType: question.Qtype,
+			Fqdn:      question.Name,
+			QType:     question.Qtype,
+			BlockIPv6: s.blockIPv6DNS,
 		})
 	}
 

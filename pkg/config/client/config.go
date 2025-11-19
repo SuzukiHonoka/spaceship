@@ -16,5 +16,6 @@ type Client struct {
 	Mux             uint8         `json:"mux"`                  // 0 -> disabled, n (>0) -> limited connection
 	EnableTLS       bool          `json:"tls"`
 	Routes          router.Routes `json:"route,omitempty"`
-	IdleTimeout     int           `json:"idle_timeout,omitempty"` // seconds, 0 -> disabled
+	IdleTimeout     int           `json:"idle_timeout,omitempty"`   // seconds, 0 -> disabled
+	BlockIPv6DNS    bool          `json:"block_ipv6_dns,omitempty"` // block IPv6 DNS queries (AAAA records)
 }

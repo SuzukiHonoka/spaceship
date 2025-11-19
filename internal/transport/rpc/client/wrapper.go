@@ -6,7 +6,17 @@ import (
 	"sync/atomic"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 )
+
+// ConnectionDetail holds individual connection information for web display
+type ConnectionDetail struct {
+	ID                int    `json:"id"`
+	Load              uint32 `json:"load"`
+	Status            string `json:"status"`             // active/idle based on load
+	ConnectivityState string `json:"connectivity_state"` // gRPC connectivity state
+	HealthStatus      string `json:"health_status"`      // derived health status
+}
 
 type ConnWrapper struct {
 	*grpc.ClientConn
@@ -104,4 +114,73 @@ func (w ConnWrappers) GetSummaryStats() (total int, active int, totalLoad uint32
 		totalLoad += currentLoad
 	}
 	return
+}
+
+// GetConnectionDetails returns individual connection information for web display
+func (w ConnWrappers) GetConnectionDetails() []ConnectionDetail {
+	details := make([]ConnectionDetail, len(w))
+	for i, wrapper := range w {
+		load := wrapper.GetCurrentLoad()
+
+		// Activity status based on load
+		status := "idle"
+		if load > 0 {
+			status = "active"
+		}
+
+		// Get real gRPC connectivity state
+		grpcState := wrapper.ClientConn.GetState()
+		connectivityState := grpcStateToString(grpcState)
+
+		// Derive health status from gRPC state and load
+		healthStatus := deriveHealthStatus(grpcState, load)
+
+		details[i] = ConnectionDetail{
+			ID:                wrapper.ID,
+			Load:              load,
+			Status:            status,
+			ConnectivityState: connectivityState,
+			HealthStatus:      healthStatus,
+		}
+	}
+	return details
+}
+
+// grpcStateToString converts gRPC connectivity state to human-readable string
+func grpcStateToString(state connectivity.State) string {
+	switch state {
+	case connectivity.Idle:
+		return "IDLE"
+	case connectivity.Connecting:
+		return "CONNECTING"
+	case connectivity.Ready:
+		return "READY"
+	case connectivity.TransientFailure:
+		return "TRANSIENT_FAILURE"
+	case connectivity.Shutdown:
+		return "SHUTDOWN"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+// deriveHealthStatus determines overall health from gRPC state and current load
+func deriveHealthStatus(state connectivity.State, load uint32) string {
+	switch state {
+	case connectivity.Ready:
+		if load > 0 {
+			return "healthy_active"
+		}
+		return "healthy_ready"
+	case connectivity.Idle:
+		return "healthy_idle"
+	case connectivity.Connecting:
+		return "connecting"
+	case connectivity.TransientFailure:
+		return "unhealthy"
+	case connectivity.Shutdown:
+		return "shutdown"
+	default:
+		return "unknown"
+	}
 }

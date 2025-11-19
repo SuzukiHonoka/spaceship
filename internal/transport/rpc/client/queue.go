@@ -161,3 +161,15 @@ func (q *ConnQueue) LogConnectionStatus() {
 		total, active, currentLoad)
 	log.Printf("Connection Usage: %s", detailedStatus)
 }
+
+// GetConnectionDetails returns individual connection information for web display
+func (q *ConnQueue) GetConnectionDetails() []ConnectionDetail {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	if q.shutdown {
+		return nil
+	}
+
+	return q.Conn.GetConnectionDetails()
+}

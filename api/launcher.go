@@ -123,7 +123,7 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 
 	// create dns server
 	if cfg.ListenDns != "" {
-		dnsSrv, err := dns.NewServer(cfg.ListenDns)
+		dnsSrv, err := dns.NewServer(cfg.ListenDns, cfg.BlockIPv6DNS)
 		if err != nil {
 			return fmt.Errorf("create dns server failed: %w", err)
 		}
