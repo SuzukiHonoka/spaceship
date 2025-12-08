@@ -61,13 +61,23 @@ func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 
 	//log.Println("reading from target connection started")
 	// loop read target and forward
+	// loop read target and forward
 	errCh := make(chan error, 1)
 	go func() {
 		buf := transport.Buffer()
 		defer transport.PutBuffer(buf)
 
+		// reuse buffer
+		dstData := &proto.ProxyDST{
+			HeaderOrPayload: &proto.ProxyDST_Payload{
+				Payload: nil,
+			},
+		}
+		// wrapper
+		payload := dstData.HeaderOrPayload.(*proto.ProxyDST_Payload)
+
 		for {
-			if readErr := f.copyTargetToClient(buf); readErr != nil {
+			if readErr := f.copyTargetToClient(buf, dstData, payload); readErr != nil {
 				errCh <- readErr
 				return
 			}
@@ -82,7 +92,7 @@ func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 	}
 }
 
-func (f *Forwarder) copyTargetToClient(buf []byte) error {
+func (f *Forwarder) copyTargetToClient(buf []byte, dstData *proto.ProxyDST, payload *proto.ProxyDST_Payload) error {
 	//log.Println("rpc server: start reading target")
 	n, err := f.Conn.Read(buf)
 	if err != nil {
@@ -90,11 +100,7 @@ func (f *Forwarder) copyTargetToClient(buf []byte) error {
 	}
 
 	//log.Println("rpc server -> client")
-	dstData := &proto.ProxyDST{
-		HeaderOrPayload: &proto.ProxyDST_Payload{
-			Payload: buf[:n],
-		},
-	}
+	payload.Payload = buf[:n]
 
 	//err = c.stream.Send(dstData)
 	//dstData = nil
@@ -152,12 +158,20 @@ func (f *Forwarder) CopyClientToTarget(ctx context.Context) error {
 	f.Ack <- struct{}{}
 
 	// loop read client and forward
-	errCh := make(chan struct{}, 1)
+	errCh := make(chan error, 1)
 	go func() {
+		// reuse buffer
+		srcData := new(proto.ProxySRC)
 		for {
-			err = f.copyClientToTarget()
-			if err != nil {
-				errCh <- struct{}{}
+			// reset for new message
+			srcData.Reset()
+			if err = f.Stream.RecvMsg(srcData); err != nil {
+				errCh <- err
+				return
+			}
+
+			if err = f.copyClientToTarget(srcData); err != nil {
+				errCh <- err
 				return
 			}
 		}
@@ -166,18 +180,12 @@ func (f *Forwarder) CopyClientToTarget(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-errCh:
+	case err := <-errCh:
 		return err
 	}
 }
 
-func (f *Forwarder) copyClientToTarget() error {
-	//log.Println("rpc server receiving...")
-	buf, err := f.Stream.Recv()
-	if err != nil {
-		return err
-	}
-
+func (f *Forwarder) copyClientToTarget(buf *proto.ProxySRC) error {
 	v, ok := buf.HeaderOrPayload.(*proto.ProxySRC_Payload)
 	if !ok {
 		return transport.ErrInvalidMessage
@@ -190,8 +198,7 @@ func (f *Forwarder) copyClientToTarget() error {
 	//log.Printf("RX: %s", string(data))
 
 	// write to remote
-	var n int
-	n, err = f.Conn.Write(v.Payload)
+	n, err := f.Conn.Write(v.Payload)
 	if n < len(v.Payload) {
 		return io.ErrShortWrite
 	}

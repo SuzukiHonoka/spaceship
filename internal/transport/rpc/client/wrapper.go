@@ -59,7 +59,7 @@ func (w *ConnWrapper) Close() error {
 
 type ConnWrappers []*ConnWrapper
 
-func (w ConnWrappers) PickLRU() *ConnWrapper {
+func (w ConnWrappers) PickLeastLoaded() *ConnWrapper {
 	if len(w) == 0 {
 		return nil
 	}
