@@ -94,7 +94,7 @@ func (q *ConnQueue) GetConn() (*ConnWrapper, func() error, error) {
 		q.mu.RUnlock()
 		return nil, nil, fmt.Errorf("connection queue is shutdown")
 	}
-	el := q.Conn.PickLRU()
+	el := q.Conn.PickLeastLoaded()
 	q.mu.RUnlock()
 
 	el.Use()

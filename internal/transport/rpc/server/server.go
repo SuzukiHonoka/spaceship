@@ -126,13 +126,13 @@ func (s *Server) Proxy(stream proto.Proxy_ProxyServer) error {
 }
 
 func (s *Server) DnsResolve(_ context.Context, request *proto.DnsRequest) (*proto.DnsResponse, error) {
-	//// check user
-	//if !s.usersMatchMap.Match(request.Id) {
-	//	return nil, fmt.Errorf("%w: uuid=%s", transport.ErrUserNotFound, request.Id)
-	//}
+	// check user
+	if !s.usersMatchMap.Match(request.Id) {
+		return nil, fmt.Errorf("%w: uuid=%s", transport.ErrUserNotFound, request.Id)
+	}
 
 	// Validate request
-	if request == nil || len(request.Items) == 0 {
+	if len(request.Items) == 0 {
 		return nil, transport.ErrBadRequest
 	}
 

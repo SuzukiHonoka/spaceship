@@ -49,7 +49,7 @@ func NewForwarder(ctx context.Context, s proxy.Proxy_ProxyClient, w io.Writer, r
 	}
 }
 
-func (f *Forwarder) copySRCtoTarget(buf []byte) error {
+func (f *Forwarder) copySRCtoTarget(buf []byte, srcData *proxy.ProxySRC, payload *proxy.ProxySRC_Payload) error {
 	//log.Println("rpc client reading...")
 	//read from src
 	n, err := f.reader.Read(buf)
@@ -62,11 +62,7 @@ func (f *Forwarder) copySRCtoTarget(buf []byte) error {
 
 	//fmt.Printf("<----- packet size: %d\n%s\n", n, buf)
 	// send to rpc
-	srcData := &proxy.ProxySRC{
-		HeaderOrPayload: &proxy.ProxySRC_Payload{
-			Payload: buf[:n],
-		},
-	}
+	payload.Payload = buf[:n]
 
 	if err = f.stream.Send(srcData); err != nil {
 		return err
@@ -80,8 +76,16 @@ func (f *Forwarder) copySRCtoTarget(buf []byte) error {
 func (f *Forwarder) CopyTargetToSRC(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {
+		// reuse buffer
+		dstData := new(proxy.ProxyDST)
 		for {
-			if readErr := f.copyTargetToSRC(); readErr != nil {
+			// reset for new message
+			dstData.Reset()
+			if err := f.stream.RecvMsg(dstData); err != nil {
+				errCh <- err
+				return
+			}
+			if readErr := f.copyTargetToSRC(dstData); readErr != nil {
 				errCh <- readErr
 				return
 			}
@@ -96,13 +100,8 @@ func (f *Forwarder) CopyTargetToSRC(ctx context.Context) error {
 	}
 }
 
-func (f *Forwarder) copyTargetToSRC() error {
-	//log.Println("rpc server reading..")
-	buf, err := f.stream.Recv()
-	if err != nil {
-		return err
-	}
-
+func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) error {
+	//log.Println("rpc server reading...")
 	//log.Printf("rpc client on receive: %d", res.Status)
 	//fmt.Printf("----> \n%s\n", res.Data)
 	switch buf.Status {
@@ -148,16 +147,26 @@ func (f *Forwarder) copyTargetToSRC() error {
 	return nil
 }
 
-func (f *Forwarder) CopySRCtoTarget(ctx context.Context) (err error) {
-	errCh := make(chan struct{}, 1)
+func (f *Forwarder) CopySRCtoTarget(ctx context.Context) error {
+	errCh := make(chan error, 1)
 	go func() {
 		// buffer
 		buf := transport.Buffer()
 		defer transport.PutBuffer(buf)
+
+		// reuse buffer
+		srcData := &proxy.ProxySRC{
+			HeaderOrPayload: &proxy.ProxySRC_Payload{
+				Payload: nil,
+			},
+		}
+
+		// wrapper
+		payload := srcData.HeaderOrPayload.(*proxy.ProxySRC_Payload)
+
 		for {
-			err = f.copySRCtoTarget(buf)
-			if err != nil {
-				errCh <- struct{}{}
+			if err := f.copySRCtoTarget(buf, srcData, payload); err != nil {
+				errCh <- err
 				return
 			}
 		}
@@ -166,7 +175,7 @@ func (f *Forwarder) CopySRCtoTarget(ctx context.Context) (err error) {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-errCh:
+	case err := <-errCh:
 		return err
 	}
 }

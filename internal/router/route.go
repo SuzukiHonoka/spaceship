@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"log"
-	"net"
+	"net/netip"
 	"os"
 	"regexp"
 
@@ -41,7 +41,7 @@ type MatchCache struct {
 	ExactMap   map[string]struct{}
 	DomainMap  map[string]struct{}
 	RegexpList []*regexp.Regexp
-	CIDRList   []*net.IPNet
+	CIDRList   []netip.Prefix
 }
 
 func (r *Route) GenerateCache() error {
@@ -74,11 +74,11 @@ func (r *Route) GenerateCache() error {
 		log.Printf("domain-route count: %d", len(r.cache.DomainMap))
 	case TypeCIDR:
 		for _, cidr := range r.Sources {
-			_, IPNet, err := net.ParseCIDR(cidr)
+			prefix, err := netip.ParsePrefix(cidr)
 			if err != nil {
 				return fmt.Errorf("cidr: %s parse failed: %w", cidr, err)
 			}
-			r.cache.CIDRList = append(r.cache.CIDRList, IPNet)
+			r.cache.CIDRList = append(r.cache.CIDRList, prefix)
 		}
 		log.Printf("cidr-route count: %d", len(r.cache.CIDRList))
 	case TypeRegex:
@@ -97,8 +97,6 @@ func (r *Route) GenerateCache() error {
 }
 
 func (r *Route) Match(dst string) bool {
-	//log.Printf("route matching type: %s", r.MatchType)
-	ip := net.ParseIP(dst)
 	switch r.MatchType {
 	case TypeDefault:
 		return true
@@ -106,15 +104,6 @@ func (r *Route) Match(dst string) bool {
 		if r.cache.ExactMap != nil {
 			if _, ok := r.cache.ExactMap[dst]; ok {
 				return true
-			}
-		}
-	case TypeDomain:
-		if ip == nil {
-			dst = utils.ExtractDomain(dst)
-			if r.cache.DomainMap != nil {
-				if _, ok := r.cache.DomainMap[dst]; ok {
-					return true
-				}
 			}
 		}
 	case TypeRegex:
@@ -125,11 +114,25 @@ func (r *Route) Match(dst string) bool {
 				}
 			}
 		}
+	}
+
+	//log.Printf("route matching type: %s", r.MatchType)
+	addr, err := netip.ParseAddr(dst)
+	switch r.MatchType {
+	case TypeDomain:
+		if err != nil {
+			dst = utils.ExtractDomain(dst)
+			if r.cache.DomainMap != nil {
+				if _, ok := r.cache.DomainMap[dst]; ok {
+					return true
+				}
+			}
+		}
 	case TypeCIDR:
 		if r.cache.CIDRList != nil {
-			if ip != nil {
+			if err == nil {
 				for _, cidr := range r.cache.CIDRList {
-					if cidr.Contains(ip) {
+					if cidr.Contains(addr) {
 						return true
 					}
 				}
