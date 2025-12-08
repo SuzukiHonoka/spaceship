@@ -67,8 +67,8 @@ go test ./...
 # Run tests with coverage
 go test -cover ./...
 
-# Run specific test file
-go test ./internal/utils/extractDomain_test.go
+# Run tests in a specific package
+go test ./internal/utils/
 ```
 
 ### Linting
