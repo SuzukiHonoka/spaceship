@@ -97,6 +97,7 @@ func (r *Route) GenerateCache() error {
 }
 
 func (r *Route) Match(dst string) bool {
+	//log.Printf("route matching type: %s", r.MatchType)
 	switch r.MatchType {
 	case TypeDefault:
 		return true
@@ -114,13 +115,9 @@ func (r *Route) Match(dst string) bool {
 				}
 			}
 		}
-	}
-
-	//log.Printf("route matching type: %s", r.MatchType)
-	addr, err := netip.ParseAddr(dst)
-	switch r.MatchType {
 	case TypeDomain:
-		if err != nil {
+		// Only match if dst is not an IP address
+		if _, err := netip.ParseAddr(dst); err != nil {
 			dst = utils.ExtractDomain(dst)
 			if r.cache.DomainMap != nil {
 				if _, ok := r.cache.DomainMap[dst]; ok {
@@ -129,8 +126,9 @@ func (r *Route) Match(dst string) bool {
 			}
 		}
 	case TypeCIDR:
-		if r.cache.CIDRList != nil {
-			if err == nil {
+		// Only match if dst is a valid IP address
+		if addr, err := netip.ParseAddr(dst); err == nil {
+			if r.cache.CIDRList != nil {
 				for _, cidr := range r.cache.CIDRList {
 					if cidr.Contains(addr) {
 						return true
