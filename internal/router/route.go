@@ -97,6 +97,7 @@ func (r *Route) GenerateCache() error {
 }
 
 func (r *Route) Match(dst string) bool {
+	//log.Printf("route matching type: %s", r.MatchType)
 	switch r.MatchType {
 	case TypeDefault:
 		return true
@@ -114,10 +115,6 @@ func (r *Route) Match(dst string) bool {
 				}
 			}
 		}
-	}
-
-	//log.Printf("route matching type: %s", r.MatchType)
-	switch r.MatchType {
 	case TypeDomain:
 		// Only match if dst is not an IP address
 		if _, err := netip.ParseAddr(dst); err != nil {
