@@ -242,7 +242,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	})
 
 	errGroup.Go(func() error {
-		if _, err := io.CopyBuffer(pw, conn, transport.Buffer()); err != nil {
+		buf := transport.Buffer()
+		defer transport.PutBuffer(buf)
+		if _, err := io.CopyBuffer(pw, conn, buf); err != nil {
 			return fmt.Errorf("copy data failed: %w", err)
 		}
 		return io.EOF

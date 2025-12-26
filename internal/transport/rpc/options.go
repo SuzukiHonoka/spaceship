@@ -44,6 +44,10 @@ var ServerOptions = []grpc.ServerOption{
 	// without r/w buffer for less delay
 	grpc.ReadBufferSize(0),
 	grpc.WriteBufferSize(0),
+	grpc.KeepaliveParams(keepalive.ServerParameters{
+		Time:    10 * time.Second, // ping every 10s if no activity
+		Timeout: GeneralTimeout,   // 15s timeout for ping response
+	}),
 	grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 		MinTime:             5 * time.Second,
 		PermitWithoutStream: true,

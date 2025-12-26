@@ -95,8 +95,6 @@ func buildClientTLSConfig(cp *x509.CertPool, serverNameOverride string) (*tls.Co
 		CipherSuites:       []uint16{tls.TLS_AES_128_GCM_SHA256},
 	}
 
-	tls.CipherSuites()
-
 	return tlsConfig, nil
 }
 

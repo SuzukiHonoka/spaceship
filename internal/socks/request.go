@@ -86,8 +86,8 @@ type ConnWriter interface {
 // NewRequest creates a new Request from the tcp connection
 func NewRequest(bufConn io.Reader) (*Request, error) {
 	// Read the version byte
-	header := []byte{0, 0, 0}
-	if _, err := io.ReadAtLeast(bufConn, header, 3); err != nil {
+	var header [3]byte
+	if _, err := io.ReadAtLeast(bufConn, header[:], 3); err != nil {
 		return nil, fmt.Errorf("failed to get command version: %v", err)
 	}
 
@@ -211,8 +211,8 @@ func readAddrSpec(r io.Reader) (*AddrSpec, error) {
 	d := &AddrSpec{}
 
 	// Get the address type
-	addrType := []byte{0}
-	if _, err := r.Read(addrType); err != nil {
+	var addrType [1]byte
+	if _, err := r.Read(addrType[:]); err != nil {
 		return nil, err
 	}
 
@@ -233,7 +233,7 @@ func readAddrSpec(r io.Reader) (*AddrSpec, error) {
 		d.IP = addr
 
 	case fqdnAddress:
-		if _, err := r.Read(addrType); err != nil {
+		if _, err := r.Read(addrType[:]); err != nil {
 			return nil, err
 		}
 		addrLen := int(addrType[0])
@@ -248,8 +248,8 @@ func readAddrSpec(r io.Reader) (*AddrSpec, error) {
 	}
 
 	// Read the port
-	port := []byte{0, 0}
-	if _, err := io.ReadAtLeast(r, port, 2); err != nil {
+	var port [2]byte
+	if _, err := io.ReadAtLeast(r, port[:], 2); err != nil {
 		return nil, err
 	}
 	d.Port = (uint16(port[0]) << 8) | uint16(port[1])

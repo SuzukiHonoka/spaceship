@@ -3,6 +3,7 @@ package client
 import (
 	"fmt"
 	"log"
+	"strings"
 	"sync/atomic"
 
 	"google.golang.org/grpc"
@@ -92,15 +93,16 @@ func (w ConnWrappers) GetDetailedStatus() string {
 		return "No connections"
 	}
 
-	status := ""
+	var sb strings.Builder
+	sb.Grow(len(w) * 10) // estimate ~10 chars per connection
 	for i, wrapper := range w {
 		if i > 0 {
-			status += " "
+			sb.WriteByte(' ')
 		}
 		currentLoad := wrapper.GetCurrentLoad()
-		status += fmt.Sprintf("%d(%d)", wrapper.ID, currentLoad)
+		fmt.Fprintf(&sb, "%d(%d)", wrapper.ID, currentLoad)
 	}
-	return status
+	return sb.String()
 }
 
 // GetSummaryStats returns pool summary statistics
