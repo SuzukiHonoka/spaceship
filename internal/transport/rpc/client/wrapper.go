@@ -65,14 +65,14 @@ func (w ConnWrappers) PickLeastLoaded() *ConnWrapper {
 		return nil
 	}
 
-	// For small connection pools, linear search is fine and simple
-	// For larger pools, this could be optimized with a heap or better data structure
+	// All connections have load, find the minimum
 	conn := w[0]
-	minUsage := conn.InUse
+	minUsage := atomic.LoadUint32(&conn.InUse)
 
 	for i := 1; i < len(w); i++ {
-		if w[i].InUse < minUsage {
-			minUsage = w[i].InUse
+		currentUsage := atomic.LoadUint32(&w[i].InUse)
+		if currentUsage < minUsage {
+			minUsage = currentUsage
 			conn = w[i]
 		}
 	}
