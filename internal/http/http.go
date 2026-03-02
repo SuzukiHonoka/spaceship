@@ -1,7 +1,6 @@
 package http
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -194,12 +193,11 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	errGroup.Go(func() error {
 		// write tcp raw msg to pipe, construct HTTP message
 		// raw head eg:  GET / HTTP/1.1
-		buf := new(bytes.Buffer)
-		for _, seg := range []string{r.Method, r.URL.Path} {
-			buf.WriteString(seg)
-			buf.WriteRune(' ')
-		}
-		buf.WriteString("HTTP/1.1")
+		var buf strings.Builder
+		buf.WriteString(r.Method)
+		buf.WriteByte(' ')
+		buf.WriteString(r.URL.Path)
+		buf.WriteString(" HTTP/1.1")
 		buf.WriteString(CRLF)
 
 		// Host maybe missing in headers, and will cause bad addr errors, rewrite it
@@ -213,31 +211,30 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		// raw headers, should filter sensitive headers
 		for k, v := range r.Header {
 			buf.WriteString(k)
-			buf.WriteRune(':')
-			buf.WriteRune(' ')
+			buf.WriteString(": ")
 			buf.WriteString(strings.Join(v, ";")) // in case of multiple values
 			buf.WriteString(CRLF)
-		}
-
-		// write rest unprocessed body to pipe if any, the body should small, no need to consider performance issue
-		if bufferedCount := unprocessed.Reader.Buffered(); bufferedCount > 0 {
-			if _, err := buf.ReadFrom(unprocessed.Reader); err != nil {
-				return fmt.Errorf("read unprocessed %d bytes failed: %w", bufferedCount, err)
-			}
 		}
 
 		// assume headers field ends
 		buf.WriteString(CRLF)
 
-		// DEBUG ONLY
-		//msg := string(buf.Bytes())
-		//fmt.Println(msg)
-		//buf.WriteString(msg)
-
-		// write raw messages to pipe
-		if _, err := buf.WriteTo(pw); err != nil {
+		// write constructed headers to pipe
+		if _, err := pw.Write([]byte(buf.String())); err != nil {
 			return fmt.Errorf("send heads failed: %w", err)
 		}
+
+		// write rest unprocessed body to pipe if any, the body should be small
+		if bufferedCount := unprocessed.Reader.Buffered(); bufferedCount > 0 {
+			bodyBuf := make([]byte, bufferedCount)
+			if _, err := unprocessed.Read(bodyBuf); err != nil {
+				return fmt.Errorf("read unprocessed %d bytes failed: %w", bufferedCount, err)
+			}
+			if _, err := pw.Write(bodyBuf); err != nil {
+				return fmt.Errorf("write unprocessed body failed: %w", err)
+			}
+		}
+
 		return nil
 	})
 
