@@ -41,7 +41,7 @@ func (d *Direct) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, d
 
 	copyDone := make(chan struct{})
 	go func() {
-		n, err = io.CopyBuffer(dst, src, buf)
+		n, err = io.CopyBuffer(dst, src, *buf)
 		close(copyDone)
 	}()
 

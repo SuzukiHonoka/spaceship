@@ -45,12 +45,13 @@ func (h *BlackHole) Proxy(ctx context.Context, _ string, localAddr chan<- string
 	buf := transport.Buffer()
 	defer transport.PutBuffer(buf)
 
+	b := *buf
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
-			n, err := src.Read(buf)
+			n, err := src.Read(b)
 			if n > 0 {
 				transport.GlobalStats.AddRx(uint64(n))
 			}

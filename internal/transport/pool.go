@@ -2,26 +2,20 @@ package transport
 
 import "sync"
 
-var BufferPool = sync.Pool{
-	New: func() interface{} {
-		return AllocateBuffer()
+var bufferPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, BufferSize)
+		return &buf
 	},
 }
 
-func AllocateBuffer() []byte {
-	return make([]byte, BufferSize)
+func Buffer() *[]byte {
+	return bufferPool.Get().(*[]byte)
 }
 
-func Buffer() []byte {
-	return BufferPool.Get().([]byte)
-}
-
-func PutBuffer(buf []byte) {
-	// Reset the buffer to original capacity to prevent memory bloat
-	if cap(buf) == BufferSize {
-		buf = buf[:BufferSize]
-		//nolint:staticcheck
-		BufferPool.Put(buf)
+func PutBuffer(buf *[]byte) {
+	if cap(*buf) != BufferSize {
+		return
 	}
-	// Don't put back buffers that have different capacity
+	bufferPool.Put(buf)
 }
