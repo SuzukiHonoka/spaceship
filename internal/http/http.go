@@ -244,7 +244,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	errGroup.Go(func() error {
 		buf := transport.Buffer()
 		defer transport.PutBuffer(buf)
-		if _, err := io.CopyBuffer(pw, conn, buf); err != nil {
+		if _, err := io.CopyBuffer(pw, conn, *buf); err != nil {
 			return fmt.Errorf("copy data failed: %w", err)
 		}
 		return io.EOF
