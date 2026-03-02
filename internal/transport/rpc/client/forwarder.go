@@ -168,8 +168,9 @@ func (f *Forwarder) CopySRCtoTarget(ctx context.Context) error {
 		// wrapper
 		payload := srcData.HeaderOrPayload.(*proxy.ProxySRC_Payload)
 
+		b := *buf
 		for {
-			if err := f.copySRCtoTarget(buf, srcData, payload); err != nil {
+			if err := f.copySRCtoTarget(b, srcData, payload); err != nil {
 				errCh <- err
 				return
 			}

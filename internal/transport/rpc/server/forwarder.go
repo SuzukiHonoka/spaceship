@@ -75,8 +75,9 @@ func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 		// wrapper
 		payload := dstData.HeaderOrPayload.(*proto.ProxyDST_Payload)
 
+		b := *buf
 		for {
-			if readErr := f.copyTargetToClient(buf, dstData, payload); readErr != nil {
+			if readErr := f.copyTargetToClient(b, dstData, payload); readErr != nil {
 				errCh <- readErr
 				return
 			}
