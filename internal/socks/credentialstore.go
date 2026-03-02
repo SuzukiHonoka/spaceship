@@ -8,6 +8,8 @@ type StaticCredentials map[string]string
 func (s StaticCredentials) Valid(user, password []byte) bool {
 	pass, ok := s[string(user)]
 	if !ok {
+		// Perform dummy comparison to prevent timing attack on user existence
+		_ = subtle.ConstantTimeCompare(password, []byte("dummy-password-for-timing"))
 		return false
 	}
 	return subtle.ConstantTimeCompare(password, []byte(pass)) == 1
