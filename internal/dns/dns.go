@@ -42,11 +42,13 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	m.SetReply(r)
 	m.Authoritative = true
 
-	dnsReqList := make([]*rpcClient.DnsRequest, 0, len(r.Question))
-	for _, question := range r.Question {
+	// Pre-allocate with exact capacity
+	questionCount := len(r.Question)
+	dnsReqList := make([]*rpcClient.DnsRequest, 0, questionCount)
+	for i := range r.Question {
 		dnsReqList = append(dnsReqList, &rpcClient.DnsRequest{
-			Fqdn:      question.Name,
-			QType:     question.Qtype,
+			Fqdn:      r.Question[i].Name,
+			QType:     r.Question[i].Qtype,
 			BlockIPv6: s.blockIPv6DNS,
 		})
 	}
