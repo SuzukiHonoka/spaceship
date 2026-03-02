@@ -97,6 +97,10 @@ func (q *ConnQueue) GetConn() (*ConnWrapper, func() error, error) {
 	el := q.Conn.PickLeastLoaded()
 	q.mu.RUnlock()
 
+	if el == nil {
+		return nil, nil, fmt.Errorf("no available connections in pool")
+	}
+
 	el.Use()
 	// check if conn ok
 	switch el.GetState() {
