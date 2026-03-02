@@ -1,6 +1,7 @@
 package socks
 
 import (
+	"errors"
 	"fmt"
 	"io"
 )
@@ -15,8 +16,8 @@ const (
 )
 
 var (
-	ErrUserAuthFailed  = fmt.Errorf("user authentication failed")
-	ErrNoSupportedAuth = fmt.Errorf("no supported authentication mechanism")
+	ErrUserAuthFailed  = errors.New("user authentication failed")
+	ErrNoSupportedAuth = errors.New("no supported authentication mechanism")
 )
 
 // AuthContext A Request encapsulates authentication state provided during negotiation
