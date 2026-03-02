@@ -100,7 +100,7 @@ func (w ConnWrappers) GetDetailedStatus() string {
 			sb.WriteByte(' ')
 		}
 		currentLoad := wrapper.GetCurrentLoad()
-		fmt.Fprintf(&sb, "%d(%d)", wrapper.ID, currentLoad)
+		_, _ = fmt.Fprintf(&sb, "%d(%d)", wrapper.ID, currentLoad)
 	}
 	return sb.String()
 }
