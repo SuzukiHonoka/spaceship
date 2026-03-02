@@ -20,11 +20,15 @@ type Statistic struct {
 }
 
 func (s *Statistic) AddTx(delta uint64) {
-	s.Tx.Add(delta)
+	if delta > 0 {
+		s.Tx.Add(delta)
+	}
 }
 
 func (s *Statistic) AddRx(delta uint64) {
-	s.Rx.Add(delta)
+	if delta > 0 {
+		s.Rx.Add(delta)
+	}
 }
 
 type Forwarder struct {
