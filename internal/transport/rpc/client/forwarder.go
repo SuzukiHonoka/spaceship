@@ -251,7 +251,7 @@ func (f *Forwarder) Start(addr string, localAddrChan chan<- string) error {
 
 func (f *Forwarder) addTx(n int) {
 	if n <= 0 {
-		return // no data to add
+		return
 	}
 	tx := uint64(n)
 	f.Statistic.AddTx(tx)
@@ -260,7 +260,7 @@ func (f *Forwarder) addTx(n int) {
 
 func (f *Forwarder) addRx(n int) {
 	if n <= 0 {
-		return // no data to add
+		return
 	}
 	rx := uint64(n)
 	f.Statistic.AddRx(rx)
