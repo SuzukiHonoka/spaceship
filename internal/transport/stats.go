@@ -33,8 +33,7 @@ func (s *stats) AddRx(bytes uint64) {
 }
 
 func (s *stats) Total() (tx uint64, rx uint64) {
-	tx, rx = s.tx.Load(), s.rx.Load()
-	return tx, rx
+	return s.tx.Load(), s.rx.Load()
 }
 
 func (s *stats) CalculateSpeed() (txSpeed float64, rxSpeed float64) {
