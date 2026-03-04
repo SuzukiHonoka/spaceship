@@ -93,8 +93,7 @@ func (s *Server) Serve() error {
 				if errors.Is(err, net.ErrClosed) {
 					return nil // normal shutdown
 				}
-				var ne net.Error
-				if errors.As(err, &ne) && ne.Timeout() {
+				if ne, ok := errors.AsType[net.Error](err); ok && ne.Timeout() {
 					continue
 				}
 				return err

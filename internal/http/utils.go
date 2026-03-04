@@ -37,8 +37,7 @@ func BuildRemoteAddr(r *http.Request) (string, string, error) {
 	host, port, err := utils.SplitHostPort(r.Host)
 	if err != nil {
 		// check if a standard port missing, eg: http
-		var addrErr *net.AddrError
-		if !errors.As(err, &addrErr) || addrErr.Err != "missing port in address" {
+		if addrErr, ok := errors.AsType[*net.AddrError](err); !ok || addrErr.Err != "missing port in address" {
 			return "", "", fmt.Errorf("http: split host port error: %w", err)
 		}
 
