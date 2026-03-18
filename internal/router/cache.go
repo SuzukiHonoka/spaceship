@@ -4,7 +4,7 @@ import "github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 
 var (
 	routesCache Routes
-	table       = new(syncedRoutesTable)
+	table       = newSyncedRoutesTable(maxCacheSize)
 )
 
 func AddToFirstRoute(r *Route) {
@@ -21,9 +21,11 @@ func GetRoute(dst string) (transport.Transport, error) {
 }
 
 func GenerateCache() error {
+	table.Reset()
 	return routesCache.GenerateCache()
 }
 
 func SetRoutes(r Routes) {
+	table.Reset()
 	routesCache = r
 }
