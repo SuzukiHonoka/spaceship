@@ -24,6 +24,8 @@ func (r TotalResult) String() string {
 
 func (l *Launcher) Total() (result TotalResult) {
 	result.bytesSentUint64, result.bytesReceivedUint64 = TransportGlobalStats.Total()
+	result.BytesSent = make([]byte, 8)
+	result.BytesReceived = make([]byte, 8)
 	binary.LittleEndian.PutUint64(result.BytesSent, result.bytesSentUint64)
 	binary.LittleEndian.PutUint64(result.BytesReceived, result.bytesReceivedUint64)
 	return result
