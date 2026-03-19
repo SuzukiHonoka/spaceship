@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,8 +21,11 @@ type stats struct {
 	rx              atomic.Uint64
 	lastTx          atomic.Uint64
 	lastRx          atomic.Uint64
-	lastCalculation time.Time
+	lastCalculation atomic.Int64 // UnixNano timestamp
 	mu              sync.Mutex
+	initialized     atomic.Bool
+	lastTxSpeed     atomic.Uint64 // last computed tx speed bits (math.Float64bits)
+	lastRxSpeed     atomic.Uint64 // last computed rx speed bits (math.Float64bits)
 }
 
 func (s *stats) AddTx(bytes uint64) {
@@ -51,26 +55,30 @@ func (s *stats) Total() (tx uint64, rx uint64) {
 }
 
 func (s *stats) CalculateSpeed() (txSpeed float64, rxSpeed float64) {
-	s.mu.Lock()
+	// Use TryLock to avoid blocking - if locked, return cached values
+	if !s.mu.TryLock() {
+		return math.Float64frombits(s.lastTxSpeed.Load()), math.Float64frombits(s.lastRxSpeed.Load())
+	}
 	defer s.mu.Unlock()
 
-	// Get the current time
-	now := time.Now()
+	now := time.Now().UnixNano()
+	lastCalc := s.lastCalculation.Load()
 
-	// Bypass first call
-	if s.lastCalculation.IsZero() {
-		s.lastCalculation = now
+	// Initialize on first call
+	if !s.initialized.Load() {
+		s.lastCalculation.Store(now)
 		s.lastTx.Store(s.tx.Load())
 		s.lastRx.Store(s.rx.Load())
+		s.initialized.Store(true)
 		return 0, 0
 	}
 
 	// Calculate the time difference in seconds
-	duration := now.Sub(s.lastCalculation).Seconds()
-	if duration == 0 {
-		return 0, 0 // Prevent division by zero
+	duration := float64(now-lastCalc) / float64(time.Second)
+	if duration <= 0 {
+		return math.Float64frombits(s.lastTxSpeed.Load()), math.Float64frombits(s.lastRxSpeed.Load())
 	}
-	s.lastCalculation = now
+	s.lastCalculation.Store(now)
 
 	// Calculate the speed
 	currentTx := s.tx.Load()
@@ -87,5 +95,7 @@ func (s *stats) CalculateSpeed() (txSpeed float64, rxSpeed float64) {
 
 	s.lastTx.Store(currentTx)
 	s.lastRx.Store(currentRx)
+	s.lastTxSpeed.Store(math.Float64bits(txSpeed))
+	s.lastRxSpeed.Store(math.Float64bits(rxSpeed))
 	return txSpeed, rxSpeed
 }
