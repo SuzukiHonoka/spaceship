@@ -47,14 +47,7 @@ func (d *Direct) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, d
 
 	select {
 	case <-copyDone:
-		if n > 0 {
-			switch direction {
-			case transport.DirectionIn:
-				transport.GlobalStats.AddRx(uint64(n)) // #nosec G115
-			case transport.DirectionOut:
-				transport.GlobalStats.AddTx(uint64(n)) // #nosec G115
-			}
-		}
+		transport.GlobalStats.Add(direction, n)
 		return err
 	case <-ctx.Done():
 		return ctx.Err()

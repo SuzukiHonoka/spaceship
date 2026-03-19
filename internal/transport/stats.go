@@ -32,6 +32,20 @@ func (s *stats) AddRx(bytes uint64) {
 	s.rx.Add(bytes)
 }
 
+func (s *stats) Add(direction Direction, bytes int64) {
+	if bytes <= 0 {
+		return
+	}
+	n := uint64(bytes)
+
+	switch direction {
+	case DirectionIn:
+		s.AddRx(n)
+	case DirectionOut:
+		s.AddTx(n)
+	}
+}
+
 func (s *stats) Total() (tx uint64, rx uint64) {
 	return s.tx.Load(), s.rx.Load()
 }
