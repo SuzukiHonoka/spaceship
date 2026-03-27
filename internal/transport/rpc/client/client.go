@@ -119,8 +119,12 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 		return fmt.Errorf("setup grpc credential failed: %w", err)
 	}
 
-	params := NewParams(server, append(rpc.DialOptions, grpc.WithTransportCredentials(credential),
-		grpc.WithIdleTimeout(transport.GetIdleTimeout()))...)
+	params := NewParams(server, append(rpc.DialOptions,
+		grpc.WithTransportCredentials(credential),
+		grpc.WithIdleTimeout(transport.GetIdleTimeout()),
+		grpc.WithUnaryInterceptor(rpc.UnaryClientAuthInterceptor(getUUID)),
+		grpc.WithStreamInterceptor(rpc.StreamClientAuthInterceptor(getUUID)),
+	)...)
 	q := NewConnQueue(int(mux), params)
 	if err := q.Init(); err != nil {
 		return err
@@ -251,9 +255,7 @@ func (c *Client) DnsResolve(ctx context.Context, requests []*DnsRequest) ([]dns.
 	}
 
 	// Create gRPC request
-	req := &proto.DnsRequest{
-		Id: getUUID(),
-	}
+	req := &proto.DnsRequest{}
 
 	for _, request := range requests {
 		dnsReq := &proto.DnsRequestItem{

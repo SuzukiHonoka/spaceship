@@ -196,12 +196,10 @@ func (f *Forwarder) CopySRCtoTarget(ctx context.Context) error {
 }
 
 func (f *Forwarder) Start(addr string, localAddrChan chan<- string) error {
-	// handshake and get localAddr first
-
+	// handshake: send target address (auth is handled by interceptor metadata)
 	handshake := &proxy.ProxySRC{
 		HeaderOrPayload: &proxy.ProxySRC_Header{
 			Header: &proxy.ProxySRC_ProxyHeader{
-				Id:   getUUID(),
 				Addr: addr,
 			},
 		},

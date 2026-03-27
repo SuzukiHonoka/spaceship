@@ -11,25 +11,22 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
-	config "github.com/SuzukiHonoka/spaceship/v2/pkg/config/server"
 	"golang.org/x/sync/errgroup"
 )
 
 type Forwarder struct {
-	Ctx           context.Context
-	UsersMatchMap *config.UsersMatchMap
-	Stream        proto.Proxy_ProxyServer
-	Conn          net.Conn
-	Ack           chan interface{}
-	closeOnce     sync.Once
+	Ctx       context.Context
+	Stream    proto.Proxy_ProxyServer
+	Conn      net.Conn
+	Ack       chan interface{}
+	closeOnce sync.Once
 }
 
-func NewForwarder(ctx context.Context, m *config.UsersMatchMap, stream proto.Proxy_ProxyServer) *Forwarder {
+func NewForwarder(ctx context.Context, stream proto.Proxy_ProxyServer) *Forwarder {
 	return &Forwarder{
-		Ctx:           ctx,
-		UsersMatchMap: m,
-		Stream:        stream,
-		Ack:           make(chan interface{}, 1),
+		Ctx:    ctx,
+		Stream: stream,
+		Ack:    make(chan interface{}, 1),
 	}
 }
 
@@ -126,12 +123,7 @@ func (f *Forwarder) handshake() error {
 	}
 	header := v.Header
 
-	// check user
-	if !f.UsersMatchMap.Match(header.Id) {
-		return fmt.Errorf("%w: uuid=%s", transport.ErrUserNotFound, header.Id)
-	}
-
-	//log.Printf("prepare for dialing: %s:%d", req.Host, req.Port)
+	// Auth is handled by the stream interceptor.
 	host, _, err := net.SplitHostPort(header.Addr)
 	if err != nil {
 		return fmt.Errorf("invalid addr %s: %w", header.Addr, err)

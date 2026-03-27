@@ -26,10 +26,9 @@ import (
 
 type Server struct {
 	proto.UnimplementedProxyServer
-	Ctx           context.Context
-	usersMatchMap *config.UsersMatchMap
-	srv           *grpc.Server
-	dnsAddr       string
+	Ctx     context.Context
+	srv     *grpc.Server
+	dnsAddr string
 }
 
 func buildTLSConfig(certFile, keyFile string) (*tls.Config, error) {
@@ -75,12 +74,16 @@ func NewServer(ctx context.Context, users config.Users, ssl *config.SSL, dnsConf
 	}
 
 	// create grpc server and register
-	s := grpc.NewServer(append(rpc.ServerOptions, transportOption)...)
+	matchMap := users.ToMatchMap()
+	s := grpc.NewServer(append(rpc.ServerOptions,
+		transportOption,
+		grpc.UnaryInterceptor(rpc.UnaryServerAuthInterceptor(matchMap.Match)),
+		grpc.StreamInterceptor(rpc.StreamServerAuthInterceptor(matchMap.Match)),
+	)...)
 	wrapper := &Server{
-		Ctx:           ctx,
-		usersMatchMap: users.ToMatchMap(),
-		srv:           s,
-		dnsAddr:       dnsAddr,
+		Ctx:     ctx,
+		srv:     s,
+		dnsAddr: dnsAddr,
 	}
 
 	// Use dynamic proxy server registration for configurable service names
@@ -108,7 +111,7 @@ func (s *Server) Proxy(stream proto.Proxy_ProxyServer) error {
 	defer cancel()
 
 	// create forwarder
-	f := NewForwarder(ctx, s.usersMatchMap, stream)
+	f := NewForwarder(ctx, stream)
 	defer utils.Close(f)
 
 	if err := f.Start(); err != nil && err != io.EOF && !errors.Is(err, context.Canceled) {
@@ -126,11 +129,7 @@ func (s *Server) Proxy(stream proto.Proxy_ProxyServer) error {
 }
 
 func (s *Server) DnsResolve(_ context.Context, request *proto.DnsRequest) (*proto.DnsResponse, error) {
-	// check user
-	if !s.usersMatchMap.Match(request.Id) {
-		return nil, fmt.Errorf("%w: uuid=%s", transport.ErrUserNotFound, request.Id)
-	}
-
+	// Auth is handled by the server interceptor.
 	// Validate request
 	if len(request.Items) == 0 {
 		return nil, transport.ErrBadRequest
