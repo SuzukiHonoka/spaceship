@@ -13,7 +13,7 @@ type cacheEntry struct {
 }
 
 type syncedRoutesTable struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	cache   map[string]*list.Element
 	lruList *list.List
 	maxSize int
@@ -58,14 +58,25 @@ func (t *syncedRoutesTable) Set(k string, egress Egress) {
 }
 
 func (t *syncedRoutesTable) Get(k string) (Egress, bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	if elem, exists := t.cache[k]; exists {
-		t.lruList.MoveToFront(elem)
-		return elem.Value.(*cacheEntry).egress, true
+	// Fast path: read-lock to check existence (avoids write lock on misses)
+	t.mu.RLock()
+	_, exists := t.cache[k]
+	t.mu.RUnlock()
+	if !exists {
+		return EgressUnknown, false
 	}
-	return EgressUnknown, false
+
+	// Slow path: write-lock to update LRU order and read fresh value
+	t.mu.Lock()
+	elem, exists := t.cache[k]
+	if !exists {
+		t.mu.Unlock()
+		return EgressUnknown, false
+	}
+	t.lruList.MoveToFront(elem)
+	egress := elem.Value.(*cacheEntry).egress
+	t.mu.Unlock()
+	return egress, true
 }
 
 func (t *syncedRoutesTable) Reset() {

@@ -81,7 +81,7 @@ func (f *Forward) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, 
 func (f *Forward) Proxy(ctx context.Context, addr string, localAddr chan<- string, dst io.Writer, src io.Reader) (err error) {
 	defer close(localAddr)
 
-	f.conn, err = f.Dial(transport.Network, addr)
+	f.conn, err = f.Dial(transport.GetNetwork(), addr)
 	if err != nil {
 		return err
 	}

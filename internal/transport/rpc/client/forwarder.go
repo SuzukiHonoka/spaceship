@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
 	proxy "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type Statistic struct {
@@ -32,11 +35,12 @@ func (s *Statistic) AddRx(delta uint64) {
 }
 
 type Forwarder struct {
-	ctx       context.Context
-	stream    proxy.Proxy_ProxyClient
-	writer    io.Writer
-	reader    io.Reader
-	localAddr chan string
+	ctx           context.Context
+	stream        proxy.Proxy_ProxyClient
+	writer        io.Writer
+	reader        io.Reader
+	localAddr     chan string
+	closeAddrOnce sync.Once
 
 	// Statistic for TX and RX
 	Statistic *Statistic
@@ -86,7 +90,13 @@ func (f *Forwarder) CopyTargetToSRC(ctx context.Context) error {
 			// reset for new message
 			dstData.Reset()
 			if err := f.stream.RecvMsg(dstData); err != nil {
-				errCh <- err
+				// gRPC transport breakdown (Unavailable) is a stream
+				// termination, same as EOF — the session is over.
+				if s, ok := status.FromError(err); ok && s.Code() == codes.Unavailable {
+					errCh <- io.EOF
+				} else {
+					errCh <- err
+				}
 				return
 			}
 			if readErr := f.copyTargetToSRC(dstData); readErr != nil {
@@ -143,7 +153,7 @@ func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) error {
 	case proxy.ProxyStatus_EOF:
 		return io.EOF
 	case proxy.ProxyStatus_Error:
-		close(f.localAddr)
+		f.closeAddrOnce.Do(func() { close(f.localAddr) })
 		return transport.ErrServerError
 	default:
 		return fmt.Errorf("unknown status: %d", buf.Status)
@@ -191,7 +201,7 @@ func (f *Forwarder) Start(addr string, localAddrChan chan<- string) error {
 	handshake := &proxy.ProxySRC{
 		HeaderOrPayload: &proxy.ProxySRC_Header{
 			Header: &proxy.ProxySRC_ProxyHeader{
-				Id:   uuid,
+				Id:   getUUID(),
 				Addr: addr,
 			},
 		},

@@ -37,6 +37,7 @@ func (h *BlackHole) Dial(_, _ string) (c net.Conn, err error) {
 }
 
 func (h *BlackHole) Proxy(ctx context.Context, _ string, localAddr chan<- string, _ io.Writer, src io.Reader) error {
+	defer close(localAddr)
 	localAddr <- "127.0.0.1:0"
 
 	ctx, h.cancel = context.WithCancel(ctx)

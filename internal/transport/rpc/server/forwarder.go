@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
@@ -20,6 +21,7 @@ type Forwarder struct {
 	Stream        proto.Proxy_ProxyServer
 	Conn          net.Conn
 	Ack           chan interface{}
+	closeOnce     sync.Once
 }
 
 func NewForwarder(ctx context.Context, m *config.UsersMatchMap, stream proto.Proxy_ProxyServer) *Forwarder {
@@ -32,10 +34,13 @@ func NewForwarder(ctx context.Context, m *config.UsersMatchMap, stream proto.Pro
 }
 
 func (f *Forwarder) Close() error {
-	if f.Conn != nil {
-		return f.Conn.Close()
-	}
-	return nil
+	var err error
+	f.closeOnce.Do(func() {
+		if f.Conn != nil {
+			err = f.Conn.Close()
+		}
+	})
+	return err
 }
 
 func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
@@ -86,6 +91,10 @@ func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 
 	select {
 	case <-ctx.Done():
+		// Close target connection to unblock the goroutine's Read,
+		// then wait for it to exit — prevents Send race with Proxy().
+		f.Close()
+		<-errCh
 		return ctx.Err()
 	case err = <-errCh:
 		return err
@@ -93,18 +102,16 @@ func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 }
 
 func (f *Forwarder) copyTargetToClient(buf []byte, dstData *proto.ProxyDST, payload *proto.ProxyDST_Payload) error {
-	//log.Println("rpc server: start reading target")
 	n, err := f.Conn.Read(buf)
-	if err != nil {
-		return err
+	// Per io.Reader contract: process n > 0 bytes before considering error.
+	// Prevents dropping the last chunk when Read returns data + io.EOF.
+	if n > 0 {
+		payload.Payload = buf[:n]
+		if sendErr := f.Stream.Send(dstData); sendErr != nil {
+			return sendErr
+		}
 	}
-
-	//log.Println("rpc server -> client")
-	payload.Payload = buf[:n]
-
-	//err = c.stream.Send(dstData)
-	//dstData = nil
-	return f.Stream.Send(dstData)
+	return err
 }
 
 func (f *Forwarder) handshake() error {
@@ -136,7 +143,7 @@ func (f *Forwarder) handshake() error {
 	log.Printf("proxy accepted: %s -> %s", host, route)
 
 	// dial to target with 3 minutes timeout as default
-	if f.Conn, err = route.Dial(transport.Network, header.Addr); err != nil {
+	if f.Conn, err = route.Dial(transport.GetNetwork(), header.Addr); err != nil {
 		_ = f.Stream.Send(&proto.ProxyDST{
 			Status: proto.ProxyStatus_Error,
 		})
@@ -149,8 +156,7 @@ func (f *Forwarder) CopyClientToTarget(ctx context.Context) error {
 	defer close(f.Ack)
 
 	// do the handshake first
-	err := f.handshake()
-	if err != nil {
+	if err := f.handshake(); err != nil {
 		return fmt.Errorf("handshake error: %w", err)
 	}
 
@@ -165,12 +171,12 @@ func (f *Forwarder) CopyClientToTarget(ctx context.Context) error {
 		for {
 			// reset for new message
 			srcData.Reset()
-			if err = f.Stream.RecvMsg(srcData); err != nil {
+			if err := f.Stream.RecvMsg(srcData); err != nil {
 				errCh <- err
 				return
 			}
 
-			if err = f.copyClientToTarget(srcData); err != nil {
+			if err := f.copyClientToTarget(srcData); err != nil {
 				errCh <- err
 				return
 			}

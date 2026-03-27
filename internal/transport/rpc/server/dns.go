@@ -2,34 +2,24 @@ package server
 
 import (
 	"log"
-	"sync"
 	"time"
 
 	"github.com/miekg/dns"
 )
 
-var (
-	// Pool of reusable DNS clients to avoid creating new ones for each query
-	dnsClientPool = sync.Pool{
-		New: func() interface{} {
-			return &dns.Client{
-				Timeout: 5 * time.Second,
-			}
-		},
-	}
-)
+const dnsClientTimeout = 5 * time.Second
 
 // resolveDNSRecords performs actual DNS resolution using the miekg/dns library
-// This replaces the simple net.LookupIP approach with proper DNS queries
 func (s *Server) resolveDNSRecords(fqdn string, qtype uint16) []dns.RR {
 	// Create DNS query message
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(fqdn), qtype)
 	m.RecursionDesired = true
 
-	// Get DNS client from pool
-	c := dnsClientPool.Get().(*dns.Client)
-	defer dnsClientPool.Put(c)
+	// dns.Client is lightweight, no need for sync.Pool
+	c := &dns.Client{
+		Timeout: dnsClientTimeout,
+	}
 
 	// Query DNS server
 	response, _, err := c.Exchange(m, s.dnsAddr)

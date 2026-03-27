@@ -4,6 +4,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sync"
 )
 
 type Mode string
@@ -14,7 +15,22 @@ const (
 	ModeSkip    Mode = "skip"
 )
 
+var (
+	// currentLogFile tracks the open log file so it can be closed on reconfiguration.
+	currentLogFile *os.File
+	logMu          sync.Mutex
+)
+
 func (m Mode) Set() {
+	logMu.Lock()
+	defer logMu.Unlock()
+
+	// Close the previous log file if one was open.
+	if currentLogFile != nil {
+		_ = currentLogFile.Close()
+		currentLogFile = nil
+	}
+
 	switch m {
 	case ModeDefault:
 		log.Println("log will be redirected to stdout")
@@ -31,6 +47,7 @@ func (m Mode) Set() {
 			ModeDefault.Set()
 			return
 		}
+		currentLogFile = fd
 		log.Printf("log will be saved to %s", m)
 		log.SetOutput(fd)
 	}

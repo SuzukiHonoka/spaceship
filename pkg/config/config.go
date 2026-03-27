@@ -56,7 +56,7 @@ func NewFromConfigFile(path string) (*MixedConfig, error) {
 	return config, nil
 }
 
-// NewFromString loads the config from raw config string in json format (stick to the config structure).
+// NewFromString loads the config from raw config string in JSON format (stick to the config structure).
 func NewFromString(c string) (*MixedConfig, error) {
 	config := new(MixedConfig)
 	if err := json.Unmarshal([]byte(c), &config); err != nil {

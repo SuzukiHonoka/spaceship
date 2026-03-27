@@ -101,15 +101,27 @@ func (q *ConnQueue) GetConn() (*ConnWrapper, func() error, error) {
 		return nil, nil, fmt.Errorf("no available connections in pool")
 	}
 
-	el.Use()
-	// check if conn ok
+	// check connection state before marking as in-use
 	switch el.GetState() {
-	case connectivity.Connecting:
 	case connectivity.Ready:
-	default:
-		log.Println("grpc connection down, attempting to reconnect..")
+		// Connection is ready
+	case connectivity.Connecting:
+		// Connection in progress, WaitForReady will handle it
+	case connectivity.Idle:
+		// Trigger connection from idle state
+		el.Connect()
+	case connectivity.TransientFailure:
+		// Speed up reconnection; WaitForReady will queue the RPC
+		// until the connection recovers — do NOT return error here.
 		el.ResetConnectBackoff()
+		el.Connect()
+	case connectivity.Shutdown:
+		// Connection is permanently dead, replace it in the pool
+		go q.replaceConn(el)
+		return nil, nil, fmt.Errorf("grpc connection %d is shutdown", el.ID)
 	}
+
+	el.Use()
 	return el, el.Done, nil
 }
 
@@ -122,6 +134,35 @@ func (q *ConnQueue) GetClient() (proxy.ProxyClient, func() error, error) {
 	// Use dynamic proxy client for configurable service names
 	dynamicClient := NewDynamicProxyClient(conn)
 	return dynamicClient, done, nil
+}
+
+// replaceConn replaces a shutdown connection with a new one in the pool.
+func (q *ConnQueue) replaceConn(old *ConnWrapper) {
+	newConn, err := q.Dial()
+	if err != nil {
+		log.Printf("failed to replace shutdown connection %d: %v", old.ID, err)
+		return
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if q.shutdown {
+		utils.Close(newConn)
+		return
+	}
+
+	for i, conn := range q.Conn {
+		if conn == old {
+			newConn.ID = old.ID
+			q.Conn[i] = newConn
+			utils.Close(old)
+			log.Printf("replaced shutdown connection %d with new connection", old.ID)
+			return
+		}
+	}
+	// Already replaced by another goroutine
+	utils.Close(newConn)
 }
 
 // GetConnectionStatus returns detailed connection status string

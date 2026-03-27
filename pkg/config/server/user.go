@@ -1,7 +1,5 @@
 package server
 
-import "sync"
-
 type User struct {
 	UUID   string `json:"uuid"` // user id
 	Limit  *Limit `json:"limit,omitempty"`
@@ -11,7 +9,6 @@ type User struct {
 type Users []*User
 
 // Match returns true if the user id is in the users list
-// may use map for fast lookup in the future
 func (u Users) Match(id string) bool {
 	for _, user := range u {
 		if user.UUID == id {
@@ -25,19 +22,20 @@ func (u Users) ToMatchMap() *UsersMatchMap {
 	return NewUsersMatchMap(u)
 }
 
+// UsersMatchMap provides O(1) user lookup. Immutable after creation.
 type UsersMatchMap struct {
-	m sync.Map
+	m map[string]struct{}
 }
 
 func NewUsersMatchMap(users Users) *UsersMatchMap {
-	m := new(UsersMatchMap)
+	m := make(map[string]struct{}, len(users))
 	for _, user := range users {
-		m.m.Store(user.UUID, struct{}{})
+		m[user.UUID] = struct{}{}
 	}
-	return m
+	return &UsersMatchMap{m: m}
 }
 
 func (m *UsersMatchMap) Match(id string) bool {
-	_, ok := m.m.Load(id)
+	_, ok := m.m[id]
 	return ok
 }

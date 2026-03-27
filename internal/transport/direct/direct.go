@@ -58,7 +58,7 @@ func (d *Direct) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, d
 func (d *Direct) Proxy(ctx context.Context, addr string, localAddr chan<- string, dst io.Writer, src io.Reader) (err error) {
 	defer close(localAddr)
 
-	d.conn, err = d.Dial(transport.Network, addr)
+	d.conn, err = d.Dial(transport.GetNetwork(), addr)
 	if err != nil {
 		return fmt.Errorf("direct: failed to dial: %w", err)
 	}

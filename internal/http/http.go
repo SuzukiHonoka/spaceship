@@ -130,7 +130,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	defer utils.Close(route)
 
-	log.Printf("http: %s -> %s", r.Host, route)
+	log.Printf("http: %q -> %s", r.Host, route)
 
 	// hijack the connection
 	hj, ok := w.(http.Hijacker)
@@ -212,7 +212,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		for k, v := range r.Header {
 			buf.WriteString(k)
 			buf.WriteString(": ")
-			buf.WriteString(strings.Join(v, ";")) // in case of multiple values
+			buf.WriteString(strings.Join(v, ", ")) // multiple values comma-separated per RFC 7230
 			buf.WriteString(CRLF)
 		}
 
@@ -267,7 +267,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	defer utils.Close(route)
 
-	log.Printf("http: CONNECT %s -> %s", r.Host, route)
+	log.Printf("http: CONNECT %q -> %s", r.Host, route)
 
 	// hijack the connection
 	hj, ok := w.(http.Hijacker)
@@ -286,6 +286,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	_, addr, err := BuildRemoteAddr(r)
 	if err != nil {
 		ServeError(conn, fmt.Errorf("http: build remote addr failed: %w", err))
+		return
 	}
 
 	// actual proxy

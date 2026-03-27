@@ -1,15 +1,42 @@
 package transport
 
-import "time"
+import (
+	"sync"
+	"sync/atomic"
+	"time"
+)
 
-// BufferSize 32K (1K == 1024 Byte)
-var BufferSize = 32 * 1024
+var (
+	bufferSize atomic.Int64
+	network    atomic.Value
 
-// Network is a tcp dial option
-var Network = "tcp"
+	// IdleTimeout for transport of direct
+	IdleTimeout   = 30 * time.Minute
+	idleTimeoutMu sync.RWMutex
 
-// IdleTimeout for transport of direct
-var IdleTimeout = 30 * time.Minute
+	// DialTimeout for transport of direct
+	DialTimeout = 3 * time.Minute
+)
 
-// DialTimeout for transport of direct
-var DialTimeout = 3 * time.Minute
+func init() {
+	// BufferSize default: 32K (1K == 1024 Byte)
+	bufferSize.Store(int64(32 * 1024))
+	network.Store("tcp")
+}
+
+// GetBufferSize returns the current buffer size.
+func GetBufferSize() int {
+	return int(bufferSize.Load())
+}
+
+// GetNetwork returns the current network dial option.
+func GetNetwork() string {
+	return network.Load().(string)
+}
+
+// GetIdleTimeout returns the current idle timeout.
+func GetIdleTimeout() time.Duration {
+	idleTimeoutMu.RLock()
+	defer idleTimeoutMu.RUnlock()
+	return IdleTimeout
+}

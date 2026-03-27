@@ -23,13 +23,8 @@ func ServeError(w io.Writer, err error) {
 	if w == nil {
 		return
 	}
-	_, err1 := w.Write(MessageServiceUnavailable)
-	if err1 != nil {
-		log.Printf("http: write error status failed: %v", err1)
-		return
-	}
-	if _, err1 = fmt.Fprint(w, err); err1 != nil {
-		log.Printf("http: write error message failed: %v", err1)
+	if _, err = w.Write(MessageServiceUnavailable); err != nil {
+		log.Printf("http: write error status failed: %v", err)
 	}
 }
 

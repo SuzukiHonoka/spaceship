@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
@@ -27,8 +28,9 @@ import (
 const TransportName = "rpc"
 
 var (
-	uuid      string
-	connQueue *ConnQueue
+	clientMu sync.RWMutex
+	uuidVal  string
+	queueVal *ConnQueue
 )
 
 type Client struct {
@@ -37,7 +39,21 @@ type Client struct {
 }
 
 func SetUUID(uid string) {
-	uuid = uid
+	clientMu.Lock()
+	uuidVal = uid
+	clientMu.Unlock()
+}
+
+func getUUID() string {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return uuidVal
+}
+
+func getQueue() *ConnQueue {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return queueVal
 }
 
 func setupGrpcCredential(tls bool, hostName string, customCA ...string) (credentials.TransportCredentials, error) {
@@ -92,7 +108,6 @@ func buildClientTLSConfig(cp *x509.CertPool, serverNameOverride string) (*tls.Co
 		MinVersion:         tls.VersionTLS13,
 		MaxVersion:         tls.VersionTLS13,
 		CurvePreferences:   rpc.DefaultCurvePreferences,
-		CipherSuites:       []uint16{tls.TLS_AES_128_GCM_SHA256},
 	}
 
 	return tlsConfig, nil
@@ -105,49 +120,63 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 	}
 
 	params := NewParams(server, append(rpc.DialOptions, grpc.WithTransportCredentials(credential),
-		grpc.WithIdleTimeout(transport.IdleTimeout))...)
-	connQueue = NewConnQueue(int(mux), params)
-	return connQueue.Init()
+		grpc.WithIdleTimeout(transport.GetIdleTimeout()))...)
+	q := NewConnQueue(int(mux), params)
+	if err := q.Init(); err != nil {
+		return err
+	}
+
+	clientMu.Lock()
+	queueVal = q
+	clientMu.Unlock()
+	return nil
 }
 
 func Destroy() {
-	// double check since credential errors might occur
-	if connQueue != nil {
-		connQueue.Destroy()
+	clientMu.Lock()
+	q := queueVal
+	queueVal = nil
+	clientMu.Unlock()
+	if q != nil {
+		q.Destroy()
 	}
 }
 
 // GetConnectionStatus returns the current connection pool status
 func GetConnectionStatus() string {
-	if connQueue == nil {
+	q := getQueue()
+	if q == nil {
 		return "Connection pool not initialized"
 	}
-	return connQueue.GetConnectionStatus()
+	return q.GetConnectionStatus()
 }
 
 // GetConnectionSummary returns connection pool statistics
 func GetConnectionSummary() (total, active int, currentLoad uint32) {
-	if connQueue == nil {
+	q := getQueue()
+	if q == nil {
 		return 0, 0, 0
 	}
-	return connQueue.GetConnectionSummary()
+	return q.GetConnectionSummary()
 }
 
 // LogConnectionStatus logs detailed connection status
 func LogConnectionStatus() {
-	if connQueue == nil {
+	q := getQueue()
+	if q == nil {
 		log.Println("gRPC connection queue is not initialized")
 		return
 	}
-	connQueue.LogConnectionStatus()
+	q.LogConnectionStatus()
 }
 
 // GetConnectionDetails returns individual connection information for web display
 func GetConnectionDetails() []ConnectionDetail {
-	if connQueue == nil {
+	q := getQueue()
+	if q == nil {
 		return nil
 	}
-	return connQueue.GetConnectionDetails()
+	return q.GetConnectionDetails()
 }
 
 // Example usage and explanation of connection status display:
@@ -165,7 +194,11 @@ func (c *Client) Dial(_, _ string) (net.Conn, error) {
 }
 
 func New() (*Client, error) {
-	client, doneFunc, err := connQueue.GetClient()
+	q := getQueue()
+	if q == nil {
+		return nil, fmt.Errorf("connection pool not initialized")
+	}
+	client, doneFunc, err := q.GetClient()
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +252,7 @@ func (c *Client) DnsResolve(ctx context.Context, requests []*DnsRequest) ([]dns.
 
 	// Create gRPC request
 	req := &proto.DnsRequest{
-		Id: uuid, // Assuming uuid is available from existing client
+		Id: getUUID(),
 	}
 
 	for _, request := range requests {

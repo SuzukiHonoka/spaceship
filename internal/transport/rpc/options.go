@@ -21,7 +21,7 @@ var DefaultCurvePreferences = []tls.CurveID{
 
 var DialOptions = []grpc.DialOption{
 	grpc.WithKeepaliveParams(keepalive.ClientParameters{
-		Time:                10 * time.Second,
+		Time:                30 * time.Second,
 		Timeout:             GeneralTimeout,
 		PermitWithoutStream: true,
 	}),
@@ -34,22 +34,28 @@ var DialOptions = []grpc.DialOption{
 			Timeout: GeneralTimeout,
 		}).DialContext(ctx, "tcp", s)
 	}),
-	grpc.WithWriteBufferSize(0),
-	grpc.WithReadBufferSize(0),
+	grpc.WithWriteBufferSize(32 * 1024),
+	grpc.WithReadBufferSize(32 * 1024),
+	grpc.WithDefaultCallOptions(
+		grpc.MaxCallRecvMsgSize(4*1024*1024),
+		grpc.WaitForReady(true),
+	),
 	grpc.WithDisableServiceConfig(),
 	grpc.WithUserAgent("spaceship/" + manifest.VersionCode),
 }
 
 var ServerOptions = []grpc.ServerOption{
-	// without r/w buffer for less delay
-	grpc.ReadBufferSize(0),
-	grpc.WriteBufferSize(0),
+	grpc.ReadBufferSize(32 * 1024),
+	grpc.WriteBufferSize(32 * 1024),
+	grpc.MaxRecvMsgSize(4 * 1024 * 1024),
 	grpc.KeepaliveParams(keepalive.ServerParameters{
-		Time:    10 * time.Second, // ping every 10s if no activity
-		Timeout: GeneralTimeout,   // 15s timeout for ping response
+		MaxConnectionAge:      30 * time.Minute,
+		MaxConnectionAgeGrace: 30 * time.Second,
+		Time:                  30 * time.Second,
+		Timeout:               GeneralTimeout,
 	}),
 	grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
-		MinTime:             5 * time.Second,
+		MinTime:             10 * time.Second,
 		PermitWithoutStream: true,
 	}),
 	grpc.ConnectionTimeout(GeneralTimeout),
