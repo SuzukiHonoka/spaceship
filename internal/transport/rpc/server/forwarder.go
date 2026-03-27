@@ -90,7 +90,7 @@ func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 	case <-ctx.Done():
 		// Close target connection to unblock the goroutine's Read,
 		// then wait for it to exit — prevents Send race with Proxy().
-		f.Close()
+		_ = f.Close()
 		<-errCh
 		return ctx.Err()
 	case err = <-errCh:
