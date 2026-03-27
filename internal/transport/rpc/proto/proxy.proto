@@ -39,7 +39,7 @@ message ProxyDST{
   }
 
   message ProxyHeader{
-    string addr = 2;
+    string addr = 1;
   }
 }
 
