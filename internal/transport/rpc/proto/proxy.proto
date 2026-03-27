@@ -16,10 +16,8 @@ message ProxySRC{
   }
 
   message ProxyHeader{
-    // user id
-    string id = 1;
     // addr
-    string addr = 2;
+    string addr = 1;
   }
 }
 

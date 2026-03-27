@@ -539,10 +539,8 @@ func (x *DnsResponse) GetResult() []*DnsResult {
 
 type ProxySRC_ProxyHeader struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// user id
-	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	// addr
-	Addr          string `protobuf:"bytes,2,opt,name=addr,proto3" json:"addr,omitempty"`
+	Addr          string `protobuf:"bytes,1,opt,name=addr,proto3" json:"addr,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -575,13 +573,6 @@ func (x *ProxySRC_ProxyHeader) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ProxySRC_ProxyHeader.ProtoReflect.Descriptor instead.
 func (*ProxySRC_ProxyHeader) Descriptor() ([]byte, []int) {
 	return file_proxy_proto_rawDescGZIP(), []int{0, 0}
-}
-
-func (x *ProxySRC_ProxyHeader) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
 }
 
 func (x *ProxySRC_ProxyHeader) GetAddr() string {
@@ -639,13 +630,12 @@ var File_proxy_proto protoreflect.FileDescriptor
 
 const file_proxy_proto_rawDesc = "" +
 	"\n" +
-	"\vproxy.proto\x12\x05proxy\"\xa5\x01\n" +
+	"\vproxy.proto\x12\x05proxy\"\x95\x01\n" +
 	"\bProxySRC\x125\n" +
 	"\x06header\x18\x01 \x01(\v2\x1b.proxy.ProxySRC.ProxyHeaderH\x00R\x06header\x12\x1a\n" +
-	"\apayload\x18\x02 \x01(\fH\x00R\apayload\x1a1\n" +
-	"\vProxyHeader\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
-	"\x04addr\x18\x02 \x01(\tR\x04addrB\x13\n" +
+	"\apayload\x18\x02 \x01(\fH\x00R\apayload\x1a!\n" +
+	"\vProxyHeader\x12\x12\n" +
+	"\x04addr\x18\x01 \x01(\tR\x04addrB\x13\n" +
 	"\x11header_or_payload\"\xc1\x01\n" +
 	"\bProxyDST\x12*\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x12.proxy.ProxyStatusR\x06status\x125\n" +
