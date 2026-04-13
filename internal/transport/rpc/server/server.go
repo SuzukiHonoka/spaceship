@@ -165,11 +165,11 @@ func (s *Server) DnsResolve(_ context.Context, request *proto.DnsRequest) (*prot
 		if item.BlockIpv6 {
 			filteredRecords := make([]mdns.RR, 0, len(records))
 			for _, record := range records {
-				if record.Header().Rrtype != mdns.TypeAAAA {
-					filteredRecords = append(filteredRecords, record)
-				} else {
+				if record.Header().Rrtype == mdns.TypeAAAA {
 					log.Printf("dns: filtered out IPv6 record for %s", item.Fqdn)
+					continue
 				}
+				filteredRecords = append(filteredRecords, record)
 			}
 			records = filteredRecords
 
