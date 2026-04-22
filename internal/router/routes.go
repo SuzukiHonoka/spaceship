@@ -18,10 +18,6 @@ func (r Routes) GenerateCache() error {
 }
 
 func (r Routes) GetRoute(dst string) (transport.Transport, error) {
-	if route, ok := table.Get(dst); ok {
-		//log.Printf("cache hit: %s -> %s", dst, route)
-		return route.GetTransport()
-	}
 	for _, route := range r {
 		if route.Match(dst) {
 			table.Set(dst, route.Destination)

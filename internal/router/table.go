@@ -58,15 +58,6 @@ func (t *syncedRoutesTable) Set(k string, egress Egress) {
 }
 
 func (t *syncedRoutesTable) Get(k string) (Egress, bool) {
-	// Fast path: read-lock to check existence (avoids write lock on misses)
-	t.mu.RLock()
-	_, exists := t.cache[k]
-	t.mu.RUnlock()
-	if !exists {
-		return EgressUnknown, false
-	}
-
-	// Slow path: write-lock to update LRU order and read fresh value
 	t.mu.Lock()
 	elem, exists := t.cache[k]
 	if !exists {
