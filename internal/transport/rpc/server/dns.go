@@ -7,22 +7,17 @@ import (
 	"github.com/miekg/dns"
 )
 
-const dnsClientTimeout = 5 * time.Second
+const DNSClientTimeout = 5 * time.Second
 
-// resolveDNSRecords performs actual DNS resolution using the miekg/dns library
+// resolveDNSRecords performs actual DNS resolution using the shared miekg/dns client.
 func (s *Server) resolveDNSRecords(fqdn string, qtype uint16) []dns.RR {
 	// Create DNS query message
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(fqdn), qtype)
 	m.RecursionDesired = true
 
-	// dns.Client is lightweight, no need for sync.Pool
-	c := &dns.Client{
-		Timeout: dnsClientTimeout,
-	}
-
-	// Query DNS server
-	response, _, err := c.Exchange(m, s.dnsAddr)
+	// Query DNS server using the shared client (safe for concurrent use)
+	response, _, err := s.dnsClient.Exchange(m, s.dnsAddr)
 	if err != nil {
 		log.Printf("DNS resolution failed for %s using server %s: %v", fqdn, s.dnsAddr, err)
 		return nil

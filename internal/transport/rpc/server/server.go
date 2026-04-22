@@ -26,9 +26,10 @@ import (
 
 type Server struct {
 	proto.UnimplementedProxyServer
-	Ctx     context.Context
-	srv     *grpc.Server
-	dnsAddr string
+	Ctx       context.Context
+	srv       *grpc.Server
+	dnsAddr   string
+	dnsClient *mdns.Client
 }
 
 func buildTLSConfig(certFile, keyFile string) (*tls.Config, error) {
@@ -81,9 +82,10 @@ func NewServer(ctx context.Context, users config.Users, ssl *config.SSL, dnsConf
 		grpc.StreamInterceptor(rpc.StreamServerAuthInterceptor(matchMap.Match)),
 	)...)
 	wrapper := &Server{
-		Ctx:     ctx,
-		srv:     s,
-		dnsAddr: dnsAddr,
+		Ctx:       ctx,
+		srv:       s,
+		dnsAddr:   dnsAddr,
+		dnsClient: &mdns.Client{Timeout: DNSClientTimeout},
 	}
 
 	// Use dynamic proxy server registration for configurable service names
