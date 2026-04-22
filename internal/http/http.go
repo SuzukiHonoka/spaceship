@@ -220,7 +220,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		buf.WriteString(CRLF)
 
 		// write constructed headers to pipe
-		if _, err := pw.Write([]byte(buf.String())); err != nil {
+		if _, err := io.WriteString(pw, buf.String()); err != nil {
 			return fmt.Errorf("send heads failed: %w", err)
 		}
 
