@@ -18,11 +18,6 @@ type ConnQueue struct {
 	mu       sync.RWMutex // Protect concurrent access
 }
 
-type ConnNode struct {
-	Conn *ConnWrapper
-	Next *ConnNode
-}
-
 func NewConnQueue(size int, params *Params) *ConnQueue {
 	queue := &ConnQueue{
 		Params: params,
