@@ -29,7 +29,7 @@ func (d *Direct) String() string {
 }
 
 func (d *Direct) Dial(network, addr string) (net.Conn, error) {
-	return net.DialTimeout(network, addr, transport.DialTimeout)
+	return net.DialTimeout(network, addr, transport.GetDialTimeout())
 }
 
 func (d *Direct) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, direction transport.Direction) error {

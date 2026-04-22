@@ -17,6 +17,11 @@ func DisableIPv6() {
 	SetNetwork("tcp4")
 }
 
+// SetDialTimeout for transport of direct
+func SetDialTimeout(timeout time.Duration) {
+	dialTimeout.Store(int64(timeout))
+}
+
 // SetIdleTimeout for transport of direct
 func SetIdleTimeout(timeout time.Duration) {
 	idleTimeoutMu.Lock()

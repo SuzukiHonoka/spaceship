@@ -14,14 +14,15 @@ var (
 	IdleTimeout   = 30 * time.Minute
 	idleTimeoutMu sync.RWMutex
 
-	// DialTimeout for transport of direct
-	DialTimeout = 3 * time.Minute
+	// dialTimeout for transport of direct (accessed via GetDialTimeout/SetDialTimeout)
+	dialTimeout atomic.Int64
 )
 
 func init() {
 	// BufferSize default: 32K (1K == 1024 Byte)
 	bufferSize.Store(int64(32 * 1024))
 	network.Store("tcp")
+	dialTimeout.Store(int64(3 * time.Minute))
 }
 
 // GetBufferSize returns the current buffer size.
@@ -39,4 +40,9 @@ func GetIdleTimeout() time.Duration {
 	idleTimeoutMu.RLock()
 	defer idleTimeoutMu.RUnlock()
 	return IdleTimeout
+}
+
+// GetDialTimeout returns the current dial timeout.
+func GetDialTimeout() time.Duration {
+	return time.Duration(dialTimeout.Load())
 }
