@@ -212,7 +212,7 @@ func readAddrSpec(r io.Reader) (*AddrSpec, error) {
 
 	// Get the address type
 	var addrType [1]byte
-	if _, err := r.Read(addrType[:]); err != nil {
+	if _, err := io.ReadFull(r, addrType[:]); err != nil {
 		return nil, err
 	}
 
@@ -233,7 +233,7 @@ func readAddrSpec(r io.Reader) (*AddrSpec, error) {
 		d.IP = addr
 
 	case fqdnAddress:
-		if _, err := r.Read(addrType[:]); err != nil {
+		if _, err := io.ReadFull(r, addrType[:]); err != nil {
 			return nil, err
 		}
 		addrLen := int(addrType[0])

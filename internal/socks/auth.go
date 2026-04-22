@@ -81,7 +81,7 @@ func (a UserPassAuthenticator) Authenticate(reader io.Reader, writer io.Writer) 
 	}
 
 	// Get the password length
-	if _, err := reader.Read(header[:1]); err != nil {
+	if _, err := io.ReadFull(reader, header[:1]); err != nil {
 		return nil, err
 	}
 
@@ -140,7 +140,7 @@ func noAcceptableAuth(conn io.Writer) error {
 func readMethods(r io.Reader) ([]byte, error) {
 	// methods len
 	header := []byte{0}
-	if _, err := r.Read(header); err != nil {
+	if _, err := io.ReadFull(r, header); err != nil {
 		return nil, err
 	}
 	numMethods := int(header[0])
