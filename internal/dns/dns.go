@@ -53,8 +53,10 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		})
 	}
 
-	// Perform DNS resolution via RPC client
-	ctx := context.Background()
+	// Perform DNS resolution via RPC client with a bounded timeout to prevent
+	// indefinitely-hanging ServeDNS goroutines when the upstream is slow.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	results, err := s.client.DnsResolve(ctx, dnsReqList)
 	if err != nil {
 		log.Printf("DNS resolution via RPC failed: %v", err)
