@@ -13,11 +13,15 @@ type ServiceConfig struct {
 }
 
 var (
-	// Global service configuration
-	globalServiceConfig = &ServiceConfig{
-		serviceName: "proxy.Proxy", // Default service name
-		methodNames: make(map[string]string),
-	}
+	// Global service configuration, fully initialized at startup.
+	globalServiceConfig = func() *ServiceConfig {
+		cfg := &ServiceConfig{serviceName: "proxy.Proxy"}
+		cfg.methodNames = map[string]string{
+			"DnsResolve": "/proxy.Proxy/DnsResolve",
+			"Proxy":      "/proxy.Proxy/Proxy",
+		}
+		return cfg
+	}()
 )
 
 // SetServiceName configures the gRPC service name dynamically
@@ -67,9 +71,4 @@ func GetDnsResolveMethodName() string {
 // GetProxyMethodName returns the full method name for Proxy
 func GetProxyMethodName() string {
 	return GetMethodName("Proxy")
-}
-
-// Initialize with default values
-func init() {
-	SetServiceName("proxy.Proxy")
 }

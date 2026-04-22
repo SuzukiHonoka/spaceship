@@ -10,31 +10,33 @@ import (
 
 // DynamicProxyClient wraps the generated client to use configurable service names
 type DynamicProxyClient struct {
-	conn   grpc.ClientConnInterface
-	client proto.ProxyClient
+	conn            grpc.ClientConnInterface
+	client          proto.ProxyClient
+	dnsMethodName   string
+	proxyMethodName string
 }
 
 // Ensure DynamicProxyClient implements proto.ProxyClient interface
 var _ proto.ProxyClient = (*DynamicProxyClient)(nil)
 
-// NewDynamicProxyClient creates a client that respects the configured service name
+// NewDynamicProxyClient creates a client that respects the configured service name.
+// Method names are resolved once at construction time to avoid per-call lock overhead.
 func NewDynamicProxyClient(conn grpc.ClientConnInterface) *DynamicProxyClient {
 	return &DynamicProxyClient{
-		conn:   conn,
-		client: proto.NewProxyClient(conn),
+		conn:            conn,
+		client:          proto.NewProxyClient(conn),
+		dnsMethodName:   rpc.GetDnsResolveMethodName(),
+		proxyMethodName: rpc.GetProxyMethodName(),
 	}
 }
 
 // DnsResolve calls DnsResolve using the configured service name
 func (c *DynamicProxyClient) DnsResolve(ctx context.Context, in *proto.DnsRequest, opts ...grpc.CallOption) (*proto.DnsResponse, error) {
-	// Use dynamic method name from configuration
-	methodName := rpc.GetDnsResolveMethodName()
-
 	// Add static method option with dynamic name
 	opts = append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 
 	out := new(proto.DnsResponse)
-	err := c.conn.Invoke(ctx, methodName, in, out, opts...)
+	err := c.conn.Invoke(ctx, c.dnsMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -43,9 +45,6 @@ func (c *DynamicProxyClient) DnsResolve(ctx context.Context, in *proto.DnsReques
 
 // Proxy calls Proxy using the configured service name
 func (c *DynamicProxyClient) Proxy(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[proto.ProxySRC, proto.ProxyDST], error) {
-	// Use dynamic method name from configuration
-	methodName := rpc.GetProxyMethodName()
-
 	// Create custom stream descriptor with dynamic service name
 	streamDesc := &grpc.StreamDesc{
 		StreamName:    "Proxy",
@@ -54,7 +53,7 @@ func (c *DynamicProxyClient) Proxy(ctx context.Context, opts ...grpc.CallOption)
 	}
 
 	opts = append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.conn.NewStream(ctx, streamDesc, methodName, opts...)
+	stream, err := c.conn.NewStream(ctx, streamDesc, c.proxyMethodName, opts...)
 	if err != nil {
 		return nil, err
 	}
