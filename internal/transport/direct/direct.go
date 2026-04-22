@@ -50,6 +50,8 @@ func (d *Direct) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, d
 		transport.GlobalStats.Add(direction, n)
 		return err
 	case <-ctx.Done():
+		transport.GlobalStats.Add(direction, n)
+		_ = d.Close()
 		return ctx.Err()
 	}
 }

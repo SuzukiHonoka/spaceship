@@ -74,6 +74,8 @@ func (f *Forward) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, 
 		transport.GlobalStats.Add(direction, n)
 		return err
 	case <-ctx.Done():
+		transport.GlobalStats.Add(direction, n)
+		_ = f.Close()
 		return ctx.Err()
 	}
 }
