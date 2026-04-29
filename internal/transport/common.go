@@ -10,8 +10,8 @@ var (
 	bufferSize atomic.Int64
 	network    atomic.Value
 
-	// IdleTimeout for transport of direct
-	IdleTimeout   = 30 * time.Minute
+	// idleTimeout for transport of direct (use GetIdleTimeout/SetIdleTimeout for safe access)
+	idleTimeout   = 30 * time.Minute
 	idleTimeoutMu sync.RWMutex
 
 	// dialTimeout for transport of direct (accessed via GetDialTimeout/SetDialTimeout)
@@ -39,7 +39,7 @@ func GetNetwork() string {
 func GetIdleTimeout() time.Duration {
 	idleTimeoutMu.RLock()
 	defer idleTimeoutMu.RUnlock()
-	return IdleTimeout
+	return idleTimeout
 }
 
 // GetDialTimeout returns the current dial timeout.

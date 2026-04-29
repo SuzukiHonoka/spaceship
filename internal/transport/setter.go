@@ -25,6 +25,6 @@ func SetDialTimeout(timeout time.Duration) {
 // SetIdleTimeout for transport of direct
 func SetIdleTimeout(timeout time.Duration) {
 	idleTimeoutMu.Lock()
-	IdleTimeout = timeout
+	idleTimeout = timeout
 	idleTimeoutMu.Unlock()
 }

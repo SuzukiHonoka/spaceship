@@ -46,7 +46,9 @@ func (s *Server) Close() (err error) {
 	}
 	s.closeOnce.Do(func() {
 		log.Println("http: shutting down")
-		err = s.srv.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err = s.srv.Shutdown(ctx)
 	})
 	return err
 }
@@ -244,7 +246,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		if _, err := io.CopyBuffer(pw, conn, *buf); err != nil {
 			return fmt.Errorf("copy data failed: %w", err)
 		}
-		return io.EOF
+		// Return nil, not io.EOF — returning non-nil would cancel the errgroup
+		// context and abort the proxy goroutine while it still has data to send.
+		return nil
 	})
 
 	if err = errGroup.Wait(); err != nil {

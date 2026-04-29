@@ -59,8 +59,8 @@ func GetMethodName(method string) string {
 		return fullName
 	}
 
-	// Fallback to default naming
-	return fmt.Sprintf("/proxy.Proxy/%s", method)
+	// Fallback uses the currently configured service name, not the hardcoded default.
+	return fmt.Sprintf("/%s/%s", globalServiceConfig.serviceName, method)
 }
 
 // GetDnsResolveMethodName returns the full method name for DnsResolve

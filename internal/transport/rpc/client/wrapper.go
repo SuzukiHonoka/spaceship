@@ -65,15 +65,19 @@ func (w ConnWrappers) PickLeastLoaded() *ConnWrapper {
 		return nil
 	}
 
-	// All connections have load, find the minimum
-	conn := w[0]
-	minUsage := atomic.LoadUint32(&conn.InUse)
+	var conn *ConnWrapper
+	var minUsage uint32
 
-	for i := 1; i < len(w); i++ {
-		currentUsage := atomic.LoadUint32(&w[i].InUse)
-		if currentUsage < minUsage {
-			minUsage = currentUsage
-			conn = w[i]
+	for _, c := range w {
+		// Skip permanently dead connections so they are never chosen.
+		// replaceConn() will swap them out asynchronously.
+		if c.GetState() == connectivity.Shutdown {
+			continue
+		}
+		load := atomic.LoadUint32(&c.InUse)
+		if conn == nil || load < minUsage {
+			minUsage = load
+			conn = c
 		}
 	}
 	return conn

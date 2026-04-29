@@ -32,26 +32,32 @@ func (d *Direct) Dial(network, addr string) (net.Conn, error) {
 	return net.DialTimeout(network, addr, transport.GetDialTimeout())
 }
 
+type copyResult struct {
+	n   int64
+	err error
+}
+
 func (d *Direct) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, direction transport.Direction) error {
 	buf := transport.Buffer()
 	defer transport.PutBuffer(buf)
 
-	var n int64
-	var err error
-
-	copyDone := make(chan struct{})
+	// Use a buffered channel so the goroutine never blocks on send,
+	// preventing a goroutine leak when we return early on ctx cancellation.
+	resultCh := make(chan copyResult, 1)
 	go func() {
-		n, err = io.CopyBuffer(dst, src, *buf)
-		close(copyDone)
+		n, err := io.CopyBuffer(dst, src, *buf)
+		resultCh <- copyResult{n, err}
 	}()
 
 	select {
-	case <-copyDone:
-		transport.GlobalStats.Add(direction, n)
-		return err
+	case result := <-resultCh:
+		transport.GlobalStats.Add(direction, result.n)
+		return result.err
 	case <-ctx.Done():
-		transport.GlobalStats.Add(direction, n)
 		_ = d.Close()
+		// Wait for the goroutine to exit before reading n to avoid a data race.
+		result := <-resultCh
+		transport.GlobalStats.Add(direction, result.n)
 		return ctx.Err()
 	}
 }

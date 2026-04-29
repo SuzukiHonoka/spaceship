@@ -14,18 +14,11 @@ var DefaultShutdownTimeout = 3 * time.Second
 
 type Server struct {
 	srv          *dns.Server
-	client       *rpcClient.Client
 	blockIPv6DNS bool
 }
 
 func NewServer(addr string, blockIPv6DNS bool) (*Server, error) {
-	client, err := rpcClient.New()
-	if err != nil {
-		return nil, err
-	}
-
 	srv := &Server{
-		client:       client,
 		blockIPv6DNS: blockIPv6DNS,
 	}
 	dnsSrv := &dns.Server{
@@ -42,6 +35,19 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	m.SetReply(r)
 	m.Authoritative = true
 
+	// Acquire a client from the pool for this request and release it immediately
+	// after the RPC completes. This avoids permanently holding one pool slot for
+	// the lifetime of the DNS server (which starves other connections).
+	client, err := rpcClient.New()
+	if err != nil {
+		log.Printf("DNS: failed to acquire RPC client: %v", err)
+		if writeErr := w.WriteMsg(m); writeErr != nil {
+			log.Printf("Failed to write DNS error response: %v", writeErr)
+		}
+		return
+	}
+	defer utils.Close(client)
+
 	// Pre-allocate with exact capacity
 	questionCount := len(r.Question)
 	dnsReqList := make([]*rpcClient.DnsRequest, 0, questionCount)
@@ -57,7 +63,7 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	// indefinitely-hanging ServeDNS goroutines when the upstream is slow.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	results, err := s.client.DnsResolve(ctx, dnsReqList)
+	results, err := client.DnsResolve(ctx, dnsReqList)
 	if err != nil {
 		log.Printf("DNS resolution via RPC failed: %v", err)
 		// Return empty response on error

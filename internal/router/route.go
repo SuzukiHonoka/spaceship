@@ -46,34 +46,43 @@ type MatchCache struct {
 
 func (r *Route) GenerateCache() error {
 	log.Printf("generating %s-route cache..", r.MatchType)
+
+	// Build a local merged slice so r.Sources is never mutated.
+	// This prevents duplicate entries if GenerateCache() is called more than once
+	// (e.g., on config reload) when r.Ext points to a file.
+	sources := r.Sources
 	if r.Ext != "" {
 		log.Printf("reading route-ext from file: %s", r.Ext)
 		f, err := os.Open(r.Ext)
 		if err != nil {
 			return fmt.Errorf("read from path: %s failed: %w", r.Ext, err)
 		}
+		var fileSources []string
 		b := bufio.NewScanner(f)
 		for b.Scan() {
-			r.Sources = append(r.Sources, b.Text())
+			fileSources = append(fileSources, b.Text())
 		}
 		utils.Close(f)
+		sources = append(sources, fileSources...)
 	}
+	// Reset caches before rebuilding to ensure idempotency.
+	r.cache = MatchCache{}
 	switch r.MatchType {
 	case TypeDefault:
 	case TypeExact:
-		r.cache.ExactMap = make(map[string]struct{}, len(r.Sources))
-		for _, src := range r.Sources {
+		r.cache.ExactMap = make(map[string]struct{}, len(sources))
+		for _, src := range sources {
 			r.cache.ExactMap[src] = struct{}{}
 		}
 		log.Printf("exact-route count: %d", len(r.cache.ExactMap))
 	case TypeDomain:
-		r.cache.DomainMap = make(map[string]struct{}, len(r.Sources))
-		for _, src := range r.Sources {
+		r.cache.DomainMap = make(map[string]struct{}, len(sources))
+		for _, src := range sources {
 			r.cache.DomainMap[src] = struct{}{}
 		}
 		log.Printf("domain-route count: %d", len(r.cache.DomainMap))
 	case TypeCIDR:
-		for _, cidr := range r.Sources {
+		for _, cidr := range sources {
 			prefix, err := netip.ParsePrefix(cidr)
 			if err != nil {
 				return fmt.Errorf("cidr: %s parse failed: %w", cidr, err)
@@ -82,7 +91,7 @@ func (r *Route) GenerateCache() error {
 		}
 		log.Printf("cidr-route count: %d", len(r.cache.CIDRList))
 	case TypeRegex:
-		for _, rx := range r.Sources {
+		for _, rx := range sources {
 			regx, err := regexp.Compile(rx)
 			if err != nil {
 				return fmt.Errorf("regex: %s parse failed: %w", rx, err)

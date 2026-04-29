@@ -28,6 +28,8 @@ func NewConnQueue(size int, params *Params) *ConnQueue {
 }
 
 func (q *ConnQueue) Add(conn *ConnWrapper) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	conn.ID = len(q.Conn) + 1 // Assign sequential ID starting from 1
 	q.Conn = append(q.Conn, conn)
 }

@@ -84,26 +84,21 @@ func (s *Server) Close() (err error) {
 func (s *Server) Serve() error {
 	log.Printf("socks started at %s", s.listener.Addr())
 	for {
-		select {
-		case <-s.ctx.Done():
-			return nil
-		default:
-			conn, err := s.listener.Accept()
-			if err != nil {
-				if errors.Is(err, net.ErrClosed) {
-					return nil // normal shutdown
-				}
-				if ne, ok := errors.AsType[net.Error](err); ok && ne.Timeout() {
-					continue
-				}
-				return err
+		conn, err := s.listener.Accept()
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return nil // normal shutdown
 			}
-			go func() {
-				if err := s.ServeConn(conn); err != nil {
-					log.Printf("[ERR] socks: %v", err)
-				}
-			}()
+			if ne, ok := errors.AsType[net.Error](err); ok && ne.Timeout() {
+				continue
+			}
+			return err
 		}
+		go func() {
+			if err := s.ServeConn(conn); err != nil {
+				log.Printf("[ERR] socks: %v", err)
+			}
+		}()
 	}
 }
 

@@ -8,7 +8,8 @@ type User struct {
 
 type Users []*User
 
-// Match returns true if the user id is in the users list
+// Match returns true if the user id is in the users list.
+// Deprecated: use UsersMatchMap.Match for O(1) lookup.
 func (u Users) Match(id string) bool {
 	for _, user := range u {
 		if user.UUID == id {

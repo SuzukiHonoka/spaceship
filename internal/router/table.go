@@ -58,15 +58,14 @@ func (t *syncedRoutesTable) Set(k string, egress Egress) {
 }
 
 func (t *syncedRoutesTable) Get(k string) (Egress, bool) {
-	t.mu.Lock()
+	t.mu.RLock()
 	elem, exists := t.cache[k]
 	if !exists {
-		t.mu.Unlock()
+		t.mu.RUnlock()
 		return EgressUnknown, false
 	}
-	t.lruList.MoveToFront(elem)
 	egress := elem.Value.(*cacheEntry).egress
-	t.mu.Unlock()
+	t.mu.RUnlock()
 	return egress, true
 }
 

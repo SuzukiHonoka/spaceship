@@ -38,6 +38,7 @@ var DialOptions = []grpc.DialOption{
 	grpc.WithReadBufferSize(32 * 1024),
 	grpc.WithDefaultCallOptions(
 		grpc.MaxCallRecvMsgSize(4*1024*1024),
+		grpc.MaxCallSendMsgSize(4*1024*1024),
 		grpc.WaitForReady(true),
 	),
 	grpc.WithDisableServiceConfig(),
@@ -48,6 +49,7 @@ var ServerOptions = []grpc.ServerOption{
 	grpc.ReadBufferSize(32 * 1024),
 	grpc.WriteBufferSize(32 * 1024),
 	grpc.MaxRecvMsgSize(4 * 1024 * 1024),
+	grpc.MaxSendMsgSize(4 * 1024 * 1024),
 	grpc.KeepaliveParams(keepalive.ServerParameters{
 		MaxConnectionAge:      30 * time.Minute,
 		MaxConnectionAgeGrace: 30 * time.Second,
