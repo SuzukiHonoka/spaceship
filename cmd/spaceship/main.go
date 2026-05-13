@@ -10,6 +10,7 @@ import (
 
 	"github.com/SuzukiHonoka/spaceship/v2/api"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/indicator"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/management"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
@@ -22,6 +23,7 @@ var (
 	showVersion       = flag.Bool("v", false, "show spaceship version")
 	showStats         = flag.Bool("s", false, "show stats")
 	showStatsInterval = flag.Duration("interval", 1*time.Second, "show stats interval in seconds")
+	managementAddr    = flag.String("mgmt", "", "management HTTP server address (loopback only, e.g. 127.0.0.1:19999); empty = disabled")
 )
 
 func init() {
@@ -60,6 +62,17 @@ func main() {
 		} else {
 			log.Printf("Unable to show stats, not a terminal.")
 		}
+	}
+
+	// Start management HTTP server if requested.
+	if *managementAddr != "" {
+		mgmtCtx, mgmtCancel := context.WithCancel(context.Background())
+		defer mgmtCancel()
+		go func() {
+			if err := management.Start(mgmtCtx, *managementAddr); err != nil {
+				log.Printf("management server stopped: %v", err)
+			}
+		}()
 	}
 
 	// prompt
