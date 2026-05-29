@@ -18,7 +18,7 @@ type Forwarder struct {
 	Ctx       context.Context
 	Stream    proto.Proxy_ProxyServer
 	Conn      net.Conn
-	Ack       chan interface{}
+	Ack       chan struct{}
 	closeOnce sync.Once
 }
 
@@ -26,7 +26,7 @@ func NewForwarder(ctx context.Context, stream proto.Proxy_ProxyServer) *Forwarde
 	return &Forwarder{
 		Ctx:    ctx,
 		Stream: stream,
-		Ack:    make(chan interface{}, 1),
+		Ack:    make(chan struct{}, 1),
 	}
 }
 
@@ -122,19 +122,31 @@ func (f *Forwarder) handshake() error {
 	}
 	header := v.Header
 
+	addr := header.Addr
+	network := transport.GetNetwork()
+
+	if len(addr) >= 6 && addr[:6] == "udp://" {
+		network = "udp"
+		addr = addr[6:]
+	} else if len(addr) >= 6 && addr[:6] == "tcp://" {
+		network = "tcp"
+		addr = addr[6:]
+	}
+
 	// Auth is handled by the stream interceptor.
-	host, _, err := net.SplitHostPort(header.Addr)
+	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		return fmt.Errorf("invalid addr %s: %w", header.Addr, err)
+		return fmt.Errorf("invalid addr %s: %w", addr, err)
 	}
 	route, err := router.GetRoute(host)
 	if err != nil {
 		return fmt.Errorf("get route for %s error: %w", host, err)
 	}
-	log.Printf("proxy accepted: %s -> %s", host, route)
+	log.Printf("proxy accepted: [%s] %s -> %s", network, host, route)
 
-	// dial to target with 3 minutes timeout as default
-	if f.Conn, err = route.Dial(transport.GetNetwork(), header.Addr); err != nil {
+	// dial to target
+	f.Conn, err = route.Dial(network, addr)
+	if err != nil {
 		_ = f.Stream.Send(&proto.ProxyDST{
 			Status: proto.ProxyStatus_Error,
 		})

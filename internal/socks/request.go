@@ -35,9 +35,7 @@ const (
 	addrTypeNotSupported
 )
 
-var (
-	ErrUnrecognizedAddrType = fmt.Errorf("unrecognized address type")
-)
+var ErrUnrecognizedAddrType = errors.New("unrecognized address type")
 
 // AddrSpec is used to return the target AddrSpec
 // which may be specified as IPv4, IPv6, or a FQDN
@@ -187,7 +185,7 @@ func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Reques
 	return nil
 }
 
-// handleBind is used to handle a connect command
+// handleBind is used to handle a bind command
 func (s *Server) handleBind(_ context.Context, conn ConnWriter, _ *Request) error {
 	// TODO: Support bind
 	if err := sendReply(conn, commandNotSupported, nil); err != nil {
@@ -196,12 +194,73 @@ func (s *Server) handleBind(_ context.Context, conn ConnWriter, _ *Request) erro
 	return nil
 }
 
-// handleAssociate is used to handle a connect command
-func (s *Server) handleAssociate(_ context.Context, conn ConnWriter, _ *Request) error {
-	// TODO: Support associate
-	if err := sendReply(conn, commandNotSupported, nil); err != nil {
-		return fmt.Errorf("failed to send reply: %v", err)
+// handleAssociate is used to handle a UDP associate command (RFC 1928 §6).
+// It binds a local UDP relay socket, sends the bound address back to the client,
+// then monitors the TCP control connection — tearing down the relay when it closes.
+func (s *Server) handleAssociate(_ context.Context, conn ConnWriter, req *Request) error {
+	// Extract the client IP for access control on the UDP relay.
+	var clientIP net.IP
+	if req.RemoteAddr != nil {
+		clientIP = req.RemoteAddr.IP
 	}
+
+	relay, err := NewUDPRelay(clientIP)
+	if err != nil {
+		if sendErr := sendReply(conn, serverFailure, nil); sendErr != nil {
+			return fmt.Errorf("failed to send reply: %w", sendErr)
+		}
+		return fmt.Errorf("socks5: udp associate: %w", err)
+	}
+
+	// Parse the relay's bound address to build the SOCKS5 reply.
+	relayAddr := relay.RelayAddr().(*net.UDPAddr)
+	bind := &AddrSpec{IP: relayAddr.IP, Port: uint16(relayAddr.Port)}
+
+	// If the relay bound to an unspecified address (0.0.0.0), substitute the
+	// local side of the TCP connection so the client knows where to send datagrams.
+	if bind.IP.IsUnspecified() {
+		if tc, ok := conn.(interface{ LocalAddr() net.Addr }); ok {
+			if tcpAddr, ok := tc.LocalAddr().(*net.TCPAddr); ok {
+				bind.IP = tcpAddr.IP
+			}
+		}
+	}
+
+	if err = sendReply(conn, successReply, bind); err != nil {
+		_ = relay.Close()
+		return fmt.Errorf("failed to send reply: %w", err)
+	}
+
+	log.Printf("socks5: udp associate relay started at %s for client %s", relay.RelayAddr(), clientIP)
+
+	// Run the UDP relay in a goroutine.
+	relayErr := make(chan error, 1)
+	go func() {
+		relayErr <- relay.Run()
+	}()
+
+	// Monitor the TCP control connection. Per RFC 1928, when the TCP connection
+	// used to establish the UDP ASSOCIATE is closed, the UDP relay must stop.
+	tcpClosed := make(chan struct{})
+	go func() {
+		defer close(tcpClosed)
+		// Use io.Copy to efficiently discard any extraneous data sent by the client
+		// and reliably detect connection closure (EOF) or errors.
+		_, _ = io.Copy(io.Discard, req.bufConn)
+	}()
+
+	// Wait for either TCP close or relay error.
+	select {
+	case <-tcpClosed:
+		log.Printf("socks5: udp associate: TCP control connection closed, tearing down relay")
+		_ = relay.Close()
+		<-relayErr
+	case err = <-relayErr:
+		if err != nil {
+			log.Printf("socks5: udp associate: relay error: %v", err)
+		}
+	}
+
 	return nil
 }
 
@@ -259,10 +318,14 @@ func readAddrSpec(r io.Reader) (*AddrSpec, error) {
 
 // sendReply is used to send a reply message
 func sendReply(w io.Writer, resp uint8, addr *AddrSpec) error {
-	// Format the address
+	// Pre-allocate a 10-byte buffer for the common IPv4 case to avoid heap allocation.
+	var buf [10]byte
+	var msg []byte
+
 	var addrType uint8
 	var addrBody []byte
 	var addrPort uint16
+
 	if addr == nil {
 		addrType = ipv4Address
 		addrBody = []byte{0, 0, 0, 0}
@@ -279,8 +342,13 @@ func sendReply(w io.Writer, resp uint8, addr *AddrSpec) error {
 		return fmt.Errorf("failed to format address: %v", addr)
 	}
 
-	// Format the message
-	msg := make([]byte, 6+len(addrBody))
+	// For IPv4 (addrBody len = 4), we need 6 + 4 = 10 bytes, which fits perfectly in our stack buffer.
+	if len(addrBody) == 4 {
+		msg = buf[:]
+	} else {
+		msg = make([]byte, 6+len(addrBody))
+	}
+
 	msg[0] = socks5Version
 	msg[1] = resp
 	msg[2] = 0 // Reserved

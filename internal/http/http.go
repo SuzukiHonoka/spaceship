@@ -159,28 +159,26 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	pr, pw := io.Pipe()
 	defer utils.Close(pw)
 
-	// DEBUG ONLY
-	//tpr, tpw := io.Pipe()
-	//go func() {
-	//	// read 4k bytes per time, and print the raw message
-	//	buf := make([]byte, 4096)
-	//	for {
-	//		n, err := tpr.Read(buf)
-	//		if err != nil {
-	//			if err != io.EOF {
-	//				log.Println("http: read raw message failed")
-	//			}
-	//			break
-	//		}
-	//		fmt.Println(string(buf[:n]))
-	//	}
-	//}()
-
 	errGroup, ctx := errgroup.WithContext(s.ctx)
 
 	proxyLocalAddr := make(chan string)
 	errGroup.Go(func() error {
-		return route.Proxy(ctx, addr, proxyLocalAddr, conn, pr)
+		err := route.Proxy(ctx, addr, proxyLocalAddr, conn, pr)
+		// Unblock the copy goroutine on both code paths it can be stuck in:
+		//
+		// 1. Stuck in pw.Write(): closing pr (the pipe reader) causes the next
+		//    pw.Write() to return io.ErrClosedPipe immediately, regardless of
+		//    whether data arrived between the conn.Read() and pw.Write() calls.
+		//
+		// 2. Stuck in conn.Read(): setting a past deadline on the hijacked
+		//    connection causes the blocked Read to return a timeout error.
+		//
+		// Order matters — close the pipe first so that if conn.Read() returns
+		// data before the deadline kicks in, the subsequent pw.Write() still
+		// unblocks (rather than blocking on a now-unread pipe).
+		pr.Close()                   //nolint:errcheck
+		conn.SetDeadline(time.Now()) //nolint:errcheck
+		return err
 	})
 
 	errGroup.Go(func() error {
@@ -244,10 +242,17 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		buf := transport.Buffer()
 		defer transport.PutBuffer(buf)
 		if _, err := io.CopyBuffer(pw, conn, *buf); err != nil {
+			// A timeout/deadline error here means the proxy goroutine finished
+			// and called conn.SetDeadline(time.Now()) to unblock us — treat it
+			// as clean termination so we don't surface a spurious error.
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				return nil
+			}
+			if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
+				return nil
+			}
 			return fmt.Errorf("copy data failed: %w", err)
 		}
-		// Return nil, not io.EOF — returning non-nil would cancel the errgroup
-		// context and abort the proxy goroutine while it still has data to send.
 		return nil
 	})
 

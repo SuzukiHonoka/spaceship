@@ -23,6 +23,12 @@ func ServeError(w io.Writer, err error) {
 	if w == nil {
 		return
 	}
+
+	if rw, ok := w.(http.ResponseWriter); ok {
+		http.Error(rw, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+		return
+	}
+
 	if _, err = w.Write(MessageServiceUnavailable); err != nil {
 		log.Printf("http: write error status failed: %v", err)
 	}

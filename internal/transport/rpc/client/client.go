@@ -217,6 +217,34 @@ func (c *Client) Close() error {
 	return c.DoneFunc()
 }
 
+func (c *Client) DialPacket(network, addr string) (net.PacketConn, error) {
+	if network != "udp" && network != "udp4" && network != "udp6" {
+		return nil, fmt.Errorf("rpc client: unsupported packet network %s", network)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := c.ProxyClient.Proxy(ctx)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("rpc client: failed to create proxy stream: %w", err)
+	}
+
+	// Send the handshake header with udp:// prefix
+	req := &proto.ProxySRC{
+		HeaderOrPayload: &proto.ProxySRC_Header{
+			Header: &proto.ProxySRC_ProxyHeader{
+				Addr: "udp://" + addr,
+			},
+		},
+	}
+	if err := stream.Send(req); err != nil {
+		cancel()
+		return nil, fmt.Errorf("rpc client: failed to send UDP handshake: %w", err)
+	}
+
+	return NewStreamPacketConn(ctx, stream, cancel, addr), nil
+}
+
 func (c *Client) Proxy(ctx context.Context, addr string, localAddr chan<- string, w io.Writer, r io.Reader) error {
 	defer close(localAddr)
 

@@ -21,8 +21,8 @@ type ConnectionDetail struct {
 
 type ConnWrapper struct {
 	*grpc.ClientConn
-	ID    int    // Connection ID for display
-	InUse uint32 // How many external connections are currently using this gRPC connection
+	ID    int          // Connection ID for display
+	InUse atomic.Uint32 // How many external connections are currently using this gRPC connection
 }
 
 func NewConnWrapper(p *Params) (*ConnWrapper, error) {
@@ -38,17 +38,17 @@ func NewConnWrapper(p *Params) (*ConnWrapper, error) {
 }
 
 func (w *ConnWrapper) Use() {
-	atomic.AddUint32(&w.InUse, 1)
+	w.InUse.Add(1)
 }
 
 func (w *ConnWrapper) Done() error {
-	atomic.AddUint32(&w.InUse, ^uint32(0))
+	w.InUse.Add(^uint32(0))
 	return nil
 }
 
 // GetCurrentLoad returns the current number of external connections using this gRPC connection
 func (w *ConnWrapper) GetCurrentLoad() uint32 {
-	return atomic.LoadUint32(&w.InUse)
+	return w.InUse.Load()
 }
 
 func (w *ConnWrapper) Close() error {
@@ -74,7 +74,7 @@ func (w ConnWrappers) PickLeastLoaded() *ConnWrapper {
 		if c.GetState() == connectivity.Shutdown {
 			continue
 		}
-		load := atomic.LoadUint32(&c.InUse)
+		load := c.InUse.Load()
 		if conn == nil || load < minUsage {
 			minUsage = load
 			conn = c
@@ -86,7 +86,7 @@ func (w ConnWrappers) PickLeastLoaded() *ConnWrapper {
 func (w ConnWrappers) LogStatus() {
 	inuse := make([]uint32, len(w))
 	for i, wrapper := range w {
-		inuse[i] = wrapper.InUse
+		inuse[i] = wrapper.InUse.Load()
 	}
 	log.Printf("Inuse status: %v", inuse)
 }

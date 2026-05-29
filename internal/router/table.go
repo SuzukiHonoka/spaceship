@@ -58,15 +58,16 @@ func (t *syncedRoutesTable) Set(k string, egress Egress) {
 }
 
 func (t *syncedRoutesTable) Get(k string) (Egress, bool) {
-	t.mu.RLock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	elem, exists := t.cache[k]
 	if !exists {
-		t.mu.RUnlock()
 		return EgressUnknown, false
 	}
-	egress := elem.Value.(*cacheEntry).egress
-	t.mu.RUnlock()
-	return egress, true
+	// Promote the entry so hot routes are not evicted by the LRU policy.
+	t.lruList.MoveToFront(elem)
+	return elem.Value.(*cacheEntry).egress, true
 }
 
 func (t *syncedRoutesTable) Reset() {

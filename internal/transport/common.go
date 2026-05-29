@@ -1,7 +1,6 @@
 package transport
 
 import (
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -10,9 +9,9 @@ var (
 	bufferSize atomic.Int64
 	network    atomic.Value
 
-	// idleTimeout for transport of direct (use GetIdleTimeout/SetIdleTimeout for safe access)
-	idleTimeout   = 30 * time.Minute
-	idleTimeoutMu sync.RWMutex
+	// idleTimeout for transport of direct (use GetIdleTimeout/SetIdleTimeout for safe access).
+	// Stored as nanoseconds in atomic.Int64 for lock-free reads, matching dialTimeout.
+	idleTimeout atomic.Int64
 
 	// dialTimeout for transport of direct (accessed via GetDialTimeout/SetDialTimeout)
 	dialTimeout atomic.Int64
@@ -23,6 +22,7 @@ func init() {
 	bufferSize.Store(int64(32 * 1024))
 	network.Store("tcp")
 	dialTimeout.Store(int64(3 * time.Minute))
+	idleTimeout.Store(int64(30 * time.Minute))
 }
 
 // GetBufferSize returns the current buffer size.
@@ -37,9 +37,7 @@ func GetNetwork() string {
 
 // GetIdleTimeout returns the current idle timeout.
 func GetIdleTimeout() time.Duration {
-	idleTimeoutMu.RLock()
-	defer idleTimeoutMu.RUnlock()
-	return idleTimeout
+	return time.Duration(idleTimeout.Load())
 }
 
 // GetDialTimeout returns the current dial timeout.

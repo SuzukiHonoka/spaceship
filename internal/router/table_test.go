@@ -75,25 +75,24 @@ func TestEvictionAtCapacity(t *testing.T) {
 	}
 }
 
-func TestGetDoesNotPromoteEntry(t *testing.T) {
-	// Get() uses RLock and no longer calls MoveToFront so that concurrent reads
-	// don't contend on a write lock. Eviction order is therefore insertion-order
-	// FIFO: the oldest inserted (not oldest accessed) entry is evicted first.
+func TestGetPromotesEntry(t *testing.T) {
+	// Get() uses a write lock and calls MoveToFront so that recently accessed
+	// entries survive eviction. Eviction targets the least-recently-used entry.
 	tbl := newSyncedRoutesTable(3)
-	tbl.Set("a", EgressDirect) // oldest: evicted first
+	tbl.Set("a", EgressDirect) // inserted first, but we will promote it
 	tbl.Set("b", EgressDirect)
 	tbl.Set("c", EgressDirect)
 
-	// Accessing "a" does NOT promote it; it remains the oldest-inserted entry.
+	// Accessing "a" promotes it to the front; "b" becomes the LRU.
 	tbl.Get("a")
 
-	// Adding "d" must evict "a" (oldest inserted), not "b".
+	// Adding "d" must evict "b" (now the LRU), not "a" (just accessed).
 	tbl.Set("d", EgressDirect)
 
-	if _, ok := tbl.Get("a"); ok {
-		t.Error("expected 'a' to be evicted (oldest inserted)")
+	if _, ok := tbl.Get("b"); ok {
+		t.Error("expected 'b' to be evicted (least-recently used after 'a' was promoted)")
 	}
-	for _, k := range []string{"b", "c", "d"} {
+	for _, k := range []string{"a", "c", "d"} {
 		if _, ok := tbl.Get(k); !ok {
 			t.Errorf("expected %q to still be in cache", k)
 		}

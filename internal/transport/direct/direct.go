@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
@@ -14,11 +13,9 @@ import (
 
 const TransportName = "direct"
 
-// Direct is transport that connects directly to the destination
-type Direct struct {
-	conn      net.Conn
-	closeOnce sync.Once
-}
+// Direct is transport that connects directly to the destination.
+// Each call to Proxy is fully self-contained — no mutable state is stored.
+type Direct struct{}
 
 func New() transport.Transport {
 	return &Direct{}
@@ -32,17 +29,25 @@ func (d *Direct) Dial(network, addr string) (net.Conn, error) {
 	return net.DialTimeout(network, addr, transport.GetDialTimeout())
 }
 
-type copyResult struct {
-	n   int64
-	err error
+// DialPacket opens a local UDP socket for packet-oriented communication.
+func (d *Direct) DialPacket(network, addr string) (net.PacketConn, error) {
+	return net.ListenPacket(network, ":0")
 }
 
-func (d *Direct) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, direction transport.Direction) error {
+func (d *Direct) Close() error {
+	return nil
+}
+
+func copyBuffer(ctx context.Context, conn net.Conn, dst io.Writer, src io.Reader, direction transport.Direction) error {
 	buf := transport.Buffer()
 	defer transport.PutBuffer(buf)
 
 	// Use a buffered channel so the goroutine never blocks on send,
 	// preventing a goroutine leak when we return early on ctx cancellation.
+	type copyResult struct {
+		n   int64
+		err error
+	}
 	resultCh := make(chan copyResult, 1)
 	go func() {
 		n, err := io.CopyBuffer(dst, src, *buf)
@@ -54,7 +59,7 @@ func (d *Direct) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, d
 		transport.GlobalStats.Add(direction, result.n)
 		return result.err
 	case <-ctx.Done():
-		_ = d.Close()
+		_ = conn.Close()
 		// Wait for the goroutine to exit before reading n to avoid a data race.
 		result := <-resultCh
 		transport.GlobalStats.Add(direction, result.n)
@@ -62,38 +67,29 @@ func (d *Direct) copyBuffer(ctx context.Context, dst io.Writer, src io.Reader, d
 	}
 }
 
-// Proxy the traffic locally
+// Proxy the traffic locally. The connection lifecycle is fully local.
 func (d *Direct) Proxy(ctx context.Context, addr string, localAddr chan<- string, dst io.Writer, src io.Reader) (err error) {
 	defer close(localAddr)
 
-	d.conn, err = d.Dial(transport.GetNetwork(), addr)
+	conn, err := d.Dial(transport.GetNetwork(), addr)
 	if err != nil {
 		return fmt.Errorf("direct: failed to dial: %w", err)
 	}
-	localAddr <- d.conn.LocalAddr().String()
-	defer utils.Close(d)
+	localAddr <- conn.LocalAddr().String()
+	defer utils.Close(conn)
 
 	errGroup, ctx := errgroup.WithContext(ctx)
 	// src -> dst
 	errGroup.Go(func() error {
-		return d.copyBuffer(ctx, d.conn, src, transport.DirectionOut)
+		return copyBuffer(ctx, conn, conn, src, transport.DirectionOut)
 	})
 	// src <- dst
 	errGroup.Go(func() error {
-		return d.copyBuffer(ctx, dst, d.conn, transport.DirectionIn)
+		return copyBuffer(ctx, conn, dst, conn, transport.DirectionIn)
 	})
 
 	if err = errGroup.Wait(); err != nil && err != io.EOF {
 		return fmt.Errorf("direct: %w", err)
 	}
 	return nil
-}
-
-func (d *Direct) Close() (err error) {
-	d.closeOnce.Do(func() {
-		if d.conn != nil {
-			err = d.conn.Close()
-		}
-	})
-	return err
 }
