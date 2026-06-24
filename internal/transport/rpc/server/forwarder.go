@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 	"sync"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
@@ -13,6 +14,20 @@ import (
 	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	"golang.org/x/sync/errgroup"
 )
+
+// parseProxyTarget splits an optional network scheme prefix ("udp://" or
+// "tcp://") from a proxy target address. When no recognized prefix is present
+// it falls back to the configured default network.
+func parseProxyTarget(raw string) (network, addr string) {
+	switch {
+	case strings.HasPrefix(raw, "udp://"):
+		return "udp", strings.TrimPrefix(raw, "udp://")
+	case strings.HasPrefix(raw, "tcp://"):
+		return "tcp", strings.TrimPrefix(raw, "tcp://")
+	default:
+		return transport.GetNetwork(), raw
+	}
+}
 
 type Forwarder struct {
 	Ctx       context.Context
@@ -122,16 +137,7 @@ func (f *Forwarder) handshake() error {
 	}
 	header := v.Header
 
-	addr := header.Addr
-	network := transport.GetNetwork()
-
-	if len(addr) >= 6 && addr[:6] == "udp://" {
-		network = "udp"
-		addr = addr[6:]
-	} else if len(addr) >= 6 && addr[:6] == "tcp://" {
-		network = "tcp"
-		addr = addr[6:]
-	}
+	network, addr := parseProxyTarget(header.Addr)
 
 	// Auth is handled by the stream interceptor.
 	host, _, err := net.SplitHostPort(addr)
