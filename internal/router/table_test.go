@@ -76,8 +76,9 @@ func TestEvictionAtCapacity(t *testing.T) {
 }
 
 func TestGetPromotesEntry(t *testing.T) {
-	// Get() uses a write lock and calls MoveToFront so that recently accessed
-	// entries survive eviction. Eviction targets the least-recently-used entry.
+	// Get() sets the entry's second-chance bit; eviction gives a referenced
+	// entry one more chance and reclaims the first unreferenced one, so a
+	// recently accessed entry survives in favor of an idle one.
 	tbl := newSyncedRoutesTable(3)
 	tbl.Set("a", EgressDirect) // inserted first, but we will promote it
 	tbl.Set("b", EgressDirect)
