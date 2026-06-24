@@ -197,7 +197,7 @@ func (s *Server) handleBind(_ context.Context, conn ConnWriter, _ *Request) erro
 // handleAssociate is used to handle a UDP associate command (RFC 1928 §6).
 // It binds a local UDP relay socket, sends the bound address back to the client,
 // then monitors the TCP control connection — tearing down the relay when it closes.
-func (s *Server) handleAssociate(_ context.Context, conn ConnWriter, req *Request) error {
+func (s *Server) handleAssociate(ctx context.Context, conn ConnWriter, req *Request) error {
 	// Extract the client IP for access control on the UDP relay.
 	var clientIP net.IP
 	if req.RemoteAddr != nil {
@@ -253,6 +253,10 @@ func (s *Server) handleAssociate(_ context.Context, conn ConnWriter, req *Reques
 	select {
 	case <-tcpClosed:
 		log.Printf("socks5: udp associate: TCP control connection closed, tearing down relay")
+		_ = relay.Close()
+		<-relayErr
+	case <-ctx.Done():
+		log.Printf("socks5: udp associate: server context closed, tearing down relay")
 		_ = relay.Close()
 		<-relayErr
 	case err = <-relayErr:
@@ -318,10 +322,6 @@ func readAddrSpec(r io.Reader) (*AddrSpec, error) {
 
 // sendReply is used to send a reply message
 func sendReply(w io.Writer, resp uint8, addr *AddrSpec) error {
-	// Pre-allocate a 10-byte buffer for the common IPv4 case to avoid heap allocation.
-	var buf [10]byte
-	var msg []byte
-
 	var addrType uint8
 	var addrBody []byte
 	var addrPort uint16
@@ -342,13 +342,8 @@ func sendReply(w io.Writer, resp uint8, addr *AddrSpec) error {
 		return fmt.Errorf("failed to format address: %v", addr)
 	}
 
-	// For IPv4 (addrBody len = 4), we need 6 + 4 = 10 bytes, which fits perfectly in our stack buffer.
-	if len(addrBody) == 4 {
-		msg = buf[:]
-	} else {
-		msg = make([]byte, 6+len(addrBody))
-	}
-
+	// Message layout: VER(1) REP(1) RSV(1) ATYP(1) BND.ADDR(n) BND.PORT(2).
+	msg := make([]byte, 6+len(addrBody))
 	msg[0] = socks5Version
 	msg[1] = resp
 	msg[2] = 0 // Reserved

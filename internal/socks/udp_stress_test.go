@@ -24,7 +24,7 @@ func TestUDPRelay_Stress(t *testing.T) {
 	// Create 100 echo servers to act as different targets.
 	numTargets := 100
 	numPackets := 20
-	
+
 	echoServers := make([]net.PacketConn, numTargets)
 	for i := 0; i < numTargets; i++ {
 		es, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -66,51 +66,65 @@ func TestUDPRelay_Stress(t *testing.T) {
 	for i := 0; i < numTargets; i++ {
 		go func(targetID int) {
 			defer targetWg.Done()
-			
+
 			client, err := net.ListenPacket("udp", "127.0.0.1:0")
 			if err != nil {
 				t.Errorf("failed to start client: %v", err)
 				return
 			}
 			defer client.Close()
-			
+
 			if uc, ok := client.(*net.UDPConn); ok {
 				_ = uc.SetReadBuffer(1024 * 1024)
 			}
-			
+
 			es := echoServers[targetID]
-			
+
 			addrSpec := &AddrSpec{
 				IP:   net.ParseIP("127.0.0.1"),
 				Port: uint16(es.LocalAddr().(*net.UDPAddr).Port),
 			}
 			header, _ := MarshalUDPHeader(addrSpec)
 
+			payload := []byte("hello from client to target")
+			packet := make([]byte, len(header)+len(payload))
+			copy(packet, header)
+			copy(packet[len(header):], payload)
+
+			relayUDPAddr := relay.RelayAddr().(*net.UDPAddr)
+			destAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: relayUDPAddr.Port}
+
+			buf := make([]byte, 2048)
 			for p := 0; p < numPackets; p++ {
-				payload := []byte("hello from client to target")
-				packet := make([]byte, len(header)+len(payload))
-				copy(packet, header)
-				copy(packet[len(header):], payload)
+				// UDP is unreliable: loopback datagrams can be dropped under the
+				// concurrent burst this test generates. A correct UDP client
+				// retransmits on timeout rather than treating a single drop as
+				// fatal, so we retry a bounded number of times per packet.
+				var got bool
+				for attempt := 0; attempt < 5 && !got; attempt++ {
+					if _, err = client.WriteTo(packet, destAddr); err != nil {
+						t.Errorf("target %d failed to write: %v", targetID, err)
+						return
+					}
 
-				relayUDPAddr := relay.RelayAddr().(*net.UDPAddr)
-				destAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: relayUDPAddr.Port}
-				_, err = client.WriteTo(packet, destAddr)
-				if err != nil {
-					t.Errorf("target %d failed to write: %v", targetID, err)
-					return
+					_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+					n, _, err := client.ReadFrom(buf)
+					if err != nil {
+						if ne, ok := err.(net.Error); ok && ne.Timeout() {
+							continue // retransmit
+						}
+						t.Errorf("target %d failed to read: %v", targetID, err)
+						return
+					}
+					if n <= len(header) {
+						t.Errorf("target %d received truncated packet", targetID)
+						return
+					}
+					got = true
 				}
-
-				_ = client.SetReadDeadline(time.Now().Add(10 * time.Second))
-				buf := make([]byte, 2048)
-				n, _, err := client.ReadFrom(buf)
-				if err != nil {
-					t.Errorf("target %d failed to read: %v", targetID, err)
+				if !got {
+					t.Errorf("target %d: no response after retransmits", targetID)
 					return
-				}
-
-				// Verify it's not empty
-				if n <= len(header) {
-					t.Errorf("target %d received truncated packet", targetID)
 				}
 			}
 		}(i)

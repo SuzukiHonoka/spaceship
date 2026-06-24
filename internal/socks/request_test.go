@@ -3,9 +3,12 @@ package socks
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"io"
 	"net"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestNewRequest(t *testing.T) {
@@ -121,7 +124,7 @@ func TestAddrSpec_Address(t *testing.T) {
 func TestSendReply(t *testing.T) {
 	var buf bytes.Buffer
 	addr := &AddrSpec{IP: net.ParseIP("127.0.0.1").To4(), Port: 8080}
-	
+
 	err := sendReply(&buf, successReply, addr)
 	if err != nil {
 		t.Fatalf("sendReply() error = %v", err)
@@ -131,5 +134,70 @@ func TestSendReply(t *testing.T) {
 	want := []byte{socks5Version, successReply, 0, ipv4Address, 127, 0, 0, 1, 0x1f, 0x90}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("sendReply() = %v, want %v", got, want)
+	}
+}
+
+func TestHandleAssociate_ContextCancelStopsRelay(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	pr, pw := io.Pipe()
+	defer pr.Close()
+	defer pw.Close()
+
+	req := &Request{
+		RemoteAddr: &AddrSpec{IP: net.ParseIP("127.0.0.1"), Port: 12345},
+		bufConn:    pr,
+	}
+	s := &Server{}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.handleAssociate(ctx, serverConn, req)
+	}()
+
+	if err := clientConn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline() error = %v", err)
+	}
+	replyHead := make([]byte, 4)
+	if _, err := io.ReadFull(clientConn, replyHead); err != nil {
+		t.Fatalf("reading associate reply header: %v", err)
+	}
+	if replyHead[1] != successReply {
+		t.Fatalf("associate reply code = %d, want success", replyHead[1])
+	}
+	remaining := 0
+	switch replyHead[3] {
+	case ipv4Address:
+		remaining = 4 + 2
+	case ipv6Address:
+		remaining = 16 + 2
+	case fqdnAddress:
+		lenBuf := make([]byte, 1)
+		if _, err := io.ReadFull(clientConn, lenBuf); err != nil {
+			t.Fatalf("reading associate FQDN length: %v", err)
+		}
+		remaining = int(lenBuf[0]) + 2
+	default:
+		t.Fatalf("associate reply address type = %d, want a valid SOCKS address type", replyHead[3])
+	}
+	if remaining > 0 {
+		if _, err := io.ReadFull(clientConn, make([]byte, remaining)); err != nil {
+			t.Fatalf("reading associate reply body: %v", err)
+		}
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("handleAssociate() after context cancel error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleAssociate() did not return after context cancellation")
 	}
 }
