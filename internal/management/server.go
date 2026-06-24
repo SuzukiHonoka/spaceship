@@ -11,9 +11,19 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	rpcClient "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
+)
+
+// Server timeouts guard against slow-client (Slowloris) resource exhaustion.
+const (
+	readHeaderTimeout = 5 * time.Second
+	readTimeout       = 10 * time.Second
+	writeTimeout      = 10 * time.Second
+	idleTimeout       = 60 * time.Second
+	shutdownTimeout   = 5 * time.Second
 )
 
 // StatsResponse is the JSON payload returned by GET /api/stats.
@@ -28,71 +38,103 @@ type StatsResponse struct {
 	Connections  []rpcClient.ConnectionDetail `json:"connections"`
 }
 
-// loopbackOnly is a custom listener that rejects non-loopback connections.
-// This is a defense-in-depth measure on top of binding to 127.0.0.1.
-func isLoopback(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return false
+// ipIsLoopback reports whether a "host:port" (or bare "host") string refers to a
+// loopback IP literal. It correctly handles IPv6 ("[::1]:port") via SplitHostPort.
+// Hostnames (including "localhost") are not accepted — use hostHeaderAllowed for
+// the client-supplied Host header, where "localhost" is permitted for usability.
+func ipIsLoopback(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
 }
 
-// Start starts the HTTP management server on addr (must be a loopback address).
-// It blocks until ctx is cancelled or a fatal listen error occurs.
-func Start(ctx context.Context, addr string) error {
-	if !isLoopback(addr) {
-		return fmt.Errorf("management server must be bound to a loopback address, got: %s", addr)
+// hostHeaderAllowed validates the client-supplied Host header to prevent
+// DNS-rebinding attacks. It accepts loopback IP literals and the literal
+// "localhost" (which a browser cannot forge into a cross-origin request).
+func hostHeaderAllowed(host string) bool {
+	h := host
+	if hh, _, err := net.SplitHostPort(host); err == nil {
+		h = hh
 	}
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
 
+// loopbackGuard rejects any request that does not originate from loopback or
+// carries a non-loopback Host header. Applied uniformly to every endpoint as a
+// defense-in-depth layer on top of the loopback-only listener bind.
+func loopbackGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !ipIsLoopback(r.RemoteAddr) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if !hostHeaderAllowed(r.Host) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// handler builds the management HTTP handler with all routes and the loopback guard.
+func handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/stats", handleStats)
 	mux.HandleFunc("/api/health", handleHealth)
+	return loopbackGuard(mux)
+}
 
-	srv := &http.Server{
-		Addr:    addr,
-		Handler: mux,
-		// Security: enforce strict host header matching to prevent DNS rebinding.
-		// Only loopback addresses are allowed.
+// Start starts the HTTP management server on addr (must be a loopback address).
+// It blocks until ctx is canceled or a fatal listen error occurs.
+func Start(ctx context.Context, addr string) error {
+	if !ipIsLoopback(addr) {
+		return fmt.Errorf("management server must be bound to a loopback address, got: %s", addr)
 	}
 
-	// Stop server when context is canceled.
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("management server listen: %w", err)
+	}
+	log.Printf("management server listening on http://%s", ln.Addr())
+	return serve(ctx, ln)
+}
+
+// serve runs the management server on an existing listener until ctx is canceled.
+func serve(ctx context.Context, ln net.Listener) error {
+	srv := &http.Server{
+		Handler:           handler(),
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+	}
+
+	// Stop the server when the context is canceled.
 	go func() {
 		<-ctx.Done()
-		if err := srv.Shutdown(context.Background()); err != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Printf("management server shutdown error: %v", err)
 		}
 	}()
 
-	log.Printf("management server listening on http://%s", addr)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("management server error: %w", err)
 	}
 	return nil
 }
 
 func handleStats(w http.ResponseWriter, r *http.Request) {
-	// Only allow GET.
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Reject non-loopback callers (defense-in-depth; the listener already does this).
-	remoteHost, _, _ := net.SplitHostPort(r.RemoteAddr)
-	if ip := net.ParseIP(remoteHost); ip == nil || !ip.IsLoopback() {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-
-	// Validate Host header to prevent DNS-rebinding attacks.
-	host := r.Host
-	if idx := strings.LastIndex(host, ":"); idx >= 0 {
-		host = host[:idx]
-	}
-	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 
