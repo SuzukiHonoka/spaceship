@@ -21,7 +21,7 @@ type ConnectionDetail struct {
 
 type ConnWrapper struct {
 	*grpc.ClientConn
-	ID    int          // Connection ID for display
+	ID    int           // Connection ID for display
 	InUse atomic.Uint32 // How many external connections are currently using this gRPC connection
 }
 

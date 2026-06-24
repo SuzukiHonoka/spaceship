@@ -237,9 +237,26 @@ func (c *Client) DialPacket(network, addr string) (net.PacketConn, error) {
 			},
 		},
 	}
-	if err := stream.Send(req); err != nil {
-		cancel()
-		return nil, fmt.Errorf("rpc client: failed to send UDP handshake: %w", err)
+
+	// Bound the handshake so a stalled stream cannot block the caller — and, in
+	// the SOCKS UDP relay, a pool worker — indefinitely. ctx governs the stream's
+	// long-lived context, which outlives this handshake; only the Send is timed.
+	// The channel is buffered so the goroutine never leaks even if we time out.
+	timeout := transport.GetDialTimeout()
+	sendErr := make(chan error, 1)
+	go func() { sendErr <- stream.Send(req) }()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-sendErr:
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("rpc client: failed to send UDP handshake: %w", err)
+		}
+	case <-timer.C:
+		cancel() // aborts the stream, unblocking the goroutine's Send
+		return nil, fmt.Errorf("rpc client: UDP handshake timed out after %s", timeout)
 	}
 
 	return NewStreamPacketConn(ctx, stream, cancel, addr), nil
