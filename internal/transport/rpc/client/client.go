@@ -229,11 +229,12 @@ func (c *Client) DialPacket(network, addr string) (net.PacketConn, error) {
 		return nil, fmt.Errorf("rpc client: failed to create proxy stream: %w", err)
 	}
 
-	// Send the handshake header with udp:// prefix
+	// Send the handshake header, selecting UDP via the typed Network field.
 	req := &proto.ProxySRC{
 		HeaderOrPayload: &proto.ProxySRC_Header{
 			Header: &proto.ProxySRC_ProxyHeader{
-				Addr: "udp://" + addr,
+				Addr:    addr,
+				Network: proto.Network_UDP,
 			},
 		},
 	}

@@ -70,27 +70,56 @@ func TestForwarder_CopyTargetToClient_Ack(t *testing.T) {
 	}
 }
 
-func TestParseProxyTarget(t *testing.T) {
+func TestResolveTarget(t *testing.T) {
 	defaultNet := transport.GetNetwork()
 	tests := []struct {
 		name        string
-		raw         string
+		header      *proto.ProxySRC_ProxyHeader
 		wantNetwork string
 		wantAddr    string
 	}{
-		{"udp scheme", "udp://8.8.8.8:53", "udp", "8.8.8.8:53"},
-		{"tcp scheme", "tcp://example.com:443", "tcp", "example.com:443"},
-		{"no scheme uses default", "example.com:443", defaultNet, "example.com:443"},
-		{"ipv6 udp", "udp://[::1]:53", "udp", "[::1]:53"},
-		{"empty", "", defaultNet, ""},
-		{"scheme-like host not matched", "udps://x:1", defaultNet, "udps://x:1"},
+		{
+			name:        "typed udp",
+			header:      &proto.ProxySRC_ProxyHeader{Addr: "8.8.8.8:53", Network: proto.Network_UDP},
+			wantNetwork: "udp", wantAddr: "8.8.8.8:53",
+		},
+		{
+			name:        "typed tcp (zero value)",
+			header:      &proto.ProxySRC_ProxyHeader{Addr: "example.com:443", Network: proto.Network_TCP},
+			wantNetwork: defaultNet, wantAddr: "example.com:443",
+		},
+		{
+			name:        "unset network defaults to tcp",
+			header:      &proto.ProxySRC_ProxyHeader{Addr: "example.com:443"},
+			wantNetwork: defaultNet, wantAddr: "example.com:443",
+		},
+		{
+			name:        "legacy udp:// prefix honored",
+			header:      &proto.ProxySRC_ProxyHeader{Addr: "udp://8.8.8.8:53"},
+			wantNetwork: "udp", wantAddr: "8.8.8.8:53",
+		},
+		{
+			name:        "legacy tcp:// prefix honored",
+			header:      &proto.ProxySRC_ProxyHeader{Addr: "tcp://example.com:443"},
+			wantNetwork: "tcp", wantAddr: "example.com:443",
+		},
+		{
+			name:        "legacy prefix takes precedence over typed field",
+			header:      &proto.ProxySRC_ProxyHeader{Addr: "udp://8.8.8.8:53", Network: proto.Network_TCP},
+			wantNetwork: "udp", wantAddr: "8.8.8.8:53",
+		},
+		{
+			name:        "scheme-like host not matched",
+			header:      &proto.ProxySRC_ProxyHeader{Addr: "udps://x:1"},
+			wantNetwork: defaultNet, wantAddr: "udps://x:1",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotNet, gotAddr := parseProxyTarget(tt.raw)
+			gotNet, gotAddr := resolveTarget(tt.header)
 			if gotNet != tt.wantNetwork || gotAddr != tt.wantAddr {
-				t.Errorf("parseProxyTarget(%q) = (%q, %q), want (%q, %q)",
-					tt.raw, gotNet, gotAddr, tt.wantNetwork, tt.wantAddr)
+				t.Errorf("resolveTarget(%+v) = (%q, %q), want (%q, %q)",
+					tt.header, gotNet, gotAddr, tt.wantNetwork, tt.wantAddr)
 			}
 		})
 	}

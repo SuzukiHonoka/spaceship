@@ -15,17 +15,31 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// parseProxyTarget splits an optional network scheme prefix ("udp://" or
-// "tcp://") from a proxy target address. When no recognized prefix is present
-// it falls back to the configured default network.
-func parseProxyTarget(raw string) (network, addr string) {
+// resolveTarget determines the dial network and address from a proxy header.
+// It prefers the typed Network field; for backward compatibility with pre-2.1.5
+// clients that encoded the network as a scheme prefix on the address, a legacy
+// "udp://"/"tcp://" prefix is still honored when present.
+func resolveTarget(h *proto.ProxySRC_ProxyHeader) (network, addr string) {
+	if n, a, ok := splitLegacyScheme(h.GetAddr()); ok {
+		return n, a
+	}
+	switch h.GetNetwork() {
+	case proto.Network_UDP:
+		return "udp", h.GetAddr()
+	default:
+		return transport.GetNetwork(), h.GetAddr()
+	}
+}
+
+// splitLegacyScheme strips a legacy "udp://"/"tcp://" address prefix if present.
+func splitLegacyScheme(raw string) (network, addr string, ok bool) {
 	switch {
 	case strings.HasPrefix(raw, "udp://"):
-		return "udp", strings.TrimPrefix(raw, "udp://")
+		return "udp", strings.TrimPrefix(raw, "udp://"), true
 	case strings.HasPrefix(raw, "tcp://"):
-		return "tcp", strings.TrimPrefix(raw, "tcp://")
+		return "tcp", strings.TrimPrefix(raw, "tcp://"), true
 	default:
-		return transport.GetNetwork(), raw
+		return "", "", false
 	}
 }
 
@@ -137,7 +151,7 @@ func (f *Forwarder) handshake() error {
 	}
 	header := v.Header
 
-	network, addr := parseProxyTarget(header.Addr)
+	network, addr := resolveTarget(header)
 
 	// Auth is handled by the stream interceptor.
 	host, _, err := net.SplitHostPort(addr)

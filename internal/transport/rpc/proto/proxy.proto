@@ -9,6 +9,14 @@ service Proxy{
   rpc Proxy(stream ProxySRC) returns (stream ProxyDST) {};
 }
 
+// Network selects the transport for the proxied connection.
+// TCP is the zero value so that an unset field (and pre-2.1.5 clients that omit
+// it) defaults to TCP, matching historical behavior.
+enum Network{
+  TCP = 0;
+  UDP = 1;
+}
+
 message ProxySRC{
   oneof header_or_payload{
     ProxyHeader header = 1;
@@ -16,8 +24,10 @@ message ProxySRC{
   }
 
   message ProxyHeader{
-    // addr
+    // target address, host:port
     string addr = 1;
+    // transport network for the connection (defaults to TCP)
+    Network network = 2;
   }
 }
 

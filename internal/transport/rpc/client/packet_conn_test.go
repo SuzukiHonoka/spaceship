@@ -239,8 +239,9 @@ func TestStreamPacketConn_Close(t *testing.T) {
 // returning a configurable stream so Client.DialPacket can be tested in
 // isolation.
 type mockProxyClient2 struct {
-	proxyErr  error // error returned by Proxy()
-	blockSend bool  // if true, the stream's Send blocks until its ctx is canceled
+	proxyErr   error            // error returned by Proxy()
+	blockSend  bool             // if true, the stream's Send blocks until its ctx is canceled
+	lastStream *mockProxyClient // the most recently opened stream (for inspecting the handshake)
 }
 
 func (m *mockProxyClient2) Proxy(ctx context.Context, _ ...grpc.CallOption) (grpc.BidiStreamingClient[proto.ProxySRC, proto.ProxyDST], error) {
@@ -257,6 +258,7 @@ func (m *mockProxyClient2) Proxy(ctx context.Context, _ ...grpc.CallOption) (grp
 	}
 	// When blockSend is true, sendChan stays nil: Send blocks on the nil-channel
 	// select until ctx is canceled (mirroring a stalled stream).
+	m.lastStream = stream
 	return stream, nil
 }
 
@@ -265,7 +267,8 @@ func (m *mockProxyClient2) DnsResolve(context.Context, *proto.DnsRequest, ...grp
 }
 
 func TestClient_DialPacket_Success(t *testing.T) {
-	c := &Client{ProxyClient: &mockProxyClient2{}}
+	m := &mockProxyClient2{}
+	c := &Client{ProxyClient: m}
 	pc, err := c.DialPacket("udp", "8.8.8.8:53")
 	if err != nil {
 		t.Fatalf("DialPacket() error = %v", err)
@@ -273,6 +276,20 @@ func TestClient_DialPacket_Success(t *testing.T) {
 	defer pc.Close()
 	if _, ok := pc.(*StreamPacketConn); !ok {
 		t.Errorf("DialPacket() returned %T, want *StreamPacketConn", pc)
+	}
+
+	// The handshake must carry the network as the typed field, with a bare
+	// address (no legacy "udp://" prefix).
+	sent := <-m.lastStream.sendChan
+	hdr := sent.GetHeader()
+	if hdr == nil {
+		t.Fatalf("handshake message has no header: %+v", sent)
+	}
+	if hdr.GetNetwork() != proto.Network_UDP {
+		t.Errorf("handshake Network = %v, want UDP", hdr.GetNetwork())
+	}
+	if hdr.GetAddr() != "8.8.8.8:53" {
+		t.Errorf("handshake Addr = %q, want bare %q", hdr.GetAddr(), "8.8.8.8:53")
 	}
 }
 
