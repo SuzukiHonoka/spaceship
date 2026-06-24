@@ -32,7 +32,7 @@ func TestServer_ProxyAuth(t *testing.T) {
 	// SetBasicAuth sets "Authorization" header, but we need "Proxy-Authorization"
 	req.Header.Set("Proxy-Authorization", req.Header.Get("Authorization"))
 	req.Header.Del("Authorization")
-	
+
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusProxyAuthRequired {
@@ -44,7 +44,7 @@ func TestServer_ProxyAuth(t *testing.T) {
 	req.SetBasicAuth("user", "pass")
 	req.Header.Set("Proxy-Authorization", req.Header.Get("Authorization"))
 	req.Header.Del("Authorization")
-	
+
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {

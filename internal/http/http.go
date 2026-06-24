@@ -245,7 +245,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 			// A timeout/deadline error here means the proxy goroutine finished
 			// and called conn.SetDeadline(time.Now()) to unblock us — treat it
 			// as clean termination so we don't surface a spurious error.
-			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			if ne, ok2 := errors.AsType[net.Error](err); ok2 && ne.Timeout() {
 				return nil
 			}
 			if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {

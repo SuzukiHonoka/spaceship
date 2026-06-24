@@ -63,4 +63,3 @@ func TestSplitHostPort(t *testing.T) {
 		}
 	}
 }
-
