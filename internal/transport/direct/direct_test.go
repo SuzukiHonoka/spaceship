@@ -106,3 +106,32 @@ func TestDirect_Proxy_DialError(t *testing.T) {
 		t.Errorf("localAddr channel not closed on error")
 	}
 }
+
+// TestDirect_DialPacket_FamilyMatchesTarget locks in the fix for silent UDP
+// reply black-holing: the local socket must be bound on the same address
+// family as the target. A dual-stack [::] socket does not reliably receive
+// replies from an IPv4 peer.
+func TestDirect_DialPacket_FamilyMatchesTarget(t *testing.T) {
+	d := New().(transport.PacketDialer)
+
+	// IPv4 target must yield an IPv4-bound socket.
+	pc4, err := d.DialPacket("udp", "8.8.8.8:53")
+	if err != nil {
+		t.Fatalf("DialPacket(ipv4) error = %v", err)
+	}
+	defer pc4.Close()
+	if la := pc4.LocalAddr().(*net.UDPAddr); la.IP.To4() == nil {
+		t.Errorf("IPv4 target bound non-IPv4 socket %s (would black-hole replies)", la)
+	}
+
+	// IPv6 target must yield an IPv6-bound socket (best-effort: skip if the host
+	// has no IPv6 stack).
+	pc6, err := d.DialPacket("udp", "[2001:4860:4860::8888]:53")
+	if err != nil {
+		t.Skipf("DialPacket(ipv6) unavailable on this host: %v", err)
+	}
+	defer pc6.Close()
+	if la := pc6.LocalAddr().(*net.UDPAddr); la.IP.To4() != nil {
+		t.Errorf("IPv6 target bound IPv4 socket %s", la)
+	}
+}

@@ -30,8 +30,21 @@ func (d *Direct) Dial(network, addr string) (net.Conn, error) {
 }
 
 // DialPacket opens a local UDP socket for packet-oriented communication.
+//
+// The local socket is bound on the same address family as the target. The
+// generic "udp" network yields an IPv6 dual-stack socket even for "0.0.0.0:0",
+// and such a socket does not reliably receive replies from an IPv4 peer — the
+// return traffic is silently black-holed. We therefore resolve the target and
+// bind with the family-specific network ("udp4"/"udp6") to force the family.
 func (d *Direct) DialPacket(network, addr string) (net.PacketConn, error) {
-	return net.ListenPacket(network, ":0")
+	raddr, err := net.ResolveUDPAddr(network, addr)
+	if err != nil {
+		return nil, fmt.Errorf("direct: resolve packet addr %s: %w", addr, err)
+	}
+	if raddr.IP.To4() != nil {
+		return net.ListenPacket("udp4", "0.0.0.0:0")
+	}
+	return net.ListenPacket("udp6", "[::]:0")
 }
 
 func (d *Direct) Close() error {
