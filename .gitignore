@@ -4,3 +4,7 @@ test
 vendor
 *.json
 build
+# compiled root binary (cmd/spaceship output); anchored so cmd/spaceship/ stays tracked
+/spaceship
+# macOS finder metadata
+.DS_Store
