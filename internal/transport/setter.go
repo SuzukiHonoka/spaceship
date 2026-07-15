@@ -12,9 +12,18 @@ func SetNetwork(net string) {
 	network.Store(net)
 }
 
-// DisableIPv6 for dial
+// DisableIPv6 forces IPv4-only dialing for both TCP and UDP.
+// TCP uses "tcp4"; callers that dial UDP should pass DialNetwork("udp") so
+// the dual-stack "udp" network is rewritten to "udp4".
 func DisableIPv6() {
 	SetNetwork("tcp4")
+	preferIPv4.Store(true)
+}
+
+// EnableIPv6 restores dual-stack dialing (primarily for tests).
+func EnableIPv6() {
+	SetNetwork("tcp")
+	preferIPv4.Store(false)
 }
 
 // SetDialTimeout for transport of direct

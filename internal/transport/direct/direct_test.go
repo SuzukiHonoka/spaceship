@@ -72,12 +72,7 @@ func TestDirect_Proxy(t *testing.T) {
 	// Run proxy
 	err = d.Proxy(ctx, ln.Addr().String(), localAddr, &dst, src)
 	if err != nil {
-		// Expect context deadline since the echo server keeps connection open
-		// and we only sent "hello spaceship" which finishes reading on src,
-		// but the proxy waits for io.Copy from dst to finish (which blocks on conn.Read).
-		if !strings.Contains(err.Error(), "context deadline exceeded") {
-			t.Errorf("Proxy() expected context deadline exceeded, got %v", err)
-		}
+		t.Fatalf("Proxy() error = %v", err)
 	}
 
 	addr := <-localAddr
@@ -112,26 +107,49 @@ func TestDirect_Proxy_DialError(t *testing.T) {
 // family as the target. A dual-stack [::] socket does not reliably receive
 // replies from an IPv4 peer.
 func TestDirect_DialPacket_FamilyMatchesTarget(t *testing.T) {
-	d := New().(transport.PacketDialer)
+	d := New().(transport.PacketTargetDialer)
 
 	// IPv4 target must yield an IPv4-bound socket.
-	pc4, err := d.DialPacket("udp", "8.8.8.8:53")
+	pc4, target4, err := d.DialPacketTarget("udp", "8.8.8.8:53")
 	if err != nil {
-		t.Fatalf("DialPacket(ipv4) error = %v", err)
+		t.Fatalf("DialPacketTarget(ipv4) error = %v", err)
 	}
 	defer pc4.Close()
 	if la := pc4.LocalAddr().(*net.UDPAddr); la.IP.To4() == nil {
 		t.Errorf("IPv4 target bound non-IPv4 socket %s (would black-hole replies)", la)
 	}
+	if resolved := target4.(*net.UDPAddr); !resolved.IP.Equal(net.ParseIP("8.8.8.8")) {
+		t.Errorf("resolved IPv4 target = %s, want 8.8.8.8", resolved)
+	}
 
 	// IPv6 target must yield an IPv6-bound socket (best-effort: skip if the host
 	// has no IPv6 stack).
-	pc6, err := d.DialPacket("udp", "[2001:4860:4860::8888]:53")
+	pc6, target6, err := d.DialPacketTarget("udp", "[2001:4860:4860::8888]:53")
 	if err != nil {
-		t.Skipf("DialPacket(ipv6) unavailable on this host: %v", err)
+		t.Skipf("DialPacketTarget(ipv6) unavailable on this host: %v", err)
 	}
 	defer pc6.Close()
 	if la := pc6.LocalAddr().(*net.UDPAddr); la.IP.To4() != nil {
 		t.Errorf("IPv6 target bound IPv4 socket %s", la)
+	}
+	if resolved := target6.(*net.UDPAddr); !resolved.IP.Equal(net.ParseIP("2001:4860:4860::8888")) {
+		t.Errorf("resolved IPv6 target = %s, want 2001:4860:4860::8888", resolved)
+	}
+}
+
+func TestDirect_DialPacketTargetRejectsIPv6WhenDisabled(t *testing.T) {
+	transport.DisableIPv6()
+	t.Cleanup(transport.EnableIPv6)
+
+	d := New().(transport.PacketTargetDialer)
+	conn, target, err := d.DialPacketTarget("udp", "[2001:db8::1]:53")
+	if err == nil {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		t.Fatalf("DialPacketTarget() = (%v, %v, nil), want IPv6-disabled error", conn, target)
+	}
+	if conn != nil || target != nil {
+		t.Fatalf("DialPacketTarget() on error = (%v, %v), want nil results", conn, target)
 	}
 }

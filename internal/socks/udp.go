@@ -20,6 +20,7 @@ import (
 const (
 	udpMaxPacketSize = 65535
 	udpIdleTimeout   = 2 * time.Minute
+	udpSocketBuffer  = 1 * 1024 * 1024
 
 	// udpMaxHeaderLen is the largest SOCKS5 UDP response header the reverse path
 	// can produce: RSV(2)+FRAG(1)+ATYP(1)+LEN(1)+FQDN(255)+PORT(2).
@@ -28,18 +29,35 @@ const (
 	// udpJobQueueSize bounds datagrams buffered between the single reader and
 	// the worker pool. When full, further datagrams are dropped (correct UDP
 	// behavior under overload) so the reader keeps draining the socket.
-	udpJobQueueSize = 2048
+	udpJobQueueSize = 64
+
+	// udpMaxNATEntries bounds outbound sockets owned by one UDP association.
+	// Creating a flow for every unique destination is otherwise an unbounded
+	// resource-allocation primitive controlled by the client.
+	udpMaxNATEntries = 64
+
+	// Process-wide and per-client limits bound client-facing sockets, worker
+	// goroutines, outbound sockets, and persistent reverse-relay buffers.
+	udpMaxAssociations          = 64
+	udpMaxAssociationsPerClient = 8
+	udpMaxNATEntriesGlobal      = 1024
+	udpMaxNATEntriesPerClient   = 256
 )
 
 // udpWorkerCount is the size of the per-relay worker pool that processes
 // inbound datagrams. Bounded so a traffic burst cannot spawn an unbounded
 // number of goroutines (the previous goroutine-per-packet model).
-var udpWorkerCount = max(4, runtime.NumCPU())
+var udpWorkerCount = min(8, max(2, runtime.GOMAXPROCS(0)))
 
 var (
-	ErrUDPFragmentation = errors.New("socks5: fragmented UDP packets not supported")
-	ErrUDPMalformed     = errors.New("socks5: malformed UDP request header")
-	ErrUDPFQDNTooLong   = errors.New("socks5: UDP FQDN exceeds 255 bytes")
+	ErrUDPFragmentation    = errors.New("socks5: fragmented UDP packets not supported")
+	ErrUDPMalformed        = errors.New("socks5: malformed UDP request header")
+	ErrUDPFQDNTooLong      = errors.New("socks5: UDP FQDN exceeds 255 bytes")
+	ErrUDPAssociationLimit = errors.New("socks5: UDP association limit reached")
+	ErrUDPNATLimit         = errors.New("socks5: UDP NAT limit reached")
+
+	udpAssociationLimiter = newUDPResourceLimiter(udpMaxAssociations, udpMaxAssociationsPerClient)
+	udpNATLimiter         = newUDPResourceLimiter(udpMaxNATEntriesGlobal, udpMaxNATEntriesPerClient)
 
 	udpBufferPool = sync.Pool{
 		New: func() any {
@@ -47,6 +65,67 @@ var (
 		},
 	}
 )
+
+// udpResourceLimiter enforces a process-wide limit and a fair per-client
+// limit. Callers must release every successful acquisition exactly once.
+type udpResourceLimiter struct {
+	mu           sync.Mutex
+	total        int
+	byClient     map[string]int
+	maxTotal     int
+	maxPerClient int
+}
+
+func newUDPResourceLimiter(maxTotal, maxPerClient int) *udpResourceLimiter {
+	return &udpResourceLimiter{
+		byClient:     make(map[string]int),
+		maxTotal:     maxTotal,
+		maxPerClient: maxPerClient,
+	}
+}
+
+func (l *udpResourceLimiter) acquire(client string) bool {
+	if l == nil {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.maxTotal > 0 && l.total >= l.maxTotal {
+		return false
+	}
+	if l.maxPerClient > 0 && l.byClient[client] >= l.maxPerClient {
+		return false
+	}
+	l.total++
+	l.byClient[client]++
+	return true
+}
+
+func (l *udpResourceLimiter) release(client string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.byClient[client] <= 0 || l.total <= 0 {
+		return
+	}
+	l.total--
+	l.byClient[client]--
+	if l.byClient[client] == 0 {
+		delete(l.byClient, client)
+	}
+}
+
+func udpClientKey(ip net.IP) string {
+	if ip == nil || ip.IsUnspecified() {
+		return "unknown"
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4.String()
+	}
+	return ip.String()
+}
 
 // UDPHeader represents the SOCKS5 UDP request header (RFC 1928 §7).
 //
@@ -160,8 +239,100 @@ type natEntry struct {
 	conn       net.PacketConn
 	targetAddr net.Addr
 	route      transport.Transport
+	limiter    *udpResourceLimiter
+	clientKey  string
 	lastSeen   atomic.Int64 // unix nanoseconds
 	closeOnce  sync.Once
+}
+
+type natTable struct {
+	mu      sync.RWMutex
+	entries map[string]*natEntry
+}
+
+func (t *natTable) Load(key string) (*natEntry, bool) {
+	t.mu.RLock()
+	entry, ok := t.entries[key]
+	t.mu.RUnlock()
+	return entry, ok
+}
+
+func (t *natTable) Store(key string, entry *natEntry) {
+	t.mu.Lock()
+	if t.entries == nil {
+		t.entries = make(map[string]*natEntry)
+	}
+	t.entries[key] = entry
+	t.mu.Unlock()
+}
+
+// Install stores entry unless key already exists. When the table is at its
+// limit, it removes the least recently used entry and returns it to the caller
+// for closing outside the table lock.
+func (t *natTable) Install(key string, entry *natEntry, limit int) (actual, evicted *natEntry, installed bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.entries == nil {
+		t.entries = make(map[string]*natEntry)
+	}
+	if current, ok := t.entries[key]; ok {
+		return current, nil, false
+	}
+
+	if limit > 0 && len(t.entries) >= limit {
+		var oldestKey string
+		var oldest *natEntry
+		for candidateKey, candidate := range t.entries {
+			if oldest == nil || candidate.lastSeen.Load() < oldest.lastSeen.Load() {
+				oldestKey = candidateKey
+				oldest = candidate
+			}
+		}
+		if oldest != nil {
+			delete(t.entries, oldestKey)
+			evicted = oldest
+		}
+	}
+
+	t.entries[key] = entry
+	return entry, evicted, true
+}
+
+func (t *natTable) DeleteIf(key string, expected *natEntry) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.entries[key] != expected {
+		return false
+	}
+	delete(t.entries, key)
+	return true
+}
+
+func (t *natTable) Range(fn func(string, *natEntry) bool) {
+	t.mu.RLock()
+	entries := make(map[string]*natEntry, len(t.entries))
+	for key, entry := range t.entries {
+		entries[key] = entry
+	}
+	t.mu.RUnlock()
+
+	for key, entry := range entries {
+		if !fn(key, entry) {
+			return
+		}
+	}
+}
+
+func (t *natTable) Drain() []*natEntry {
+	t.mu.Lock()
+	entries := make([]*natEntry, 0, len(t.entries))
+	for _, entry := range t.entries {
+		entries = append(entries, entry)
+	}
+	t.entries = nil
+	t.mu.Unlock()
+	return entries
 }
 
 func (e *natEntry) Close() {
@@ -172,14 +343,13 @@ func (e *natEntry) Close() {
 		if e.route != nil {
 			_ = e.route.Close()
 		}
+		e.limiter.release(e.clientKey)
 	})
 }
 
 // udpPacket is a unit of work handed from the relay's reader to a worker.
-// bufPtr is a pooled buffer owned by the worker until it returns it to the pool.
 type udpPacket struct {
-	bufPtr     *[]byte
-	n          int
+	data       []byte
 	clientAddr net.Addr
 }
 
@@ -187,32 +357,60 @@ type udpPacket struct {
 type UDPRelay struct {
 	relay     net.PacketConn // client-facing UDP socket
 	clientIP  net.IP         // allowed client IP (from TCP auth)
-	natTable  sync.Map       // target addr → *natEntry
+	natTable  natTable       // target addr → *natEntry
 	dialGroup singleflight.Group
 	jobs      chan udpPacket // reader → worker pool
 	done      chan struct{}  // closed when relay is shutting down
 	once      sync.Once
+
+	maxNATEntries      int
+	clientKey          string
+	associationLimiter *udpResourceLimiter
+	natLimiter         *udpResourceLimiter
+	associationHeld    bool
+	getRoute           func(string) (transport.Transport, error)
 }
+
+type udpListenFunc func(network, address string) (net.PacketConn, error)
 
 // NewUDPRelay creates a UDP relay bound to a random local port.
 // clientIP restricts which IP is allowed to send datagrams.
 func NewUDPRelay(clientIP net.IP) (*UDPRelay, error) {
-	relayConn, err := net.ListenPacket("udp", ":0")
+	return newUDPRelay(clientIP, udpAssociationLimiter, udpNATLimiter)
+}
+
+func newUDPRelay(clientIP net.IP, associationLimiter, natLimiter *udpResourceLimiter) (*UDPRelay, error) {
+	return newUDPRelayWithListener(clientIP, associationLimiter, natLimiter, net.ListenPacket)
+}
+
+func newUDPRelayWithListener(clientIP net.IP, associationLimiter, natLimiter *udpResourceLimiter, listen udpListenFunc) (*UDPRelay, error) {
+	clientKey := udpClientKey(clientIP)
+	if !associationLimiter.acquire(clientKey) {
+		return nil, ErrUDPAssociationLimit
+	}
+
+	relayConn, err := listen("udp", ":0")
 	if err != nil {
+		associationLimiter.release(clientKey)
 		return nil, fmt.Errorf("socks5: udp relay listen: %w", err)
 	}
 
 	if uc, ok := relayConn.(*net.UDPConn); ok {
-		// Increase buffer sizes for high-performance relaying.
-		_ = uc.SetReadBuffer(16 * 1024 * 1024)
-		_ = uc.SetWriteBuffer(16 * 1024 * 1024)
+		_ = uc.SetReadBuffer(udpSocketBuffer)
+		_ = uc.SetWriteBuffer(udpSocketBuffer)
 	}
 
 	return &UDPRelay{
-		relay:    relayConn,
-		clientIP: clientIP,
-		jobs:     make(chan udpPacket, udpJobQueueSize),
-		done:     make(chan struct{}),
+		relay:              relayConn,
+		clientIP:           clientIP,
+		jobs:               make(chan udpPacket, udpJobQueueSize),
+		done:               make(chan struct{}),
+		maxNATEntries:      udpMaxNATEntries,
+		clientKey:          clientKey,
+		associationLimiter: associationLimiter,
+		natLimiter:         natLimiter,
+		associationHeld:    true,
+		getRoute:           router.GetRoute,
 	}, nil
 }
 
@@ -252,17 +450,17 @@ func (r *UDPRelay) Run() error {
 
 // readLoop drains the client-facing socket and dispatches datagrams to workers.
 func (r *UDPRelay) readLoop() error {
-	for {
-		bufPtr := udpBufferPool.Get().(*[]byte)
-		buf := *bufPtr
+	bufPtr := udpBufferPool.Get().(*[]byte)
+	defer udpBufferPool.Put(bufPtr)
+	buf := (*bufPtr)[:udpMaxPacketSize]
 
+	for {
 		// No read deadline: Close() closes the relay socket, which unblocks
 		// ReadFrom with net.ErrClosed. Polling a periodic deadline here is both
 		// unnecessary and harmful — once a deadline elapses, subsequent reads
 		// with the same (now-past) deadline return immediately, busy-spinning.
 		n, clientAddr, err := r.relay.ReadFrom(buf)
 		if err != nil {
-			udpBufferPool.Put(bufPtr)
 			if errors.Is(err, net.ErrClosed) {
 				return nil
 			}
@@ -272,13 +470,18 @@ func (r *UDPRelay) readLoop() error {
 			return fmt.Errorf("socks5: udp relay read: %w", err)
 		}
 
+		// readLoop is the only sender. If capacity is available now, consumers
+		// can only make more room before the non-blocking send below.
+		if len(r.jobs) == cap(r.jobs) {
+			continue
+		}
+		packet := udpPacket{
+			data:       append([]byte(nil), buf[:n]...),
+			clientAddr: clientAddr,
+		}
 		select {
-		case r.jobs <- udpPacket{bufPtr: bufPtr, n: n, clientAddr: clientAddr}:
+		case r.jobs <- packet:
 		default:
-			// Workers saturated and the queue is full: drop the datagram rather
-			// than block the reader. Loss under overload is acceptable for UDP
-			// and keeps the socket draining.
-			udpBufferPool.Put(bufPtr)
 		}
 	}
 }
@@ -286,8 +489,7 @@ func (r *UDPRelay) readLoop() error {
 // handlePacket processes a single inbound datagram: validates the source,
 // parses the SOCKS5 UDP header, and forwards the payload to the target.
 func (r *UDPRelay) handlePacket(job udpPacket) {
-	defer udpBufferPool.Put(job.bufPtr)
-	buf := (*job.bufPtr)[:job.n]
+	buf := job.data
 
 	// Verify client IP matches the authenticated client.
 	udpAddr, ok := job.clientAddr.(*net.UDPAddr)
@@ -331,14 +533,20 @@ func (r *UDPRelay) handlePacket(job udpPacket) {
 }
 
 func (r *UDPRelay) getOrCreateNAT(targetAddr string, clientAddr net.Addr) (*natEntry, error) {
-	if val, ok := r.natTable.Load(targetAddr); ok {
-		return val.(*natEntry), nil
+	select {
+	case <-r.done:
+		return nil, net.ErrClosed
+	default:
+	}
+
+	if entry, ok := r.natTable.Load(targetAddr); ok {
+		return entry, nil
 	}
 
 	res, err, _ := r.dialGroup.Do(targetAddr, func() (any, error) {
 		// Double check after singleflight block
-		if val, ok := r.natTable.Load(targetAddr); ok {
-			return val.(*natEntry), nil
+		if entry, ok := r.natTable.Load(targetAddr); ok {
+			return entry, nil
 		}
 
 		host, _, err := net.SplitHostPort(targetAddr)
@@ -346,7 +554,11 @@ func (r *UDPRelay) getOrCreateNAT(targetAddr string, clientAddr net.Addr) (*natE
 			host = targetAddr // fallback
 		}
 
-		route, err := router.GetRoute(host)
+		getRoute := r.getRoute
+		if getRoute == nil {
+			getRoute = router.GetRoute
+		}
+		route, err := getRoute(host)
 		if err != nil {
 			return nil, fmt.Errorf("route error: %w", err)
 		}
@@ -354,41 +566,55 @@ func (r *UDPRelay) getOrCreateNAT(targetAddr string, clientAddr net.Addr) (*natE
 		// The egress must support packet dialing. Do NOT silently fall back to a
 		// local UDP socket: for a proxied egress that would bypass the tunnel,
 		// leaking the client's real IP and resolving DNS locally.
-		pd, ok := route.(transport.PacketDialer)
-		if !ok {
+		if _, ok := route.(transport.PacketDialer); !ok {
 			_ = route.Close()
 			return nil, fmt.Errorf("egress %s does not support UDP", route)
 		}
-		outbound, err := pd.DialPacket("udp", targetAddr)
+
+		limiter := r.natLimiter
+		if limiter == nil {
+			limiter = udpNATLimiter
+		}
+		if !limiter.acquire(r.clientKey) {
+			_ = route.Close()
+			return nil, ErrUDPNATLimit
+		}
+
+		outbound, resolved, err := dialPacketTarget(route, "udp", targetAddr)
 		if err != nil {
+			limiter.release(r.clientKey)
 			_ = route.Close()
 			return nil, fmt.Errorf("dial packet: %w", err)
 		}
 
-		var resolved net.Addr
-		if _, isLocal := outbound.(*net.UDPConn); isLocal {
-			resolved, err = net.ResolveUDPAddr("udp", targetAddr)
-			if err != nil {
-				_ = outbound.Close()
-				_ = route.Close()
-				return nil, fmt.Errorf("resolve %s: %w", targetAddr, err)
-			}
-		} else {
-			// For proxy connections, do not resolve DNS locally to prevent leaks.
-			resolved = domainAddr(targetAddr)
+		entry := &natEntry{
+			conn:       outbound,
+			targetAddr: resolved,
+			route:      route,
+			limiter:    limiter,
+			clientKey:  r.clientKey,
 		}
-
-		entry := &natEntry{conn: outbound, targetAddr: resolved, route: route}
 		entry.lastSeen.Store(time.Now().UnixNano())
 
-		r.natTable.Store(targetAddr, entry)
+		limit := r.maxNATEntries
+		if limit <= 0 {
+			limit = udpMaxNATEntries
+		}
+		actual, evicted, installed := r.natTable.Install(targetAddr, entry, limit)
+		if evicted != nil {
+			evicted.Close()
+		}
+		if !installed {
+			entry.Close()
+			return actual, nil
+		}
 
 		// Re-check shutdown AFTER storing. This closes the race where Close()
 		// ranges the NAT table between our check and the Store: if done is now
 		// closed, Close() may have missed this entry, so we clean it up here.
 		select {
 		case <-r.done:
-			r.natTable.Delete(targetAddr)
+			r.natTable.DeleteIf(targetAddr, entry)
 			entry.Close()
 			return nil, net.ErrClosed
 		default:
@@ -406,12 +632,51 @@ func (r *UDPRelay) getOrCreateNAT(targetAddr string, clientAddr net.Addr) (*natE
 	return res.(*natEntry), nil
 }
 
+// dialPacketTarget uses an atomic resolve-and-bind operation when the transport
+// supports it. Proxy transports receive the unresolved domain address so DNS
+// resolution remains on the remote side.
+func dialPacketTarget(route transport.Transport, network, targetAddr string) (net.PacketConn, net.Addr, error) {
+	if targetDialer, ok := route.(transport.PacketTargetDialer); ok {
+		conn, target, err := targetDialer.DialPacketTarget(network, targetAddr)
+		if err != nil {
+			if conn != nil {
+				_ = conn.Close()
+			}
+			return nil, nil, err
+		}
+		if conn == nil {
+			return nil, nil, errors.New("packet target dialer returned a nil connection")
+		}
+		if target == nil {
+			_ = conn.Close()
+			return nil, nil, errors.New("packet target dialer returned a nil target address")
+		}
+		return conn, target, nil
+	}
+
+	packetDialer, ok := route.(transport.PacketDialer)
+	if !ok {
+		return nil, nil, fmt.Errorf("egress %s does not support UDP", route)
+	}
+	conn, err := packetDialer.DialPacket(network, targetAddr)
+	if err != nil {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		return nil, nil, err
+	}
+	if conn == nil {
+		return nil, nil, errors.New("packet dialer returned a nil connection")
+	}
+	return conn, domainAddr(targetAddr), nil
+}
+
 // reverseRelay reads responses from the target and sends them back to the SOCKS5
 // client with a proper UDP header prepended.
 func (r *UDPRelay) reverseRelay(entry *natEntry, clientAddr net.Addr, targetAddr string) {
 	defer func() {
 		entry.Close()
-		r.natTable.Delete(targetAddr)
+		r.natTable.DeleteIf(targetAddr, entry)
 	}()
 	outbound := entry.conn
 
@@ -435,9 +700,8 @@ func (r *UDPRelay) reverseRelay(entry *natEntry, clientAddr net.Addr, targetAddr
 
 			if ne, ok := errors.AsType[net.Error](err); ok && ne.Timeout() {
 				// check if we've been active in the other direction recently
-				if val, ok := r.natTable.Load(targetAddr); ok {
-					entry := val.(*natEntry)
-					lastSeen := time.Unix(0, entry.lastSeen.Load())
+				if current, ok := r.natTable.Load(targetAddr); ok && current == entry {
+					lastSeen := time.Unix(0, current.lastSeen.Load())
 					if time.Since(lastSeen) < udpIdleTimeout {
 						continue // keep alive
 					}
@@ -466,9 +730,8 @@ func (r *UDPRelay) reverseRelay(entry *natEntry, clientAddr net.Addr, targetAddr
 			continue
 		}
 
-		if val, ok := r.natTable.Load(targetAddr); ok {
-			entry := val.(*natEntry)
-			entry.lastSeen.Store(time.Now().UnixNano())
+		if current, ok := r.natTable.Load(targetAddr); ok && current == entry {
+			current.lastSeen.Store(time.Now().UnixNano())
 		}
 
 		// Write the header into the reserved region immediately before the
@@ -491,15 +754,21 @@ func (r *UDPRelay) reverseRelay(entry *natEntry, clientAddr net.Addr, targetAddr
 // Close shuts down the UDP relay and all outbound connections.
 func (r *UDPRelay) Close() error {
 	r.once.Do(func() {
-		close(r.done)
-		_ = r.relay.Close()
+		if r.done != nil {
+			close(r.done)
+		}
+		if r.relay != nil {
+			_ = r.relay.Close()
+		}
 
 		// Close all active NAT entries.
-		r.natTable.Range(func(key, value any) bool {
-			entry := value.(*natEntry)
+		for _, entry := range r.natTable.Drain() {
 			entry.Close()
-			return true
-		})
+		}
+		if r.associationHeld {
+			r.associationLimiter.release(r.clientKey)
+			r.associationHeld = false
+		}
 	})
 	return nil
 }

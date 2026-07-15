@@ -12,14 +12,15 @@ import (
 
 func TestUDPRelay_Stress(t *testing.T) {
 	// Initialize a dummy router that uses direct transport.
-	router.SetRoutes(router.Routes{
+	if err := router.SetRoutes(router.Routes{
 		&router.Route{
 			MatchType:   router.TypeRegex,
 			Sources:     []string{".*"},
 			Destination: router.EgressDirect,
 		},
-	})
-	router.GenerateCache()
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Create 100 echo servers to act as different targets.
 	numTargets := 100

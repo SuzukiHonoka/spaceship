@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +36,47 @@ type MixedConfig struct {
 
 	*client.Client
 	*server.Server
+
+	decodedFromJSON bool
+	idleTimeoutSet  bool
+}
+
+const maxIdleTimeoutSeconds = int64(1<<63-1) / int64(time.Second)
+
+func newMixedConfig() *MixedConfig {
+	return &MixedConfig{
+		Client: &client.Client{},
+		Server: &server.Server{},
+	}
+}
+
+func (c *MixedConfig) ensureEmbeddedConfigs() {
+	if c.Client == nil {
+		c.Client = &client.Client{}
+	}
+	if c.Server == nil {
+		c.Server = &server.Server{}
+	}
+}
+
+// UnmarshalJSON records whether idle_timeout was explicitly provided while
+// preserving Client.IdleTimeout as an int for Go API compatibility.
+func (c *MixedConfig) UnmarshalJSON(data []byte) error {
+	type mixedConfigJSON MixedConfig
+	defaults := newMixedConfig()
+	*c = *defaults
+	if err := json.Unmarshal(data, (*mixedConfigJSON)(c)); err != nil {
+		return err
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	raw, present := fields["idle_timeout"]
+	c.decodedFromJSON = true
+	c.idleTimeoutSet = present && !bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+	return nil
 }
 
 // NewFromConfigFile loads the config from the file in the specific path.
@@ -49,7 +91,7 @@ func NewFromConfigFile(path string) (*MixedConfig, error) {
 	}
 	defer utils.Close(f)
 
-	config := new(MixedConfig)
+	config := newMixedConfig()
 	if err = json.NewDecoder(f).Decode(config); err != nil {
 		return nil, err
 	}
@@ -58,8 +100,8 @@ func NewFromConfigFile(path string) (*MixedConfig, error) {
 
 // NewFromString loads the config from raw config string in JSON format (stick to the config structure).
 func NewFromString(c string) (*MixedConfig, error) {
-	config := new(MixedConfig)
-	if err := json.Unmarshal([]byte(c), &config); err != nil {
+	config := newMixedConfig()
+	if err := json.Unmarshal([]byte(c), config); err != nil {
 		return nil, err
 	}
 	return config, nil
@@ -67,9 +109,22 @@ func NewFromString(c string) (*MixedConfig, error) {
 
 // Apply applies the MixedConfig
 func (c *MixedConfig) Apply() error {
+	c.ensureEmbeddedConfigs()
+
 	// role check
 	if c.Role != RoleClient && c.Role != RoleServer {
 		return fmt.Errorf("invalid role: %s", c.Role)
+	}
+
+	applyIdleTimeout := !c.decodedFromJSON || c.idleTimeoutSet
+	idleTimeoutSeconds := int64(c.IdleTimeout)
+	if applyIdleTimeout {
+		if idleTimeoutSeconds < 0 {
+			return fmt.Errorf("idle_timeout must be non-negative: %d", c.IdleTimeout)
+		}
+		if idleTimeoutSeconds > maxIdleTimeoutSeconds {
+			return fmt.Errorf("idle_timeout exceeds maximum duration: %d", c.IdleTimeout)
+		}
 	}
 
 	// log mode
@@ -113,33 +168,53 @@ func (c *MixedConfig) Apply() error {
 		log.Println("forward-proxy attached")
 	}
 
-	// custom route
-	if len(c.Routes) > 0 {
-		router.SetRoutes(c.Routes)
-	} else {
-		var route *router.Route
+	// Routes: empty list installs the role default. An explicit list is used as-is
+	// (fail-closed): if it has no "default" rule, unmatched hosts are rejected.
+	// Operators who want catch-all behavior must add an explicit default route.
+	routes := c.Routes
+	if len(routes) == 0 {
 		if c.Role == RoleClient {
-			route = router.RouteClientDefault
+			routes = router.Routes{router.CloneRoute(router.RouteClientDefault)}
 		} else {
-			route = router.RouteServerDefault
+			routes = router.Routes{router.CloneRoute(router.RouteServerDefault)}
 		}
-		router.SetRoutes(router.Routes{route})
+	} else if !routesHasDefault(routes) {
+		log.Println("warning: no default route configured; unmatched destinations will be rejected")
 	}
-
-	// disable ipv6
 	if !c.IPv6 {
-		if c.Role == RoleServer {
-			transport.DisableIPv6()
-		}
-		router.AddToFirstRoute(router.RouteBlockIPv6)
+		routes = append(router.Routes{router.RouteBlockIPv6}, routes...)
+	}
+	if err := router.SetRoutes(routes); err != nil {
+		return err
+	}
+
+	// IPv6 dial preference must be set both ways so a later Apply/reload can
+	// re-enable dual-stack after a previous DisableIPv6. Route validation and
+	// installation happen first, so a rejected reload leaves this mode intact.
+	if !c.IPv6 {
+		transport.DisableIPv6()
 		log.Println("ipv6 disabled")
+	} else {
+		transport.EnableIPv6()
+		log.Println("ipv6 enabled")
 	}
 
-	// idle timeout
-	if c.IdleTimeout >= 0 {
+	// idle timeout: only apply when the field is present in config.
+	// omitted -> keep transport default (30m); 0 -> disable; n > 0 -> n seconds.
+	if applyIdleTimeout {
 		log.Printf("custom idle timeout: %ds", c.IdleTimeout)
-		transport.SetIdleTimeout(time.Duration(c.IdleTimeout) * time.Second)
+		transport.SetIdleTimeout(time.Duration(idleTimeoutSeconds) * time.Second)
 	}
 
-	return router.GenerateCache()
+	return nil
+}
+
+// routesHasDefault reports whether any route is a catch-all default rule.
+func routesHasDefault(routes router.Routes) bool {
+	for _, r := range routes {
+		if r != nil && r.MatchType == router.TypeDefault {
+			return true
+		}
+	}
+	return false
 }

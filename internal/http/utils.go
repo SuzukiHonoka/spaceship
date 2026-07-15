@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
@@ -44,6 +45,9 @@ func BuildRemoteAddr(r *http.Request) (string, string, error) {
 
 		// missing port in address
 		host = r.Host
+		if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+			host = host[1 : len(host)-1]
+		}
 		if r.URL.Scheme != "" {
 			var ok bool
 			if port, ok = ProtocolPortMap[r.URL.Scheme]; !ok {

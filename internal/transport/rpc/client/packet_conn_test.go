@@ -18,13 +18,20 @@ import (
 
 // mockProxyClient implements proto.Proxy_ProxyClient
 type mockProxyClient struct {
-	recvChan chan *proto.ProxyDST
-	sendChan chan *proto.ProxySRC
-	ctx      context.Context
-	err      error
+	recvChan    chan *proto.ProxyDST
+	sendChan    chan *proto.ProxySRC
+	sendStarted chan struct{}
+	ctx         context.Context
+	err         error
 }
 
 func (m *mockProxyClient) Send(src *proto.ProxySRC) error {
+	if m.sendStarted != nil {
+		select {
+		case m.sendStarted <- struct{}{}:
+		default:
+		}
+	}
 	if m.err != nil {
 		return m.err
 	}
@@ -134,6 +141,34 @@ func TestStreamPacketConn_ReadFrom_SkipsAcceptedControl(t *testing.T) {
 	}
 }
 
+func TestStreamPacketConn_ReadFromRemainsClosedAfterRemoteEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	recv := make(chan *proto.ProxyDST)
+	close(recv)
+	m := &mockProxyClient{recvChan: recv, ctx: ctx}
+	conn := NewStreamPacketConn(ctx, m, cancel, "8.8.8.8:53")
+
+	buf := make([]byte, 1)
+	if _, _, err := conn.ReadFrom(buf); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("first ReadFrom() error = %v, want net.ErrClosed", err)
+	}
+
+	secondRead := make(chan error, 1)
+	go func() {
+		_, _, err := conn.ReadFrom(buf)
+		secondRead <- err
+	}()
+	select {
+	case err := <-secondRead:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("second ReadFrom() error = %v, want net.ErrClosed", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second ReadFrom blocked after the receive loop terminated")
+	}
+}
+
 func TestStreamPacketConn_WriteTo(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &mockProxyClient{
@@ -155,6 +190,80 @@ func TestStreamPacketConn_WriteTo(t *testing.T) {
 	p := src.GetPayload()
 	if string(p) != string(payload) {
 		t.Errorf("WriteTo() sent payload = %v, want %v", string(p), string(payload))
+	}
+}
+
+func TestStreamPacketConn_WriteToReturnsSendError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sendErr := errors.New("send failed")
+	m := &mockProxyClient{ctx: ctx, err: sendErr}
+	conn := NewStreamPacketConn(ctx, m, cancel, "8.8.8.8:53")
+
+	if _, err := conn.WriteTo([]byte("payload"), nil); !errors.Is(err, sendErr) {
+		t.Fatalf("WriteTo() error = %v, want %v", err, sendErr)
+	}
+}
+
+func TestStreamPacketConn_CloseUnblocksBlockedWrite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	m := &mockProxyClient{
+		ctx:         ctx,
+		sendStarted: make(chan struct{}, 1),
+		// A nil send channel keeps Send blocked until Close cancels the stream.
+		sendChan: nil,
+	}
+	conn := NewStreamPacketConn(ctx, m, cancel, "8.8.8.8:53")
+
+	writeErr := make(chan error, 1)
+	go func() {
+		_, err := conn.WriteTo([]byte("blocked"), nil)
+		writeErr <- err
+	}()
+
+	select {
+	case <-m.sendStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("WriteTo did not enter the stream Send call")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- conn.Close() }()
+
+	select {
+	case err := <-writeErr:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("blocked WriteTo error = %v, want net.ErrClosed", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocked WriteTo did not unblock after Close")
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return after the blocked write exited")
+	}
+}
+
+func TestStreamPacketConn_WriteAfterClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	m := &mockProxyClient{
+		ctx:      ctx,
+		sendChan: make(chan *proto.ProxySRC, 1),
+	}
+	conn := NewStreamPacketConn(ctx, m, cancel, "8.8.8.8:53")
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if _, err := conn.WriteTo([]byte("closed"), nil); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("WriteTo() after Close error = %v, want net.ErrClosed", err)
+	}
+	if len(m.sendChan) != 0 {
+		t.Fatal("WriteTo sent a datagram after Close")
 	}
 }
 
@@ -215,6 +324,60 @@ func TestStreamPacketConn_DeadlineSetWhileBlocked(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("ReadFrom did not unblock after deadline was set while blocked")
+	}
+}
+
+func TestStreamPacketConn_WriteDeadlineSetWhileBlocked(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	m := &mockProxyClient{
+		recvChan: make(chan *proto.ProxyDST),
+		// A nil send channel keeps Send blocked until the stream is canceled.
+		sendChan: nil,
+		ctx:      ctx,
+	}
+	conn := NewStreamPacketConn(ctx, m, cancel, "8.8.8.8:53")
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := conn.WriteTo([]byte("blocked"), nil)
+		errCh <- err
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	if err := conn.SetWriteDeadline(time.Now().Add(20 * time.Millisecond)); err != nil {
+		t.Fatalf("SetWriteDeadline() error = %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Errorf("blocked WriteTo expected os.ErrDeadlineExceeded, got %v", err)
+		}
+		if ctx.Err() == nil {
+			t.Error("write deadline did not cancel the blocked gRPC stream")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("WriteTo did not unblock after its deadline")
+	}
+}
+
+func TestStreamPacketConn_SetDeadlineIncludesWrite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	m := &mockProxyClient{
+		recvChan: make(chan *proto.ProxyDST),
+		sendChan: make(chan *proto.ProxySRC, 1),
+		ctx:      ctx,
+	}
+	conn := NewStreamPacketConn(ctx, m, cancel, "8.8.8.8:53")
+	if err := conn.SetDeadline(time.Now().Add(-time.Second)); err != nil {
+		t.Fatalf("SetDeadline() error = %v", err)
+	}
+
+	if _, err := conn.WriteTo([]byte("expired"), nil); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("WriteTo() with expired SetDeadline = %v, want os.ErrDeadlineExceeded", err)
+	}
+	if len(m.sendChan) != 0 {
+		t.Fatal("WriteTo sent a datagram after its deadline had already expired")
 	}
 }
 

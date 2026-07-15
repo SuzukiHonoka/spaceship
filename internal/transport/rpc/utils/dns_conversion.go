@@ -2,7 +2,6 @@ package utils
 
 import (
 	"fmt"
-	"log"
 	"net"
 
 	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
@@ -66,9 +65,7 @@ func ConvertRRSliceToProto(rrs []dns.RR) ([]*proto.RR_Record, error) {
 	for _, rr := range rrs {
 		protoRR, err := ConvertRRToProto(rr)
 		if err != nil {
-			// Log error but continue with other records
-			log.Printf("Failed to convert DNS RR %v to proto: %v", rr, err)
-			continue
+			return nil, fmt.Errorf("convert DNS RR to proto: %w", err)
 		}
 		protoRRs = append(protoRRs, protoRR)
 	}
@@ -86,9 +83,7 @@ func ConvertProtoToRRSlice(protoRRs []*proto.RR_Record) ([]dns.RR, error) {
 	for _, protoRR := range protoRRs {
 		rr, err := ConvertProtoToRR(protoRR)
 		if err != nil {
-			// Log error but continue with other records
-			log.Printf("Failed to convert proto RR to DNS RR: %v", err)
-			continue
+			return nil, fmt.Errorf("convert proto RR to DNS RR: %w", err)
 		}
 		rrs = append(rrs, rr)
 	}

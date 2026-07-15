@@ -80,6 +80,8 @@ message DnsResult {
   string fqdn = 1;
   // resolved DNS records (updated to use complete RR format)
   repeated RR_Record records = 2;
+  // DNS response code returned by the upstream resolver.
+  uint32 rcode = 3;
 }
 
 message DnsResponse{

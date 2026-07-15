@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 )
 
 func TestParseUDPHeader(t *testing.T) {
@@ -160,10 +161,11 @@ func TestMarshalUDPHeader(t *testing.T) {
 // does NOT silently fall back to a local UDP socket (which would bypass the
 // proxy and leak the client's IP / local DNS). No NAT entry must be created.
 func TestUDPRelay_RejectsEgressWithoutUDP(t *testing.T) {
-	router.SetRoutes(router.Routes{
+	if err := router.SetRoutes(router.Routes{
 		&router.Route{MatchType: router.TypeRegex, Sources: []string{".*"}, Destination: router.EgressBlackHole},
-	})
-	router.GenerateCache()
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	relay, err := NewUDPRelay(nil)
 	if err != nil {
@@ -188,10 +190,11 @@ func TestUDPRelay_RejectsEgressWithoutUDP(t *testing.T) {
 // response, validating the in-place header construction (no second buffer, no
 // overflow panic) and that the payload arrives intact.
 func TestUDPRelay_LargePayload(t *testing.T) {
-	router.SetRoutes(router.Routes{
+	if err := router.SetRoutes(router.Routes{
 		&router.Route{MatchType: router.TypeRegex, Sources: []string{".*"}, Destination: router.EgressDirect},
-	})
-	router.GenerateCache()
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Multi-KB payload: above the typical MTU yet within the per-datagram limit
 	// of all platforms (macOS caps UDP datagrams at ~9216 bytes by default).
@@ -258,10 +261,11 @@ func TestUDPRelay_LargePayload(t *testing.T) {
 // TestUDPRelay_RejectsFragmentedPacket verifies fragmented datagrams (FRAG != 0)
 // are dropped and never create an outbound NAT entry.
 func TestUDPRelay_RejectsFragmentedPacket(t *testing.T) {
-	router.SetRoutes(router.Routes{
+	if err := router.SetRoutes(router.Routes{
 		&router.Route{MatchType: router.TypeRegex, Sources: []string{".*"}, Destination: router.EgressDirect},
-	})
-	router.GenerateCache()
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	relay, err := NewUDPRelay(nil)
 	if err != nil {
@@ -273,9 +277,7 @@ func TestUDPRelay_RejectsFragmentedPacket(t *testing.T) {
 	header[2] = 1 // FRAG byte != 0
 	packet := append(header, []byte("data")...)
 
-	bufPtr := udpBufferPool.Get().(*[]byte)
-	copy(*bufPtr, packet)
-	relay.handlePacket(udpPacket{bufPtr: bufPtr, n: len(packet), clientAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1}})
+	relay.handlePacket(udpPacket{data: packet, clientAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1}})
 
 	if n := natEntryCount(relay); n != 0 {
 		t.Errorf("fragmented packet created %d NAT entries, want 0", n)
@@ -285,10 +287,11 @@ func TestUDPRelay_RejectsFragmentedPacket(t *testing.T) {
 // TestUDPRelay_RejectsWrongClientIP verifies datagrams from an IP other than the
 // authenticated client are dropped before any outbound socket is created.
 func TestUDPRelay_RejectsWrongClientIP(t *testing.T) {
-	router.SetRoutes(router.Routes{
+	if err := router.SetRoutes(router.Routes{
 		&router.Route{MatchType: router.TypeRegex, Sources: []string{".*"}, Destination: router.EgressDirect},
-	})
-	router.GenerateCache()
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	relay, err := NewUDPRelay(net.ParseIP("10.0.0.1")) // only this IP is allowed
 	if err != nil {
@@ -299,9 +302,7 @@ func TestUDPRelay_RejectsWrongClientIP(t *testing.T) {
 	header, _ := MarshalUDPHeader(&AddrSpec{IP: net.ParseIP("127.0.0.1"), Port: 9999})
 	packet := append(header, []byte("data")...)
 
-	bufPtr := udpBufferPool.Get().(*[]byte)
-	copy(*bufPtr, packet)
-	relay.handlePacket(udpPacket{bufPtr: bufPtr, n: len(packet), clientAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.2"), Port: 1}})
+	relay.handlePacket(udpPacket{data: packet, clientAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.2"), Port: 1}})
 
 	if n := natEntryCount(relay); n != 0 {
 		t.Errorf("datagram from unauthorized IP created %d NAT entries, want 0", n)
@@ -310,8 +311,60 @@ func TestUDPRelay_RejectsWrongClientIP(t *testing.T) {
 
 func natEntryCount(r *UDPRelay) int {
 	n := 0
-	r.natTable.Range(func(_, _ any) bool { n++; return true })
+	r.natTable.Range(func(_ string, _ *natEntry) bool { n++; return true })
 	return n
+}
+
+func TestUDPRelayReadLoopCopiesPacketsAndDropsWhenQueueFull(t *testing.T) {
+	first := []byte("first")
+	relay := &UDPRelay{
+		relay: &scriptedPacketConn{reads: []readEvent{
+			{data: first, addr: testClientAddr()},
+			{data: []byte("second"), addr: testClientAddr()},
+		}},
+		jobs: make(chan udpPacket, 1),
+	}
+
+	if err := relay.readLoop(); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(relay.jobs); got != 1 {
+		t.Fatalf("queued packets = %d, want 1", got)
+	}
+	job := <-relay.jobs
+	if !bytes.Equal(job.data, first) {
+		t.Fatalf("queued packet = %q, want %q", job.data, first)
+	}
+}
+
+func TestNATTableInstallEvictsLeastRecentlyUsed(t *testing.T) {
+	table := natTable{}
+	oldestConn := &scriptedPacketConn{}
+	oldest := &natEntry{conn: oldestConn}
+	oldest.lastSeen.Store(1)
+	recent := &natEntry{}
+	recent.lastSeen.Store(2)
+	newEntry := &natEntry{}
+	newEntry.lastSeen.Store(3)
+	table.Store("oldest", oldest)
+	table.Store("recent", recent)
+
+	actual, evicted, installed := table.Install("new", newEntry, 2)
+	if !installed || actual != newEntry {
+		t.Fatalf("Install() = (%p, %v), want new entry installed", actual, installed)
+	}
+	if evicted != oldest {
+		t.Fatalf("evicted = %p, want oldest entry %p", evicted, oldest)
+	}
+	if _, ok := table.Load("oldest"); ok {
+		t.Fatal("oldest entry remains in bounded NAT table")
+	}
+	if _, ok := table.Load("recent"); !ok {
+		t.Fatal("recent entry was evicted")
+	}
+	if _, ok := table.Load("new"); !ok {
+		t.Fatal("new entry was not stored")
+	}
 }
 
 // timeoutError is a net.Error that reports a timeout, for driving reverseRelay.
@@ -337,6 +390,34 @@ type scriptedPacketConn struct {
 	writes     [][]byte
 	closeCount int
 }
+
+type blockingPacketConn struct {
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func newBlockingPacketConn() *blockingPacketConn {
+	return &blockingPacketConn{closed: make(chan struct{})}
+}
+
+func (c *blockingPacketConn) ReadFrom([]byte) (int, net.Addr, error) {
+	<-c.closed
+	return 0, nil, net.ErrClosed
+}
+
+func (c *blockingPacketConn) WriteTo(p []byte, _ net.Addr) (int, error) {
+	return len(p), nil
+}
+
+func (c *blockingPacketConn) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return nil
+}
+
+func (c *blockingPacketConn) LocalAddr() net.Addr              { return testClientAddr() }
+func (c *blockingPacketConn) SetDeadline(time.Time) error      { return nil }
+func (c *blockingPacketConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *blockingPacketConn) SetWriteDeadline(time.Time) error { return nil }
 
 func (c *scriptedPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	c.mu.Lock()
@@ -405,6 +486,37 @@ func (t *closeCountingTransport) Close() error {
 	return nil
 }
 
+type targetAwareTransport struct {
+	closeCountingTransport
+	conn            net.PacketConn
+	target          net.Addr
+	dialErr         error
+	dialPacketCalls atomic.Int32
+	dialTargetCalls atomic.Int32
+}
+
+func (t *targetAwareTransport) DialPacket(_, _ string) (net.PacketConn, error) {
+	t.dialPacketCalls.Add(1)
+	return t.conn, t.dialErr
+}
+
+func (t *targetAwareTransport) DialPacketTarget(_, _ string) (net.PacketConn, net.Addr, error) {
+	t.dialTargetCalls.Add(1)
+	return t.conn, t.target, t.dialErr
+}
+
+type packetOnlyTransport struct {
+	closeCountingTransport
+	conn      net.PacketConn
+	dialErr   error
+	dialCalls atomic.Int32
+}
+
+func (t *packetOnlyTransport) DialPacket(_, _ string) (net.PacketConn, error) {
+	t.dialCalls.Add(1)
+	return t.conn, t.dialErr
+}
+
 type testPacketAddr string
 
 func (a testPacketAddr) Network() string { return "udp" }
@@ -419,7 +531,16 @@ func testClientAddr() net.Addr {
 func TestNATEntry_CloseClosesConnAndRouteOnce(t *testing.T) {
 	outbound := &scriptedPacketConn{}
 	route := &closeCountingTransport{}
-	entry := &natEntry{conn: outbound, route: route}
+	limiter := newUDPResourceLimiter(1, 1)
+	if !limiter.acquire("client") {
+		t.Fatal("failed to acquire NAT test budget")
+	}
+	entry := &natEntry{
+		conn:      outbound,
+		route:     route,
+		limiter:   limiter,
+		clientKey: "client",
+	}
 
 	entry.Close()
 	entry.Close()
@@ -429,6 +550,237 @@ func TestNATEntry_CloseClosesConnAndRouteOnce(t *testing.T) {
 	}
 	if got := route.closeCount.Load(); got != 1 {
 		t.Errorf("route close count = %d, want 1", got)
+	}
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	if limiter.total != 0 || limiter.byClient["client"] != 0 {
+		t.Errorf("NAT budget after close = total %d, client %d; want zero", limiter.total, limiter.byClient["client"])
+	}
+}
+
+func TestDialPacketTargetUsesResolvedAddressFromTransport(t *testing.T) {
+	conn := &scriptedPacketConn{}
+	resolved := &net.UDPAddr{IP: net.ParseIP("192.0.2.10"), Port: 53}
+	route := &targetAwareTransport{conn: conn, target: resolved}
+
+	gotConn, gotTarget, err := dialPacketTarget(route, "udp", "dual-stack.example:53")
+	if err != nil {
+		t.Fatalf("dialPacketTarget() error = %v", err)
+	}
+	if gotConn != conn || gotTarget != resolved {
+		t.Fatalf("dialPacketTarget() = (%T, %v), want supplied conn and %v", gotConn, gotTarget, resolved)
+	}
+	if route.dialTargetCalls.Load() != 1 || route.dialPacketCalls.Load() != 0 {
+		t.Fatalf("dial calls = target %d, legacy %d; want 1, 0", route.dialTargetCalls.Load(), route.dialPacketCalls.Load())
+	}
+}
+
+func TestDialPacketTargetLegacyTransportPreservesDomain(t *testing.T) {
+	conn := &scriptedPacketConn{}
+	route := &packetOnlyTransport{conn: conn}
+
+	gotConn, gotTarget, err := dialPacketTarget(route, "udp", "proxy.example:53")
+	if err != nil {
+		t.Fatalf("dialPacketTarget() error = %v", err)
+	}
+	if gotConn != conn {
+		t.Fatalf("dialPacketTarget() conn = %T, want supplied conn", gotConn)
+	}
+	if gotTarget.String() != "proxy.example:53" {
+		t.Fatalf("dialPacketTarget() target = %v, want unresolved domain", gotTarget)
+	}
+	if route.dialCalls.Load() != 1 {
+		t.Fatalf("DialPacket() calls = %d, want 1", route.dialCalls.Load())
+	}
+}
+
+func TestDialPacketTargetRejectsInvalidTransportResults(t *testing.T) {
+	t.Run("target dialer nil connection", func(t *testing.T) {
+		route := &targetAwareTransport{target: testPacketAddr("example.com:53")}
+		if _, _, err := dialPacketTarget(route, "udp", "example.com:53"); err == nil || !strings.Contains(err.Error(), "nil connection") {
+			t.Fatalf("dialPacketTarget() error = %v, want nil connection error", err)
+		}
+	})
+
+	t.Run("target dialer nil target closes connection", func(t *testing.T) {
+		conn := &scriptedPacketConn{}
+		route := &targetAwareTransport{conn: conn}
+		if _, _, err := dialPacketTarget(route, "udp", "example.com:53"); err == nil || !strings.Contains(err.Error(), "nil target") {
+			t.Fatalf("dialPacketTarget() error = %v, want nil target error", err)
+		}
+		if got := conn.closeCountValue(); got != 1 {
+			t.Fatalf("connection close count = %d, want 1", got)
+		}
+	})
+
+	t.Run("legacy dialer error closes connection", func(t *testing.T) {
+		conn := &scriptedPacketConn{}
+		dialErr := errors.New("legacy dial failed")
+		route := &packetOnlyTransport{conn: conn, dialErr: dialErr}
+		if _, _, err := dialPacketTarget(route, "udp", "example.com:53"); !errors.Is(err, dialErr) {
+			t.Fatalf("dialPacketTarget() error = %v, want %v", err, dialErr)
+		}
+		if got := conn.closeCountValue(); got != 1 {
+			t.Fatalf("connection close count = %d, want 1", got)
+		}
+	})
+
+	t.Run("legacy dialer nil connection", func(t *testing.T) {
+		route := &packetOnlyTransport{}
+		if _, _, err := dialPacketTarget(route, "udp", "example.com:53"); err == nil || !strings.Contains(err.Error(), "nil connection") {
+			t.Fatalf("dialPacketTarget() error = %v, want nil connection error", err)
+		}
+	})
+}
+
+func TestUDPResourceLimiterEnforcesGlobalAndPerClientLimits(t *testing.T) {
+	limiter := newUDPResourceLimiter(3, 2)
+	if !limiter.acquire("client-a") {
+		t.Fatal("expected first client-a acquisition to succeed")
+	}
+	if !limiter.acquire("client-a") {
+		t.Fatal("expected second client-a acquisition to succeed")
+	}
+	if limiter.acquire("client-a") {
+		t.Fatal("per-client limit allowed a third client-a acquisition")
+	}
+	if !limiter.acquire("client-b") {
+		t.Fatal("expected client-b acquisition to use remaining global capacity")
+	}
+	if limiter.acquire("client-c") {
+		t.Fatal("global limit allowed a fourth acquisition")
+	}
+
+	limiter.release("client-a")
+	if !limiter.acquire("client-c") {
+		t.Fatal("released capacity was not reusable")
+	}
+}
+
+func TestNewUDPRelayAssociationLimitReleasedOnClose(t *testing.T) {
+	associations := newUDPResourceLimiter(1, 1)
+	natEntries := newUDPResourceLimiter(4, 4)
+	clientIP := net.ParseIP("127.0.0.1")
+	listen := func(_, _ string) (net.PacketConn, error) {
+		return &scriptedPacketConn{}, nil
+	}
+
+	first, err := newUDPRelayWithListener(clientIP, associations, natEntries, listen)
+	if err != nil {
+		t.Fatalf("first newUDPRelay() error = %v", err)
+	}
+	if _, err := newUDPRelayWithListener(clientIP, associations, natEntries, listen); !errors.Is(err, ErrUDPAssociationLimit) {
+		first.Close()
+		t.Fatalf("second newUDPRelay() error = %v, want ErrUDPAssociationLimit", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+
+	third, err := newUDPRelayWithListener(clientIP, associations, natEntries, listen)
+	if err != nil {
+		t.Fatalf("newUDPRelay() after release error = %v", err)
+	}
+	defer third.Close()
+}
+
+func TestNewUDPRelayListenFailureReleasesAssociationLimit(t *testing.T) {
+	associations := newUDPResourceLimiter(1, 1)
+	natEntries := newUDPResourceLimiter(1, 1)
+	clientIP := net.ParseIP("127.0.0.1")
+	listenErr := errors.New("listen failed")
+
+	_, err := newUDPRelayWithListener(clientIP, associations, natEntries, func(_, _ string) (net.PacketConn, error) {
+		return nil, listenErr
+	})
+	if !errors.Is(err, listenErr) {
+		t.Fatalf("newUDPRelayWithListener() error = %v, want %v", err, listenErr)
+	}
+
+	relay, err := newUDPRelayWithListener(clientIP, associations, natEntries, func(_, _ string) (net.PacketConn, error) {
+		return &scriptedPacketConn{}, nil
+	})
+	if err != nil {
+		t.Fatalf("newUDPRelayWithListener() after listen failure error = %v", err)
+	}
+	defer relay.Close()
+}
+
+func TestUDPRelayDialFailureReleasesNATLimitAndRoute(t *testing.T) {
+	associations := newUDPResourceLimiter(1, 1)
+	natEntries := newUDPResourceLimiter(1, 1)
+	relay, err := newUDPRelayWithListener(
+		net.ParseIP("127.0.0.1"),
+		associations,
+		natEntries,
+		func(_, _ string) (net.PacketConn, error) { return &scriptedPacketConn{}, nil },
+	)
+	if err != nil {
+		t.Fatalf("newUDPRelayWithListener() error = %v", err)
+	}
+	defer relay.Close()
+
+	dialErr := errors.New("dial failed")
+	outbound := &scriptedPacketConn{}
+	route := &targetAwareTransport{conn: outbound, dialErr: dialErr}
+	relay.getRoute = func(string) (transport.Transport, error) { return route, nil }
+
+	_, err = relay.getOrCreateNAT("proxy.example:53", testClientAddr())
+	if !errors.Is(err, dialErr) {
+		t.Fatalf("getOrCreateNAT() error = %v, want %v", err, dialErr)
+	}
+	if got := route.closeCount.Load(); got != 1 {
+		t.Fatalf("route close count = %d, want 1", got)
+	}
+	if got := outbound.closeCountValue(); got != 1 {
+		t.Fatalf("packet conn close count = %d, want 1", got)
+	}
+	if n := natEntryCount(relay); n != 0 {
+		t.Fatalf("NAT entries after dial failure = %d, want 0", n)
+	}
+
+	natEntries.mu.Lock()
+	defer natEntries.mu.Unlock()
+	if natEntries.total != 0 || natEntries.byClient[relay.clientKey] != 0 {
+		t.Fatalf("NAT budget after dial failure = total %d, client %d; want zero", natEntries.total, natEntries.byClient[relay.clientKey])
+	}
+}
+
+func TestUDPRelayNATLimitReleasedOnClose(t *testing.T) {
+	associations := newUDPResourceLimiter(2, 2)
+	natEntries := newUDPResourceLimiter(1, 1)
+	relay, err := newUDPRelayWithListener(
+		net.ParseIP("127.0.0.1"),
+		associations,
+		natEntries,
+		func(_, _ string) (net.PacketConn, error) { return &scriptedPacketConn{}, nil },
+	)
+	if err != nil {
+		t.Fatalf("newUDPRelay() error = %v", err)
+	}
+	relay.getRoute = func(host string) (transport.Transport, error) {
+		return &targetAwareTransport{
+			conn:   newBlockingPacketConn(),
+			target: testPacketAddr(net.JoinHostPort(host, "53")),
+		}, nil
+	}
+
+	if _, err := relay.getOrCreateNAT("127.0.0.1:53001", testClientAddr()); err != nil {
+		relay.Close()
+		t.Fatalf("first getOrCreateNAT() error = %v", err)
+	}
+	if _, err := relay.getOrCreateNAT("127.0.0.1:53002", testClientAddr()); !errors.Is(err, ErrUDPNATLimit) {
+		relay.Close()
+		t.Fatalf("second getOrCreateNAT() error = %v, want ErrUDPNATLimit", err)
+	}
+	if err := relay.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	natEntries.mu.Lock()
+	defer natEntries.mu.Unlock()
+	if natEntries.total != 0 {
+		t.Fatalf("NAT budget after relay close = %d, want 0", natEntries.total)
 	}
 }
 

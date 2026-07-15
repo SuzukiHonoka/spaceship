@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
+	"sync/atomic"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
@@ -50,35 +52,6 @@ func (f *Forward) Dial(network, addr string) (net.Conn, error) {
 	return nil, errors.New("forward: dialer not attached")
 }
 
-func copyBuffer(ctx context.Context, conn net.Conn, dst io.Writer, src io.Reader, direction transport.Direction) error {
-	buf := transport.Buffer()
-	defer transport.PutBuffer(buf)
-
-	// Use a buffered channel so the goroutine never blocks on send,
-	// preventing a goroutine leak when we return early on ctx cancellation.
-	type copyResult struct {
-		n   int64
-		err error
-	}
-	resultCh := make(chan copyResult, 1)
-	go func() {
-		n, err := io.CopyBuffer(dst, src, *buf)
-		resultCh <- copyResult{n, err}
-	}()
-
-	select {
-	case result := <-resultCh:
-		transport.GlobalStats.Add(direction, result.n)
-		return result.err
-	case <-ctx.Done():
-		_ = conn.Close()
-		// Wait for the goroutine to exit before reading n to avoid a data race.
-		result := <-resultCh
-		transport.GlobalStats.Add(direction, result.n)
-		return ctx.Err()
-	}
-}
-
 func (f *Forward) Proxy(ctx context.Context, addr string, localAddr chan<- string, dst io.Writer, src io.Reader) (err error) {
 	defer close(localAddr)
 
@@ -89,17 +62,43 @@ func (f *Forward) Proxy(ctx context.Context, addr string, localAddr chan<- strin
 	localAddr <- conn.LocalAddr().String()
 	defer utils.Close(conn)
 
-	errGroup, ctx := errgroup.WithContext(ctx)
-	// src -> dst
+	sessionCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var closeOnce sync.Once
+	closeSession := func() {
+		closeOnce.Do(func() {
+			transport.CloseAll(src, dst, conn)
+		})
+	}
+
+	var responseDone atomic.Bool
+	var errGroup errgroup.Group
 	errGroup.Go(func() error {
-		return copyBuffer(ctx, conn, conn, src, transport.DirectionOut)
-	})
-	// src <- dst
-	errGroup.Go(func() error {
-		return copyBuffer(ctx, conn, dst, conn, transport.DirectionIn)
+		err := transport.CopyWithContext(sessionCtx, closeSession, conn, src, transport.DirectionOut)
+		if err != nil && !errors.Is(err, io.EOF) {
+			cancel()
+			closeSession()
+			return err
+		}
+		transport.CloseWriteOrClose(conn)
+		return err
 	})
 
-	if err = errGroup.Wait(); err != nil && err != io.EOF {
+	errGroup.Go(func() error {
+		err := transport.CopyWithContext(sessionCtx, closeSession, dst, conn, transport.DirectionIn)
+		if err == nil || errors.Is(err, io.EOF) {
+			responseDone.Store(true)
+		}
+		cancel()
+		closeSession()
+		return err
+	})
+
+	if err = errGroup.Wait(); err != nil && !errors.Is(err, io.EOF) {
+		if responseDone.Load() {
+			return nil
+		}
 		return fmt.Errorf("forward: %w", err)
 	}
 	return nil

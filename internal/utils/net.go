@@ -35,9 +35,35 @@ func LoadProxy(p string) (proxy.Dialer, error) {
 	return proxy.FromURL(u, nil)
 }
 
+// NormalizeHost lowercases a hostname and strips a trailing DNS root dot.
+// IP literals are returned unchanged aside from case (IPs are case-insensitive
+// for hex digits in IPv6). Empty input stays empty.
+func NormalizeHost(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return s
+	}
+	// Strip one or more trailing dots used by absolute FQDNs (e.g. "example.com.").
+	s = strings.TrimRight(s, ".")
+	return strings.ToLower(s)
+}
+
+// ExtractDomain returns the registrable domain (eTLD+1) for a hostname.
+// The input is normalized first so trailing dots and mixed case do not break
+// publicsuffix lookup.
 func ExtractDomain(s string) string {
+	s = NormalizeHost(s)
+	if s == "" {
+		return ""
+	}
 	eTLD, icann := publicsuffix.PublicSuffix(s)
 	if icann {
+		// Guard against malformed input where the suffix is the whole string
+		// or longer (should not happen after NormalizeHost, but be safe).
+		if len(s) <= len(eTLD) {
+			return s
+		}
+		// s is "label(.label)*.eTLD" — drop the public suffix and its leading dot.
 		domain := s[:len(s)-len(eTLD)-1]
 		if index := strings.LastIndexByte(domain, '.'); index != -1 {
 			return s[index+1:]

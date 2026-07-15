@@ -2,6 +2,7 @@ package http
 
 import (
 	"net/http"
+	"strings"
 )
 
 type Filter []string
@@ -27,7 +28,25 @@ var hopHeaders = Filter{
 // RemoveHopHeaders removes hop-by-hop headers from http.Header
 // note that only the request which not CONNECT one needs to do this
 func (f Filter) RemoveHopHeaders(h http.Header) {
+	// RFC 9110 section 7.6.1 requires an intermediary to remove every field
+	// nominated by Connection before removing Connection itself.
+	for _, value := range h.Values("Connection") {
+		for _, token := range strings.Split(value, ",") {
+			if token = strings.TrimSpace(token); token != "" {
+				h.Del(token)
+			}
+		}
+	}
 	for _, k := range f {
 		h.Del(k)
 	}
+}
+
+func (f Filter) Contains(k string) bool {
+	for _, header := range f {
+		if strings.EqualFold(header, k) {
+			return true
+		}
+	}
+	return false
 }

@@ -10,22 +10,37 @@ import (
 type Direction string
 
 const (
-	DirectionOut Direction = "out"
-	DirectionIn  Direction = "in"
+	DirectionOut        Direction = "out"
+	DirectionIn         Direction = "in"
+	statsSampleInterval           = time.Second
 )
 
-var GlobalStats = new(stats)
+var GlobalStats = newStats()
 
 type stats struct {
 	tx              atomic.Uint64
 	rx              atomic.Uint64
-	lastTx          atomic.Uint64
-	lastRx          atomic.Uint64
-	lastCalculation atomic.Int64 // UnixNano timestamp
 	mu              sync.Mutex
-	initialized     atomic.Bool
+	lastTx          uint64
+	lastRx          uint64
+	lastCalculation time.Time
+	initialized     bool
 	lastTxSpeed     atomic.Uint64 // last computed tx speed bits (math.Float64bits)
 	lastRxSpeed     atomic.Uint64 // last computed rx speed bits (math.Float64bits)
+}
+
+func newStats() *stats {
+	s := new(stats)
+	s.sampleAt(time.Now())
+	go s.sampleLoop()
+	return s
+}
+
+func (s *stats) sampleLoop() {
+	ticker := time.NewTicker(statsSampleInterval)
+	for currentTime := range ticker.C {
+		s.sampleAt(currentTime)
+	}
 }
 
 func (s *stats) AddTx(bytes uint64) {
@@ -55,36 +70,35 @@ func (s *stats) Total() (tx uint64, rx uint64) {
 }
 
 func (s *stats) CalculateSpeed() (txSpeed float64, rxSpeed float64) {
-	// Use TryLock to avoid blocking - if locked, return cached values
-	if !s.mu.TryLock() {
-		return math.Float64frombits(s.lastTxSpeed.Load()), math.Float64frombits(s.lastRxSpeed.Load())
-	}
+	return math.Float64frombits(s.lastTxSpeed.Load()), math.Float64frombits(s.lastRxSpeed.Load())
+}
+
+func (s *stats) sampleAt(currentTime time.Time) {
+	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := time.Now().UnixNano()
-	lastCalc := s.lastCalculation.Load()
-
 	// Initialize on first call
-	if !s.initialized.Load() {
-		s.lastCalculation.Store(now)
-		s.lastTx.Store(s.tx.Load())
-		s.lastRx.Store(s.rx.Load())
-		s.initialized.Store(true)
-		return 0, 0
+	if !s.initialized {
+		s.lastCalculation = currentTime
+		s.lastTx = s.tx.Load()
+		s.lastRx = s.rx.Load()
+		s.initialized = true
+		return
 	}
 
-	// Calculate the time difference in seconds
-	duration := float64(now-lastCalc) / float64(time.Second)
-	if duration <= 0 {
-		return math.Float64frombits(s.lastTxSpeed.Load()), math.Float64frombits(s.lastRxSpeed.Load())
+	elapsed := currentTime.Sub(s.lastCalculation)
+	if elapsed <= 0 {
+		return
 	}
-	s.lastCalculation.Store(now)
+	duration := elapsed.Seconds()
+	s.lastCalculation = currentTime
 
 	// Calculate the speed
 	currentTx := s.tx.Load()
 	currentRx := s.rx.Load()
-	lastTx := s.lastTx.Load()
-	lastRx := s.lastRx.Load()
+	lastTx := s.lastTx
+	lastRx := s.lastRx
+	var txSpeed, rxSpeed float64
 
 	if currentTx > lastTx {
 		txSpeed = float64(currentTx-lastTx) / duration
@@ -93,9 +107,8 @@ func (s *stats) CalculateSpeed() (txSpeed float64, rxSpeed float64) {
 		rxSpeed = float64(currentRx-lastRx) / duration
 	}
 
-	s.lastTx.Store(currentTx)
-	s.lastRx.Store(currentRx)
+	s.lastTx = currentTx
+	s.lastRx = currentRx
 	s.lastTxSpeed.Store(math.Float64bits(txSpeed))
 	s.lastRxSpeed.Store(math.Float64bits(rxSpeed))
-	return txSpeed, rxSpeed
 }

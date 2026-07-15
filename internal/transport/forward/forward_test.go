@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"net"
-	"strings"
 	"testing"
 	"time"
 )
@@ -91,9 +90,7 @@ func TestForward_Proxy(t *testing.T) {
 
 	err = f.Proxy(ctx, ln.Addr().String(), localAddr, &dst, src)
 	if err != nil {
-		if !strings.Contains(err.Error(), "context deadline exceeded") {
-			t.Errorf("Proxy() expected context deadline exceeded, got %v", err)
-		}
+		t.Fatalf("Proxy() error = %v", err)
 	}
 
 	addr := <-localAddr

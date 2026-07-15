@@ -77,6 +77,12 @@ func (s *Server) ListenAndServe(_, addr string) error {
 	// Wait for context done or server error
 	select {
 	case err := <-serverErr:
+		if errors.Is(err, http.ErrServerClosed) {
+			if s.ctx.Err() != nil {
+				return s.ctx.Err()
+			}
+			return nil
+		}
 		return err
 	case <-s.ctx.Done():
 		utils.Close(s)
@@ -124,10 +130,18 @@ func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
-	// get route for host
-	route, err := router.GetRoute(r.Host)
+	// build remote addr before routing so route matching sees the bare hostname,
+	// not "host:port".
+	host, addr, err := BuildRemoteAddr(r)
 	if err != nil {
-		ServeError(w, fmt.Errorf("http: get route for %s failed, error=%w", r.Host, err))
+		ServeError(w, fmt.Errorf("http: build remote addr failed: %w", err))
+		return
+	}
+
+	// get route for host
+	route, err := router.GetRoute(host)
+	if err != nil {
+		ServeError(w, fmt.Errorf("http: get route for %s failed, error=%w", host, err))
 		return
 	}
 	defer utils.Close(route)
@@ -140,19 +154,18 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		ServeError(w, errors.New("webserver doesn't support hijacking"))
 		return
 	}
-	conn, unprocessed, err := hj.Hijack()
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Expect")), "100-continue") {
+		// Hijack disables net/http's automatic 100 Continue response. Send it
+		// while the ResponseWriter is still valid so clients waiting before
+		// uploading the request body can make progress.
+		w.WriteHeader(http.StatusContinue)
+	}
+	conn, _, err := hj.Hijack()
 	if err != nil {
 		ServeError(w, fmt.Errorf("http: hijack connection failed: %w", err))
 		return
 	}
 	defer utils.Close(conn)
-
-	// build remote addr
-	host, addr, err := BuildRemoteAddr(r)
-	if err != nil {
-		ServeError(conn, fmt.Errorf("http: build remote addr failed: %w", err))
-		return
-	}
 
 	// actual proxy
 
@@ -162,7 +175,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	errGroup, ctx := errgroup.WithContext(s.ctx)
 
 	proxyLocalAddr := make(chan string)
+	proxyDone := make(chan struct{})
 	errGroup.Go(func() error {
+		defer close(proxyDone)
 		err := route.Proxy(ctx, addr, proxyLocalAddr, conn, pr)
 		// Unblock the copy goroutine on both code paths it can be stuck in:
 		//
@@ -190,75 +205,61 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
+	// Forward exactly the request parsed by net/http. Do not copy raw bytes from
+	// conn: those bytes may contain pipelined requests which must not bypass
+	// authentication, routing, and hop-header filtering.
 	errGroup.Go(func() error {
-		// write tcp raw msg to pipe, construct HTTP message
-		// raw head eg:  GET / HTTP/1.1
-		var buf strings.Builder
-		buf.WriteString(r.Method)
-		buf.WriteByte(' ')
-		buf.WriteString(r.URL.Path)
-		buf.WriteString(" HTTP/1.1")
-		buf.WriteString(CRLF)
-
-		// Host maybe missing in headers, and will cause bad addr errors, rewrite it
-		if r.Header.Get("Host") == "" {
-			r.Header.Set("Host", host)
+		if err := writeForwardRequest(pw, r, host); err != nil {
+			_ = pw.CloseWithError(err)
+			return fmt.Errorf("send request failed: %w", err)
 		}
 
-		// filter sensitive headers
-		hopHeaders.RemoveHopHeaders(r.Header)
-
-		// raw headers, should filter sensitive headers
-		for k, v := range r.Header {
-			buf.WriteString(k)
-			buf.WriteString(": ")
-			buf.WriteString(strings.Join(v, ", ")) // multiple values comma-separated per RFC 7230
-			buf.WriteString(CRLF)
+		// Keep the transport's upload side open until the response completes.
+		// Some proxy transports cannot expose TCP half-close. The forwarded
+		// Connection: close header still makes the origin terminate the response,
+		// while this wait prevents a fallback full-close from truncating it.
+		select {
+		case <-proxyDone:
+		case <-ctx.Done():
 		}
-
-		// assume headers field ends
-		buf.WriteString(CRLF)
-
-		// write constructed headers to pipe
-		if _, err := io.WriteString(pw, buf.String()); err != nil {
-			return fmt.Errorf("send heads failed: %w", err)
-		}
-
-		// write rest unprocessed body to pipe if any, the body should be small
-		if bufferedCount := unprocessed.Reader.Buffered(); bufferedCount > 0 {
-			bodyBuf := make([]byte, bufferedCount)
-			if _, err := unprocessed.Read(bodyBuf); err != nil {
-				return fmt.Errorf("read unprocessed %d bytes failed: %w", bufferedCount, err)
-			}
-			if _, err := pw.Write(bodyBuf); err != nil {
-				return fmt.Errorf("write unprocessed body failed: %w", err)
-			}
-		}
-
-		return nil
-	})
-
-	errGroup.Go(func() error {
-		buf := transport.Buffer()
-		defer transport.PutBuffer(buf)
-		if _, err := io.CopyBuffer(pw, conn, *buf); err != nil {
-			// A timeout/deadline error here means the proxy goroutine finished
-			// and called conn.SetDeadline(time.Now()) to unblock us — treat it
-			// as clean termination so we don't surface a spurious error.
-			if ne, ok2 := errors.AsType[net.Error](err); ok2 && ne.Timeout() {
-				return nil
-			}
-			if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
-				return nil
-			}
-			return fmt.Errorf("copy data failed: %w", err)
-		}
+		_ = pw.Close()
 		return nil
 	})
 
 	if err = errGroup.Wait(); err != nil {
 		ServeError(conn, fmt.Errorf("http: proxy failed for %s, err=%w", r.Host, err))
 	}
+}
+
+func writeForwardRequest(w io.Writer, r *http.Request, host string) error {
+	forward := r.Clone(r.Context())
+	forward.RequestURI = ""
+	forward.Header = r.Header.Clone()
+	hopHeaders.RemoveHopHeaders(forward.Header)
+	if strings.EqualFold(strings.TrimSpace(forward.Header.Get("Expect")), "100-continue") {
+		// net/http sends the client its 100 Continue when Request.Body is read.
+		// Do not ask the origin to emit a duplicate interim response.
+		forward.Header.Del("Expect")
+	}
+
+	// Request.Write uses URL.RequestURI for origin-form requests. Clearing the
+	// proxy URL authority prevents the absolute-form target from reaching the
+	// origin server while retaining the path and query string.
+	forward.URL.Scheme = ""
+	forward.URL.Host = ""
+	if forward.Host == "" {
+		forward.Host = host
+	}
+
+	// The handler owns one parsed request. Closing the origin connection after
+	// its response prevents later keep-alive/pipelined requests from bypassing
+	// the HTTP handler on the already-hijacked client connection.
+	forward.Close = true
+	forward.Header.Set("Connection", "close")
+
+	// Request.Write re-encodes Body according to ContentLength,
+	// TransferEncoding, and Trailer, preserving valid HTTP framing.
+	return forward.Write(w)
 }
 
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {

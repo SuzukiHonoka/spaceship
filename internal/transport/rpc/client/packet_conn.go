@@ -37,6 +37,7 @@ type StreamPacketConn struct {
 	readMu    sync.Mutex // serializes ReadFrom callers
 	writeMu   sync.Mutex // serializes stream send-side ops (WriteTo / CloseSend)
 	rdeadline pipeDeadline
+	wdeadline pipeDeadline
 }
 
 // NewStreamPacketConn creates a new StreamPacketConn from a gRPC stream.
@@ -61,12 +62,14 @@ func NewStreamPacketConn(ctx context.Context, stream proto.Proxy_ProxyClient, ca
 		peerAddr:  peer,
 		recvCh:    make(chan recvMsg, 1),
 		rdeadline: makePipeDeadline(),
+		wdeadline: makePipeDeadline(),
 	}
 	go c.readLoop()
 	return c
 }
 
 func (c *StreamPacketConn) readLoop() {
+	defer close(c.recvCh)
 	for {
 		resp, err := c.stream.Recv()
 		select {
@@ -91,7 +94,11 @@ func (c *StreamPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 			return 0, nil, net.ErrClosed
 		case <-c.rdeadline.wait():
 			return 0, nil, os.ErrDeadlineExceeded
-		case msg = <-c.recvCh:
+		case received, ok := <-c.recvCh:
+			if !ok {
+				return 0, nil, net.ErrClosed
+			}
+			msg = received
 		}
 
 		if msg.err != nil {
@@ -130,16 +137,51 @@ func (c *StreamPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 func (c *StreamPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	deadline := c.wdeadline.wait()
+	select {
+	case <-c.ctx.Done():
+		return 0, net.ErrClosed
+	case <-deadline:
+		return 0, os.ErrDeadlineExceeded
+	default:
+	}
 
 	req := &proto.ProxySRC{
 		HeaderOrPayload: &proto.ProxySRC_Payload{
 			Payload: p,
 		},
 	}
-	if err := c.stream.Send(req); err != nil {
+	sendDone := make(chan error, 1)
+	go func() {
+		sendDone <- c.stream.Send(req)
+	}()
+
+	select {
+	case err := <-sendDone:
+		if err == nil {
+			return len(p), nil
+		}
+		select {
+		case <-deadline:
+			return 0, os.ErrDeadlineExceeded
+		default:
+		}
+		if c.ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			return 0, net.ErrClosed
+		}
 		return 0, err
+	case <-c.ctx.Done():
+		// A gRPC stream Send observes cancellation. Wait for it to exit before
+		// releasing writeMu so CloseSend cannot race the in-flight Send.
+		<-sendDone
+		return 0, net.ErrClosed
+	case <-deadline:
+		// gRPC has no per-Send deadline. Canceling the stream is the only safe
+		// way to unblock Send without leaving a concurrent sender behind.
+		c.cancel()
+		<-sendDone
+		return 0, os.ErrDeadlineExceeded
 	}
-	return len(p), nil
 }
 
 func (c *StreamPacketConn) Close() error {
@@ -157,7 +199,9 @@ func (c *StreamPacketConn) LocalAddr() net.Addr {
 }
 
 func (c *StreamPacketConn) SetDeadline(t time.Time) error {
-	return c.SetReadDeadline(t)
+	c.rdeadline.set(t)
+	c.wdeadline.set(t)
+	return nil
 }
 
 func (c *StreamPacketConn) SetReadDeadline(t time.Time) error {
@@ -166,14 +210,15 @@ func (c *StreamPacketConn) SetReadDeadline(t time.Time) error {
 }
 
 func (c *StreamPacketConn) SetWriteDeadline(t time.Time) error {
+	c.wdeadline.set(t)
 	return nil
 }
 
-// pipeDeadline is an abstraction for handling read timeouts, adapted from the
+// pipeDeadline is an abstraction for handling I/O timeouts, adapted from the
 // standard library's net package (net/pipe.go). Crucially, a deadline change is
-// observed even by a ReadFrom already blocked on wait(): the cancel channel is
-// reused (not replaced) until it actually fires, so resetting to an earlier
-// deadline unblocks an in-flight read.
+// observed even by an operation already blocked on wait(): the cancel channel
+// is reused (not replaced) until it actually fires, so resetting to an earlier
+// deadline unblocks in-flight I/O.
 type pipeDeadline struct {
 	mu     sync.Mutex
 	timer  *time.Timer

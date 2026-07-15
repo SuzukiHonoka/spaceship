@@ -41,6 +41,7 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	client, err := rpcClient.New()
 	if err != nil {
 		log.Printf("DNS: failed to acquire RPC client: %v", err)
+		m.SetRcode(r, dns.RcodeServerFailure)
 		if writeErr := w.WriteMsg(m); writeErr != nil {
 			log.Printf("Failed to write DNS error response: %v", writeErr)
 		}
@@ -63,10 +64,10 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	// indefinitely-hanging ServeDNS goroutines when the upstream is slow.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	results, err := client.DnsResolve(ctx, dnsReqList)
+	results, rcode, err := client.DnsResolve(ctx, dnsReqList)
 	if err != nil {
 		log.Printf("DNS resolution via RPC failed: %v", err)
-		// Return empty response on error
+		m.SetRcode(r, dns.RcodeServerFailure)
 		if err = w.WriteMsg(m); err != nil {
 			log.Printf("Failed to write DNS response: %v", err)
 		}
@@ -75,6 +76,7 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 	// Convert RPC results back to DNS format
 	m.Answer = results
+	m.Rcode = rcode
 
 	// Add all returned DNS records to the answer section
 	//for _, rr := range results {

@@ -492,7 +492,9 @@ type DnsResult struct {
 	// fqdn
 	Fqdn string `protobuf:"bytes,1,opt,name=fqdn,proto3" json:"fqdn,omitempty"`
 	// resolved DNS records (updated to use complete RR format)
-	Records       []*RR_Record `protobuf:"bytes,2,rep,name=records,proto3" json:"records,omitempty"`
+	Records []*RR_Record `protobuf:"bytes,2,rep,name=records,proto3" json:"records,omitempty"`
+	// DNS response code returned by the upstream resolver.
+	Rcode         uint32 `protobuf:"varint,3,opt,name=rcode,proto3" json:"rcode,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -539,6 +541,13 @@ func (x *DnsResult) GetRecords() []*RR_Record {
 		return x.Records
 	}
 	return nil
+}
+
+func (x *DnsResult) GetRcode() uint32 {
+	if x != nil {
+		return x.Rcode
+	}
+	return 0
 }
 
 type DnsResponse struct {
@@ -716,10 +725,11 @@ const file_proxy_proto_rawDesc = "" +
 	"\n" +
 	"DnsRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12+\n" +
-	"\x05items\x18\x02 \x03(\v2\x15.proxy.DnsRequestItemR\x05items\"K\n" +
+	"\x05items\x18\x02 \x03(\v2\x15.proxy.DnsRequestItemR\x05items\"a\n" +
 	"\tDnsResult\x12\x12\n" +
 	"\x04fqdn\x18\x01 \x01(\tR\x04fqdn\x12*\n" +
-	"\arecords\x18\x02 \x03(\v2\x10.proxy.RR_RecordR\arecords\"7\n" +
+	"\arecords\x18\x02 \x03(\v2\x10.proxy.RR_RecordR\arecords\x12\x14\n" +
+	"\x05rcode\x18\x03 \x01(\rR\x05rcode\"7\n" +
 	"\vDnsResponse\x12(\n" +
 	"\x06result\x18\x01 \x03(\v2\x10.proxy.DnsResultR\x06result*\x1b\n" +
 	"\aNetwork\x12\a\n" +

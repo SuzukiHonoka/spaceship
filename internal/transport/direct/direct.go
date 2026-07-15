@@ -2,9 +2,12 @@ package direct
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"sync"
+	"sync/atomic"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
@@ -26,7 +29,7 @@ func (d *Direct) String() string {
 }
 
 func (d *Direct) Dial(network, addr string) (net.Conn, error) {
-	return net.DialTimeout(network, addr, transport.GetDialTimeout())
+	return net.DialTimeout(transport.DialNetwork(network), addr, transport.GetDialTimeout())
 }
 
 // DialPacket opens a local UDP socket for packet-oriented communication.
@@ -36,48 +39,38 @@ func (d *Direct) Dial(network, addr string) (net.Conn, error) {
 // and such a socket does not reliably receive replies from an IPv4 peer — the
 // return traffic is silently black-holed. We therefore resolve the target and
 // bind with the family-specific network ("udp4"/"udp6") to force the family.
+// When IPv6 is disabled, resolution and binding are forced onto IPv4.
 func (d *Direct) DialPacket(network, addr string) (net.PacketConn, error) {
+	conn, _, err := d.DialPacketTarget(network, addr)
+	return conn, err
+}
+
+// DialPacketTarget resolves addr once, binds a matching socket, and returns the
+// exact address that must be used with that socket.
+func (d *Direct) DialPacketTarget(network, addr string) (net.PacketConn, net.Addr, error) {
+	network = transport.DialNetwork(network)
 	raddr, err := net.ResolveUDPAddr(network, addr)
 	if err != nil {
-		return nil, fmt.Errorf("direct: resolve packet addr %s: %w", addr, err)
+		return nil, nil, fmt.Errorf("direct: resolve packet addr %s: %w", addr, err)
 	}
-	if raddr.IP.To4() != nil {
-		return net.ListenPacket("udp4", "0.0.0.0:0")
+
+	bindNetwork, bindAddr := "udp6", "[::]:0"
+	if network == "udp4" || raddr.IP == nil || raddr.IP.To4() != nil {
+		bindNetwork, bindAddr = "udp4", "0.0.0.0:0"
 	}
-	return net.ListenPacket("udp6", "[::]:0")
+	if bindNetwork == "udp6" && transport.PreferIPv4() {
+		return nil, nil, fmt.Errorf("direct: IPv6 disabled, cannot dial packet target %s", addr)
+	}
+
+	conn, err := net.ListenPacket(bindNetwork, bindAddr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("direct: listen packet %s: %w", bindNetwork, err)
+	}
+	return conn, raddr, nil
 }
 
 func (d *Direct) Close() error {
 	return nil
-}
-
-func copyBuffer(ctx context.Context, conn net.Conn, dst io.Writer, src io.Reader, direction transport.Direction) error {
-	buf := transport.Buffer()
-	defer transport.PutBuffer(buf)
-
-	// Use a buffered channel so the goroutine never blocks on send,
-	// preventing a goroutine leak when we return early on ctx cancellation.
-	type copyResult struct {
-		n   int64
-		err error
-	}
-	resultCh := make(chan copyResult, 1)
-	go func() {
-		n, err := io.CopyBuffer(dst, src, *buf)
-		resultCh <- copyResult{n, err}
-	}()
-
-	select {
-	case result := <-resultCh:
-		transport.GlobalStats.Add(direction, result.n)
-		return result.err
-	case <-ctx.Done():
-		_ = conn.Close()
-		// Wait for the goroutine to exit before reading n to avoid a data race.
-		result := <-resultCh
-		transport.GlobalStats.Add(direction, result.n)
-		return ctx.Err()
-	}
 }
 
 // Proxy the traffic locally. The connection lifecycle is fully local.
@@ -91,17 +84,43 @@ func (d *Direct) Proxy(ctx context.Context, addr string, localAddr chan<- string
 	localAddr <- conn.LocalAddr().String()
 	defer utils.Close(conn)
 
-	errGroup, ctx := errgroup.WithContext(ctx)
-	// src -> dst
+	sessionCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var closeOnce sync.Once
+	closeSession := func() {
+		closeOnce.Do(func() {
+			transport.CloseAll(src, dst, conn)
+		})
+	}
+
+	var responseDone atomic.Bool
+	var errGroup errgroup.Group
 	errGroup.Go(func() error {
-		return copyBuffer(ctx, conn, conn, src, transport.DirectionOut)
-	})
-	// src <- dst
-	errGroup.Go(func() error {
-		return copyBuffer(ctx, conn, dst, conn, transport.DirectionIn)
+		err := transport.CopyWithContext(sessionCtx, closeSession, conn, src, transport.DirectionOut)
+		if err != nil && !errors.Is(err, io.EOF) {
+			cancel()
+			closeSession()
+			return err
+		}
+		transport.CloseWriteOrClose(conn)
+		return err
 	})
 
-	if err = errGroup.Wait(); err != nil && err != io.EOF {
+	errGroup.Go(func() error {
+		err := transport.CopyWithContext(sessionCtx, closeSession, dst, conn, transport.DirectionIn)
+		if err == nil || errors.Is(err, io.EOF) {
+			responseDone.Store(true)
+		}
+		cancel()
+		closeSession()
+		return err
+	})
+
+	if err = errGroup.Wait(); err != nil && !errors.Is(err, io.EOF) {
+		if responseDone.Load() {
+			return nil
+		}
 		return fmt.Errorf("direct: %w", err)
 	}
 	return nil

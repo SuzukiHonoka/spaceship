@@ -14,6 +14,7 @@ var ErrSignalArrived = errors.New("signal arrived")
 func (l *Launcher) listenSignal(ctx context.Context) error {
 	sys := make(chan os.Signal, 1)
 	signal.Notify(sys, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sys)
 	select {
 	case <-sys:
 	case <-l.sigStop:

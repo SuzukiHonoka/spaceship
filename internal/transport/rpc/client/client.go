@@ -295,15 +295,18 @@ type DnsRequest struct {
 	BlockIPv6 bool
 }
 
-func (c *Client) DnsResolve(ctx context.Context, requests []*DnsRequest) ([]dns.RR, error) {
+func (c *Client) DnsResolve(ctx context.Context, requests []*DnsRequest) ([]dns.RR, int, error) {
 	if len(requests) == 0 {
-		return nil, nil
+		return nil, dns.RcodeSuccess, nil
 	}
 
 	// Create gRPC request
 	req := &proto.DnsRequest{}
 
-	for _, request := range requests {
+	for i, request := range requests {
+		if request == nil {
+			return nil, dns.RcodeFormatError, fmt.Errorf("dns request %d is nil", i)
+		}
 		dnsReq := &proto.DnsRequestItem{
 			Fqdn:      request.Fqdn,
 			QType:     uint32(request.QType),
@@ -315,13 +318,32 @@ func (c *Client) DnsResolve(ctx context.Context, requests []*DnsRequest) ([]dns.
 	// Make gRPC call
 	resp, err := c.ProxyClient.DnsResolve(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("gRPC DNS resolve failed: %w", err)
+		return nil, dns.RcodeServerFailure, fmt.Errorf("gRPC DNS resolve failed: %w", err)
+	}
+	return decodeDNSResponse(resp)
+}
+
+func decodeDNSResponse(resp *proto.DnsResponse) ([]dns.RR, int, error) {
+	if resp == nil {
+		return nil, dns.RcodeServerFailure, errors.New("gRPC DNS resolve returned a nil response")
 	}
 
 	// Process results
 	results := make([]dns.RR, 0, len(resp.Result))
+	rcode := dns.RcodeSuccess
 
 	for _, item := range resp.Result {
+		if item == nil {
+			continue
+		}
+		// This proxy transports the base DNS header but not an EDNS OPT record,
+		// so only the header's four-bit RCODE can be represented safely.
+		if item.Rcode > 0xF {
+			return nil, dns.RcodeServerFailure, fmt.Errorf("dns: invalid response code %d for %s", item.Rcode, item.Fqdn)
+		}
+		if rcode == dns.RcodeSuccess && item.Rcode != dns.RcodeSuccess {
+			rcode = int(item.Rcode)
+		}
 		// Convert protobuf records back to DNS RR records using the new format
 		if len(item.Records) == 0 {
 			log.Printf("dns: no records found for %s", item.Fqdn)
@@ -331,13 +353,12 @@ func (c *Client) DnsResolve(ctx context.Context, requests []*DnsRequest) ([]dns.
 		// Use new complete record format
 		records, err := rpcutils.ConvertProtoToRRSlice(item.Records)
 		if err != nil {
-			log.Printf("dns: failed to convert proto records for %s: %v", item.Fqdn, err)
-			continue
+			return nil, dns.RcodeServerFailure, fmt.Errorf("dns: convert records for %s: %w", item.Fqdn, err)
 		}
 		log.Printf("dns: resolved %s with %d records", item.Fqdn, len(records))
 
 		results = append(results, records...)
 	}
 
-	return results, nil
+	return results, rcode, nil
 }

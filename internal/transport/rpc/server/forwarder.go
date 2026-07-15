@@ -15,19 +15,23 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const maxUDPPacketSize = 65535
+
 // resolveTarget determines the dial network and address from a proxy header.
 // It prefers the typed Network field; for backward compatibility with pre-2.1.5
 // clients that encoded the network as a scheme prefix on the address, a legacy
 // "udp://"/"tcp://" prefix is still honored when present.
+// Network strings are passed through transport.DialNetwork so IPv6-disable
+// rewrites dual-stack names (udp → udp4, tcp → tcp4).
 func resolveTarget(h *proto.ProxySRC_ProxyHeader) (network, addr string) {
 	if n, a, ok := splitLegacyScheme(h.GetAddr()); ok {
-		return n, a
+		return transport.DialNetwork(n), a
 	}
 	switch h.GetNetwork() {
 	case proto.Network_UDP:
-		return "udp", h.GetAddr()
+		return transport.DialNetwork("udp"), h.GetAddr()
 	default:
-		return transport.GetNetwork(), h.GetAddr()
+		return transport.DialNetwork(transport.GetNetwork()), h.GetAddr()
 	}
 }
 
@@ -43,10 +47,19 @@ func splitLegacyScheme(raw string) (network, addr string, ok bool) {
 	}
 }
 
+// isUDPNetwork reports whether network is a UDP family name.
+func isUDPNetwork(network string) bool {
+	return network == "udp" || network == "udp4" || network == "udp6"
+}
+
 type Forwarder struct {
-	Ctx       context.Context
-	Stream    proto.Proxy_ProxyServer
-	Conn      net.Conn
+	Ctx    context.Context
+	Stream proto.Proxy_ProxyServer
+	Conn   net.Conn
+	// network is the dial network chosen during handshake ("tcp"/"udp"/…).
+	// Used to decide whether an empty payload ends the session (TCP) or is a
+	// valid zero-length datagram (UDP).
+	network   string
 	Ack       chan struct{}
 	closeOnce sync.Once
 }
@@ -71,10 +84,13 @@ func (f *Forwarder) Close() error {
 
 func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 	// only start if ack dial succeed
-	_, ok := <-f.Ack
-	if !ok {
-		//log.Println("ack failed")
-		return transport.ErrTargetACKFailed
+	select {
+	case _, ok := <-f.Ack:
+		if !ok {
+			return transport.ErrTargetACKFailed
+		}
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 
 	// send local addr to client for nat
@@ -90,39 +106,42 @@ func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 		return fmt.Errorf("send local addr to client error: %w", err)
 	}
 
-	//log.Println("reading from target connection started")
-	// loop read target and forward
-	errCh := make(chan error, 1)
+	// Closing the target connection is sufficient to interrupt a blocked Read.
+	// Keep Send in this goroutine so it cannot outlive the RPC handler and race
+	// a final status send on the same stream.
+	done := make(chan struct{})
 	go func() {
-		buf := transport.Buffer()
-		defer transport.PutBuffer(buf)
-
-		// reuse buffer
-		dstData := &proto.ProxyDST{
-			HeaderOrPayload: &proto.ProxyDST_Payload{
-				Payload: nil,
-			},
-		}
-		// wrapper
-		payload := dstData.HeaderOrPayload.(*proto.ProxyDST_Payload)
-
-		b := *buf
-		for {
-			if readErr := f.copyTargetToClient(b, dstData, payload); readErr != nil {
-				errCh <- readErr
-				return
-			}
+		select {
+		case <-ctx.Done():
+			_ = f.Close()
+		case <-done:
 		}
 	}()
+	defer close(done)
 
-	select {
-	case <-ctx.Done():
-		// Close target connection to unblock the goroutine's Read,
-		// then wait for it to exit — prevents Send race with Proxy().
-		_ = f.Close()
-		return ctx.Err()
-	case err = <-errCh:
-		return err
+	var b []byte
+	if isUDPNetwork(f.network) {
+		// A UDP Read returns at most one datagram and silently discards bytes
+		// that do not fit. Use the protocol maximum instead of the tunable TCP
+		// copy buffer so large datagrams are never truncated.
+		b = make([]byte, maxUDPPacketSize)
+	} else {
+		buf := transport.Buffer()
+		defer transport.PutBuffer(buf)
+		b = *buf
+	}
+
+	dstData := &proto.ProxyDST{
+		HeaderOrPayload: &proto.ProxyDST_Payload{Payload: nil},
+	}
+	payload := dstData.HeaderOrPayload.(*proto.ProxyDST_Payload)
+	for {
+		if err := f.copyTargetToClient(b, dstData, payload); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
 	}
 }
 
@@ -130,7 +149,7 @@ func (f *Forwarder) copyTargetToClient(buf []byte, dstData *proto.ProxyDST, payl
 	n, err := f.Conn.Read(buf)
 	// Per io.Reader contract: process n > 0 bytes before considering error.
 	// Prevents dropping the last chunk when Read returns data + io.EOF.
-	if n > 0 {
+	if n > 0 || (n == 0 && err == nil && isUDPNetwork(f.network)) {
 		payload.Payload = buf[:n]
 		if sendErr := f.Stream.Send(dstData); sendErr != nil {
 			return sendErr
@@ -152,6 +171,7 @@ func (f *Forwarder) handshake() error {
 	header := v.Header
 
 	network, addr := resolveTarget(header)
+	f.network = network
 
 	// Auth is handled by the stream interceptor.
 	host, _, err := net.SplitHostPort(addr)
@@ -221,8 +241,13 @@ func (f *Forwarder) copyClientToTarget(buf *proto.ProxySRC) error {
 		return transport.ErrInvalidMessage
 	}
 
-	// return EOF if client closed or invalid message being received
+	// Empty payload: for TCP this signals end-of-stream from the client.
+	// For UDP an empty datagram is valid and must not tear down the session.
 	if len(v.Payload) == 0 {
+		if isUDPNetwork(f.network) {
+			_, err := f.Conn.Write(v.Payload)
+			return err
+		}
 		return io.EOF
 	}
 	//log.Printf("RX: %s", string(data))

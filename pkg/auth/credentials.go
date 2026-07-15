@@ -1,6 +1,11 @@
 package auth
 
-import "crypto/subtle"
+import (
+	"crypto/sha256"
+	"crypto/subtle"
+)
+
+var invalidCredentialDigest = sha256.Sum256([]byte("spaceship-invalid-credential"))
 
 // StaticCredentials enables using a map directly as a credential store.
 type StaticCredentials map[string]string
@@ -10,15 +15,14 @@ type StaticCredentials map[string]string
 // paths to prevent timing-based user-existence leaks.
 func (s StaticCredentials) Valid(user, password []byte) bool {
 	pass, ok := s[string(user)]
+	passwordDigest := sha256.Sum256(password)
+	storedDigest := sha256.Sum256([]byte(pass))
 	if !ok {
-		// Always perform a constant-time comparison even for unknown users.
-		// Using a zero-filled dummy of the same length as the input ensures
-		// that the comparison time is proportional to len(password) in both
-		// the "user found" and "user not found" paths, preventing user-existence
-		// timing leaks caused by a fixed-length reference string.
-		dummy := make([]byte, len(password))
-		subtle.ConstantTimeCompare(password, dummy)
-		return false
+		storedDigest = invalidCredentialDigest
 	}
-	return subtle.ConstantTimeCompare(password, []byte(pass)) == 1
+
+	// Digests have a fixed length, so wrong-length passwords and unknown users
+	// take the same constant-time comparison path.
+	matched := subtle.ConstantTimeCompare(passwordDigest[:], storedDigest[:]) == 1
+	return ok && matched
 }

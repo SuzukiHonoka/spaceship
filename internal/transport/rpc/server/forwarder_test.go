@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
@@ -70,8 +72,50 @@ func TestForwarder_CopyTargetToClient_Ack(t *testing.T) {
 	}
 }
 
+func TestForwarder_CopyTargetToClientCancellationClosesTarget(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &mockProxyServer{
+		ctx:  ctx,
+		sent: make(chan *proto.ProxyDST, 1),
+	}
+	target, peer := net.Pipe()
+	defer peer.Close()
+	f := NewForwarder(ctx, stream)
+	f.Conn = target
+	f.network = "tcp"
+	f.Ack <- struct{}{}
+
+	done := make(chan error, 1)
+	go func() { done <- f.CopyTargetToClient(ctx) }()
+
+	select {
+	case accepted := <-stream.sent:
+		if accepted.Status != proto.ProxyStatus_Accepted {
+			t.Fatalf("first status = %v, want Accepted", accepted.Status)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CopyTargetToClient did not send the accepted status")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("CopyTargetToClient() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CopyTargetToClient did not unblock after cancellation")
+	}
+	if err := target.SetDeadline(time.Now()); err == nil {
+		t.Fatal("target connection remained open after cancellation")
+	}
+}
+
 func TestResolveTarget(t *testing.T) {
-	defaultNet := transport.GetNetwork()
+	transport.EnableIPv6()
+	t.Cleanup(transport.EnableIPv6)
+
+	defaultNet := transport.DialNetwork(transport.GetNetwork())
 	tests := []struct {
 		name        string
 		header      *proto.ProxySRC_ProxyHeader
@@ -122,5 +166,34 @@ func TestResolveTarget(t *testing.T) {
 					tt.header, gotNet, gotAddr, tt.wantNetwork, tt.wantAddr)
 			}
 		})
+	}
+}
+
+func TestResolveTarget_IPv6Disabled(t *testing.T) {
+	transport.DisableIPv6()
+	t.Cleanup(transport.EnableIPv6)
+
+	gotNet, gotAddr := resolveTarget(&proto.ProxySRC_ProxyHeader{
+		Addr:    "8.8.8.8:53",
+		Network: proto.Network_UDP,
+	})
+	if gotNet != "udp4" || gotAddr != "8.8.8.8:53" {
+		t.Fatalf("resolveTarget UDP with IPv6 disabled = (%q, %q), want (udp4, 8.8.8.8:53)", gotNet, gotAddr)
+	}
+
+	gotNet, _ = resolveTarget(&proto.ProxySRC_ProxyHeader{Addr: "example.com:443"})
+	if gotNet != "tcp4" {
+		t.Fatalf("resolveTarget TCP with IPv6 disabled = %q, want tcp4", gotNet)
+	}
+}
+
+func TestIsUDPNetwork(t *testing.T) {
+	for _, n := range []string{"udp", "udp4", "udp6"} {
+		if !isUDPNetwork(n) {
+			t.Errorf("isUDPNetwork(%q) = false, want true", n)
+		}
+	}
+	if isUDPNetwork("tcp") {
+		t.Error("isUDPNetwork(tcp) = true, want false")
 	}
 }

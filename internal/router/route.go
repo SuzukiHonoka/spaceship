@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"os"
 	"regexp"
+	"strings"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 )
@@ -28,6 +29,21 @@ var (
 		MatchType:   TypeCIDR,
 	}
 )
+
+// CloneRoute returns a shallow copy of r so shared templates (defaults, IPv6
+// block) are not mutated when installed into a live route table.
+func CloneRoute(r *Route) *Route {
+	if r == nil {
+		return nil
+	}
+	out := *r
+	if r.Sources != nil {
+		out.Sources = append([]string(nil), r.Sources...)
+	}
+	// Match caches are rebuilt by GenerateCache; do not share them.
+	out.cache = MatchCache{}
+	return &out
+}
 
 type Route struct {
 	Sources     []string `json:"src"`
@@ -60,7 +76,15 @@ func (r *Route) GenerateCache() error {
 		var fileSources []string
 		b := bufio.NewScanner(f)
 		for b.Scan() {
-			fileSources = append(fileSources, b.Text())
+			line := strings.TrimSpace(b.Text())
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			fileSources = append(fileSources, line)
+		}
+		if err := b.Err(); err != nil {
+			utils.Close(f)
+			return fmt.Errorf("read from path: %s scan failed: %w", r.Ext, err)
 		}
 		utils.Close(f)
 		sources = append(sources, fileSources...)
@@ -72,17 +96,33 @@ func (r *Route) GenerateCache() error {
 	case TypeExact:
 		r.cache.ExactMap = make(map[string]struct{}, len(sources))
 		for _, src := range sources {
-			r.cache.ExactMap[src] = struct{}{}
+			host := utils.NormalizeHost(src)
+			if host == "" {
+				continue
+			}
+			r.cache.ExactMap[host] = struct{}{}
 		}
 		log.Printf("exact-route count: %d", len(r.cache.ExactMap))
 	case TypeDomain:
+		// Domain rules use suffix matching: a rule "google.com" matches
+		// "google.com" and any subdomain. Sources are normalized (case /
+		// trailing dots) but NOT reduced to eTLD+1, so "api.google.com"
+		// matches that host and its subdomains without matching "www.google.com".
 		r.cache.DomainMap = make(map[string]struct{}, len(sources))
 		for _, src := range sources {
-			r.cache.DomainMap[src] = struct{}{}
+			host := utils.NormalizeHost(src)
+			if host == "" {
+				continue
+			}
+			r.cache.DomainMap[host] = struct{}{}
 		}
 		log.Printf("domain-route count: %d", len(r.cache.DomainMap))
 	case TypeCIDR:
 		for _, cidr := range sources {
+			cidr = strings.TrimSpace(cidr)
+			if cidr == "" {
+				continue
+			}
 			prefix, err := netip.ParsePrefix(cidr)
 			if err != nil {
 				return fmt.Errorf("cidr: %s parse failed: %w", cidr, err)
@@ -92,6 +132,9 @@ func (r *Route) GenerateCache() error {
 		log.Printf("cidr-route count: %d", len(r.cache.CIDRList))
 	case TypeRegex:
 		for _, rx := range sources {
+			if strings.TrimSpace(rx) == "" {
+				continue
+			}
 			regx, err := regexp.Compile(rx)
 			if err != nil {
 				return fmt.Errorf("regex: %s parse failed: %w", rx, err)
@@ -112,7 +155,7 @@ func (r *Route) Match(dst string) bool {
 		return true
 	case TypeExact:
 		if r.cache.ExactMap != nil {
-			if _, ok := r.cache.ExactMap[dst]; ok {
+			if _, ok := r.cache.ExactMap[utils.NormalizeHost(dst)]; ok {
 				return true
 			}
 		}
@@ -126,13 +169,22 @@ func (r *Route) Match(dst string) bool {
 		}
 	case TypeDomain:
 		// Only match if dst is not an IP address
-		if _, err := netip.ParseAddr(dst); err != nil {
-			dst = utils.ExtractDomain(dst)
-			if r.cache.DomainMap != nil {
-				if _, ok := r.cache.DomainMap[dst]; ok {
-					return true
-				}
+		host := utils.NormalizeHost(dst)
+		if host == "" {
+			return false
+		}
+		if _, err := netip.ParseAddr(host); err == nil {
+			return false
+		}
+		for candidate := host; r.cache.DomainMap != nil; {
+			if _, ok := r.cache.DomainMap[candidate]; ok {
+				return true
 			}
+			dot := strings.IndexByte(candidate, '.')
+			if dot < 0 {
+				break
+			}
+			candidate = candidate[dot+1:]
 		}
 	case TypeCIDR:
 		// Only match if dst is a valid IP address

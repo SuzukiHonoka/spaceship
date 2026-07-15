@@ -20,3 +20,12 @@ type Transport interface {
 type PacketDialer interface {
 	DialPacket(network, addr string) (net.PacketConn, error)
 }
+
+// PacketTargetDialer extends PacketDialer for transports that resolve a packet
+// target locally. Returning the address selected while opening the socket keeps
+// address-family selection and the destination address consistent, and avoids
+// a second DNS lookup in callers.
+type PacketTargetDialer interface {
+	PacketDialer
+	DialPacketTarget(network, addr string) (net.PacketConn, net.Addr, error)
+}

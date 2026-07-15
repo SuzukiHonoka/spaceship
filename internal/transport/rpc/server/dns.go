@@ -10,7 +10,7 @@ import (
 const DNSClientTimeout = 5 * time.Second
 
 // resolveDNSRecords performs actual DNS resolution using the shared miekg/dns client.
-func (s *Server) resolveDNSRecords(fqdn string, qtype uint16) []dns.RR {
+func (s *Server) resolveDNSRecords(fqdn string, qtype uint16) ([]dns.RR, int) {
 	// Create DNS query message
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(fqdn), qtype)
@@ -20,19 +20,19 @@ func (s *Server) resolveDNSRecords(fqdn string, qtype uint16) []dns.RR {
 	response, _, err := s.dnsClient.Exchange(m, s.dnsAddr)
 	if err != nil {
 		log.Printf("DNS resolution failed for %s using server %s: %v", fqdn, s.dnsAddr, err)
-		return nil
+		return nil, dns.RcodeServerFailure
 	}
 
 	if response == nil {
 		log.Printf("DNS resolution returned nil response for %s", fqdn)
-		return nil
+		return nil, dns.RcodeServerFailure
 	}
 	if response.Rcode != dns.RcodeSuccess {
 		log.Printf("DNS resolution failed for %s: response code %d", fqdn, response.Rcode)
 	}
 
 	// Return all answer records
-	return response.Answer
+	return response.Answer, response.Rcode
 }
 
 // safeUint32ToUint16 safely converts uint32 to uint16, returning an error if overflow would occur

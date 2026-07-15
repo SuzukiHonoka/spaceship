@@ -7,6 +7,8 @@ import (
 )
 
 func TestTransport_GettersAndSetters(t *testing.T) {
+	t.Cleanup(EnableIPv6)
+
 	// Test buffer size
 	SetBufferSize(64) // KB
 	if size := GetBufferSize(); size != 64*1024 {
@@ -23,6 +25,15 @@ func TestTransport_GettersAndSetters(t *testing.T) {
 	DisableIPv6()
 	if net := GetNetwork(); net != "tcp4" {
 		t.Errorf("GetNetwork() after DisableIPv6 = %v, want %v", net, "tcp4")
+	}
+	if !PreferIPv4() {
+		t.Error("PreferIPv4() = false after DisableIPv6, want true")
+	}
+	if got := DialNetwork("udp"); got != "udp4" {
+		t.Errorf("DialNetwork(udp) after DisableIPv6 = %v, want udp4", got)
+	}
+	if got := DialNetwork("tcp"); got != "tcp4" {
+		t.Errorf("DialNetwork(tcp) after DisableIPv6 = %v, want tcp4", got)
 	}
 
 	// Test dial timeout

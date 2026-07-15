@@ -38,12 +38,29 @@ func (l *Launcher) SkipInternalLogging() {
 func (l *Launcher) launchServer(ctx context.Context, cfg *config.MixedConfig) error {
 	log.Println("server starting")
 
+	errGroup, ctx := errgroup.WithContext(ctx)
+
 	// create server
 	s, err := server.NewServer(ctx, cfg.Users, cfg.SSL, cfg.DNS)
 	if err != nil {
 		return fmt.Errorf("create server failed: %w", err)
 	}
-	return s.ListenAndServe(cfg.Listen)
+
+	errGroup.Go(func() error {
+		if err := s.ListenAndServe(cfg.Listen); err != nil {
+			return fmt.Errorf("serve rpc failed: %w", err)
+		}
+		return nil
+	})
+	errGroup.Go(func() error {
+		return l.listenSignal(ctx)
+	})
+
+	err = errGroup.Wait()
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, ErrSignalArrived) {
+		return fmt.Errorf("server process error: %w", err)
+	}
+	return nil
 }
 
 func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) error {

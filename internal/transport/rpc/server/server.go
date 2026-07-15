@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
@@ -103,7 +104,32 @@ func (s *Server) ListenAndServe(addr string) error {
 	}
 	defer utils.Close(listener)
 	log.Printf("rpc started at %s", addr)
-	return s.srv.Serve(listener)
+
+	serveDone := make(chan struct{})
+	go func() {
+		select {
+		case <-s.Ctx.Done():
+		case <-serveDone:
+			return
+		}
+		stopped := make(chan struct{})
+		go func() {
+			s.srv.GracefulStop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-time.After(rpc.GeneralTimeout):
+			s.srv.Stop()
+		}
+	}()
+
+	err = s.srv.Serve(listener)
+	close(serveDone)
+	if s.Ctx.Err() != nil && (err == nil || errors.Is(err, grpc.ErrServerStopped)) {
+		return s.Ctx.Err()
+	}
+	return err
 }
 
 func (s *Server) Proxy(stream proto.Proxy_ProxyServer) error {
@@ -133,35 +159,40 @@ func (s *Server) Proxy(stream proto.Proxy_ProxyServer) error {
 func (s *Server) DnsResolve(_ context.Context, request *proto.DnsRequest) (*proto.DnsResponse, error) {
 	// Auth is handled by the server interceptor.
 	// Validate request
-	if len(request.Items) == 0 {
+	if request == nil || len(request.Items) == 0 {
 		return nil, transport.ErrBadRequest
 	}
 
 	resp := new(proto.DnsResponse)
 
 	for _, item := range request.Items {
+		if item == nil {
+			resp.Result = append(resp.Result, &proto.DnsResult{Rcode: mdns.RcodeFormatError})
+			continue
+		}
 		log.Printf("dns: resolving for %s (type %d, blockIPv6: %t)", item.Fqdn, item.QType, item.BlockIpv6)
+		result := &proto.DnsResult{Fqdn: item.Fqdn}
 
 		// Safely convert QType from uint32 to uint16 to prevent integer overflow
 		qtype, ok := safeUint32ToUint16(item.QType)
 		if !ok {
 			log.Printf("dns: invalid QType value %d: exceeds uint16 range", item.QType)
+			result.Rcode = mdns.RcodeFormatError
+			resp.Result = append(resp.Result, result)
 			continue
 		}
 
 		// Skip IPv6 (AAAA) queries if blocking is enabled
 		if item.BlockIpv6 && qtype == mdns.TypeAAAA {
 			log.Printf("dns: blocking IPv6 query for %s (AAAA record)", item.Fqdn)
+			result.Rcode = mdns.RcodeSuccess
+			resp.Result = append(resp.Result, result)
 			continue
 		}
 
 		// Perform actual DNS resolution using configured DNS server
-		records := s.resolveDNSRecords(item.Fqdn, qtype)
-
-		if len(records) == 0 {
-			log.Printf("dns: no records found for %s (type %d)", item.Fqdn, item.QType)
-			continue
-		}
+		records, rcode := s.resolveDNSRecords(item.Fqdn, qtype)
+		result.Rcode = uint32(rcode)
 
 		// Filter out IPv6 (AAAA) records if blocking is enabled
 		if item.BlockIpv6 {
@@ -175,25 +206,21 @@ func (s *Server) DnsResolve(_ context.Context, request *proto.DnsRequest) (*prot
 			}
 			records = filteredRecords
 
-			// Check if we have any records left after filtering
-			if len(records) == 0 {
-				log.Printf("dns: no records left after IPv6 filtering for %s", item.Fqdn)
-				continue
+		}
+
+		if len(records) > 0 {
+			// Convert DNS RR records to protobuf format using wire serialization.
+			protoRecords, err := rpcutils.ConvertRRSliceToProto(records)
+			if err != nil {
+				log.Printf("dns: failed to convert DNS records for %s: %v", item.Fqdn, err)
+				result.Rcode = mdns.RcodeServerFailure
+			} else {
+				result.Records = protoRecords
 			}
+		} else {
+			log.Printf("dns: no records found for %s (type %d, rcode %d)", item.Fqdn, item.QType, rcode)
 		}
 
-		// Convert DNS RR records to protobuf format using wire serialization
-		protoRecords, err := rpcutils.ConvertRRSliceToProto(records)
-		if err != nil {
-			log.Printf("dns: failed to convert DNS records for %s: %v", item.Fqdn, err)
-			continue
-		}
-
-		// Add to response
-		result := &proto.DnsResult{
-			Fqdn:    item.Fqdn,
-			Records: protoRecords, // New format with complete record data
-		}
 		resp.Result = append(resp.Result, result)
 	}
 
