@@ -54,7 +54,7 @@ func (s *Server) Close() (err error) {
 }
 
 func (s *Server) ListenAndServe(_, addr string) error {
-	log.Printf("http will listen at %s", addr)
+	log.Printf("http: listening at %s", addr)
 	handlerFunc := func() http.Handler {
 		if len(s.config.Credentials) > 0 {
 			return s.proxyAuth(http.HandlerFunc(s.Handle))

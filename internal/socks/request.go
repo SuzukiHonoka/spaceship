@@ -138,7 +138,7 @@ func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Reques
 
 	route, err := router.GetRoute(host)
 	if err != nil {
-		log.Printf("socks: get route for %s error: %v", host, err)
+		log.Printf("socks: no route for %s: %v", host, err)
 		if err = sendReply(conn, ruleFailure, nil); err != nil {
 			return fmt.Errorf("failed to send reply: %w", err)
 		}

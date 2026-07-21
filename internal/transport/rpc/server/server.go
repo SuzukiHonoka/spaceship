@@ -61,7 +61,7 @@ func NewServer(ctx context.Context, users config.Users, ssl *config.SSL, dnsConf
 	if ssl != nil {
 		tlsConfig, err := buildTLSConfig(ssl.PublicKey, ssl.PrivateKey)
 		if err != nil {
-			return nil, fmt.Errorf("setup tls failed, err=%w", err)
+			return nil, fmt.Errorf("setup tls: %w", err)
 		}
 		log.Println("using secure grpc [h2]")
 		transportOption = grpc.Creds(credentials.NewTLS(tlsConfig))
@@ -103,7 +103,7 @@ func (s *Server) ListenAndServe(addr string) error {
 		return fmt.Errorf("listen at %s error %w", addr, err)
 	}
 	defer utils.Close(listener)
-	log.Printf("rpc started at %s", addr)
+	log.Printf("rpc: listening at %s", addr)
 
 	serveDone := make(chan struct{})
 	go func() {

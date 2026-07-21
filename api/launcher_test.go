@@ -261,8 +261,8 @@ func TestLaunchFromFileMissing(t *testing.T) {
 	if err == nil {
 		t.Fatal("LaunchFromFile() accepted missing file")
 	}
-	if !strings.Contains(err.Error(), "load configuration") {
-		t.Fatalf("error = %v, want load configuration wrapper", err)
+	if !strings.Contains(err.Error(), "load config from") {
+		t.Fatalf("error = %v, want load config wrapper", err)
 	}
 }
 
@@ -273,8 +273,8 @@ func TestLaunchFromStringInvalidJSON(t *testing.T) {
 	if err == nil {
 		t.Fatal("LaunchFromString() accepted invalid JSON")
 	}
-	if !strings.Contains(err.Error(), "load configuration from string") {
-		t.Fatalf("error = %v, want load configuration wrapper", err)
+	if !strings.Contains(err.Error(), "load config from string") {
+		t.Fatalf("error = %v, want load config wrapper", err)
 	}
 }
 

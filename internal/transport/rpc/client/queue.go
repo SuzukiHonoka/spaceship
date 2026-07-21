@@ -137,7 +137,7 @@ func (q *ConnQueue) GetClient() (proxy.ProxyClient, func() error, error) {
 func (q *ConnQueue) replaceConn(old *ConnWrapper) {
 	newConn, err := q.Dial()
 	if err != nil {
-		log.Printf("failed to replace shutdown connection %d: %v", old.ID, err)
+		log.Printf("rpc: replace connection %d failed: %v", old.ID, err)
 		return
 	}
 

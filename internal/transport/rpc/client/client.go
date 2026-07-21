@@ -312,7 +312,7 @@ func (c *Client) DnsResolve(ctx context.Context, requests []*DnsRequest) ([]dns.
 	// Make gRPC call
 	resp, err := c.ProxyClient.DnsResolve(ctx, req)
 	if err != nil {
-		return nil, dns.RcodeServerFailure, fmt.Errorf("gRPC DNS resolve failed: %w", err)
+		return nil, dns.RcodeServerFailure, fmt.Errorf("rpc dns: %w", err)
 	}
 	return decodeDNSResponse(resp)
 }
