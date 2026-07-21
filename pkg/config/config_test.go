@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
 	configClient "github.com/SuzukiHonoka/spaceship/v2/pkg/config/client"
+	"github.com/SuzukiHonoka/spaceship/v2/pkg/config/server"
 )
 
 func TestClientIdleTimeoutRemainsIntAPI(t *testing.T) {
@@ -444,5 +446,75 @@ func TestApply_UDPSettingsResetOnReload(t *testing.T) {
 	}
 	if socks.UDPDisabled() {
 		t.Error("udp stayed disabled after a reload that dropped the udp section")
+	}
+}
+
+func TestNewFromConfigFile(t *testing.T) {
+	t.Cleanup(transport.EnableIPv6)
+
+	dir := t.TempDir()
+	path := dir + "/cfg.json"
+	raw := `{"role":"client","log":"skip","uuid":"6f1a6bb5-30f1-4a2e-9d0e-3a1c5f2b7e10","server_addr":"127.0.0.1:1"}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := NewFromConfigFile(path)
+	if err != nil {
+		t.Fatalf("NewFromConfigFile() error = %v", err)
+	}
+	if cfg.Role != RoleClient {
+		t.Fatalf("Role = %s, want client", cfg.Role)
+	}
+	if cfg.UUID != "6f1a6bb5-30f1-4a2e-9d0e-3a1c5f2b7e10" {
+		t.Fatalf("UUID = %s", cfg.UUID)
+	}
+	if err := cfg.Apply(); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+}
+
+func TestNewFromConfigFileMissing(t *testing.T) {
+	_, err := NewFromConfigFile(t.TempDir() + "/nope.json")
+	if err == nil {
+		t.Fatal("NewFromConfigFile() accepted missing file")
+	}
+}
+
+func TestNewFromConfigFileInvalidJSON(t *testing.T) {
+	path := t.TempDir() + "/bad.json"
+	if err := os.WriteFile(path, []byte(`{`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := NewFromConfigFile(path)
+	if err == nil {
+		t.Fatal("NewFromConfigFile() accepted invalid JSON")
+	}
+}
+
+func TestNewFromStringInvalidJSON(t *testing.T) {
+	_, err := NewFromString(`{`)
+	if err == nil {
+		t.Fatal("NewFromString() accepted invalid JSON")
+	}
+}
+
+func TestApply_NilEmbeddedConfigs(t *testing.T) {
+	t.Cleanup(transport.EnableIPv6)
+	cfg := &MixedConfig{
+		Role:    RoleServer,
+		LogMode: "skip",
+		Server: &server.Server{
+			Listen: "127.0.0.1:0",
+			Users:  server.Users{{UUID: "u"}},
+		},
+	}
+	// Client nil — ensureEmbeddedConfigs must fill it; Server already set.
+	cfg.Client = nil
+	if err := cfg.Apply(); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if cfg.Client == nil {
+		t.Fatal("ensureEmbeddedConfigs did not populate Client")
 	}
 }
