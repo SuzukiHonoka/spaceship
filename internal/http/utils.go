@@ -15,17 +15,20 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 )
 
-// ServeError logs a proxy failure (once, in a readable form) and writes a 503
-// response when the client still expects HTTP framing.
-//
-// host is the destination shown in the log line (e.g. "example.com:443"). Pass
-// an empty host for errors not tied to a single target.
+// ServeError logs err and writes a 503 response when the client still expects
+// HTTP framing. Prefer ServeProxyError when a target host is known.
 func ServeError(w io.Writer, err error) {
 	ServeProxyError(w, "", err)
 }
 
-// ServeProxyError is like ServeError but includes host in the log line so the
-// message stays one line and avoids nested "err=… err=…" wrapping.
+// ServeProxyError logs a single readable failure line and writes 503 when
+// appropriate.
+//
+//	http: proxy example.com:443 failed: server ack timeout
+//
+// Benign terminal conditions (nil, EOF, context canceled) are silent and do
+// not write a response body — the peer is already gone or the session was
+// deliberately aborted.
 func ServeProxyError(w io.Writer, host string, err error) {
 	if err == nil || errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
 		return

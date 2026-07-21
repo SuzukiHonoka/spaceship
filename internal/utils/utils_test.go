@@ -37,6 +37,7 @@ func TestIsBenignCloseError(t *testing.T) {
 		{"os.ErrClosed", os.ErrClosed, true},
 		{"string use of closed", errors.New("close tcp 127.0.0.1:1->127.0.0.1:2: use of closed network connection"), true},
 		{"connection reset", errors.New("read: connection reset by peer"), true},
+		{"broken pipe", errors.New("write: broken pipe"), true},
 		{"real failure", errors.New("permission denied"), false},
 	}
 	for _, tt := range tests {

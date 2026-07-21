@@ -38,10 +38,11 @@ func isBenignCloseError(err error) bool {
 		errors.Is(err, os.ErrClosed) {
 		return true
 	}
-	// Older stacks / wrappers may not wrap net.ErrClosed.
+	// Older stacks / wrappers may not wrap net.ErrClosed / syscall errors.
 	msg := err.Error()
 	return strings.Contains(msg, "use of closed network connection") ||
-		strings.Contains(msg, "connection reset by peer")
+		strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "broken pipe")
 }
 
 func PrettyByteSize(b float64) string {

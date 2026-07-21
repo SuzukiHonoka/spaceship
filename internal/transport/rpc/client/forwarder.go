@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -14,6 +15,13 @@ import (
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+)
+
+// Sentinel errors for the TCP proxy handshake path. Outer layers (HTTP/SOCKS)
+// attach the target host when logging so messages stay one short line.
+var (
+	errServerAckTimeout = errors.New("server ack timeout")
+	errServerRejected   = errors.New("server rejected connection")
 )
 
 type Statistic struct {
@@ -267,10 +275,11 @@ func (f *Forwarder) Start(addr string, localAddrChan chan<- string) error {
 		case <-t.C:
 			// Do not wrap os.ErrDeadlineExceeded: its Error() is "i/o timeout",
 			// which reads as a socket I/O failure rather than a missing server ack.
-			return fmt.Errorf("server ack timeout for %s", addr)
+			// Omit the target here — HTTP/SOCKS log the host once on the outer line.
+			return errServerAckTimeout
 		case localAddr, ok := <-f.localAddr:
 			if !ok {
-				return fmt.Errorf("server rejected %s", addr)
+				return errServerRejected
 			}
 			select {
 			case localAddrChan <- localAddr:

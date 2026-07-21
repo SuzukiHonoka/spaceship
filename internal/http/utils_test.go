@@ -58,6 +58,22 @@ func TestServeError(t *testing.T) {
 	})
 }
 
+func TestServeProxyError_Writes503WithHost(t *testing.T) {
+	var buf bytes.Buffer
+	ServeProxyError(&buf, "199.96.58.85:443", errors.New("server ack timeout"))
+	if !strings.Contains(buf.String(), "503") {
+		t.Fatalf("response %q missing 503", buf.String())
+	}
+}
+
+func TestServeProxyError_CanceledSkipsResponse(t *testing.T) {
+	var buf bytes.Buffer
+	ServeProxyError(&buf, "example.com:443", context.Canceled)
+	if buf.Len() != 0 {
+		t.Fatalf("wrote %q for canceled, want empty", buf.String())
+	}
+}
+
 func TestBuildRemoteAddr(t *testing.T) {
 	tests := []struct {
 		name     string
