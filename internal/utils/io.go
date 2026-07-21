@@ -12,10 +12,10 @@ import (
 
 // Close closes closer and logs unexpected errors.
 //
-// "Already closed" and other benign teardown races are silent: concurrent
-// proxy paths often defer Close on the same conn after the peer or a sibling
-// goroutine has already closed it, which surfaces as net.ErrClosed /
-// "use of closed network connection". Logging those as failures is noise.
+// Preferred fix for shared client conns is OnceNetConn (idempotent Close) so
+// front ends and transports can both own teardown without racing. This helper
+// still treats already-closed / peer-reset results as quiet: they remain
+// possible from the peer side or older call paths.
 func Close(closer io.Closer) {
 	if closer == nil {
 		return

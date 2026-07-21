@@ -104,6 +104,9 @@ func (s *Server) Serve() error {
 
 // ServeConn is used to serve a single connection.
 func (s *Server) ServeConn(conn net.Conn) error {
+	// Transports close the client conn (as Proxy dst) to unblock copies; we
+	// also defer-Close here. Idempotent Close makes that ownership overlap safe.
+	conn = utils.OnceNetConn(conn)
 	defer utils.Close(conn)
 	bufConn := bufio.NewReader(conn)
 

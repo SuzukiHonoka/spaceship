@@ -165,7 +165,10 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		ServeProxyError(w, r.Host, fmt.Errorf("hijack: %w", err))
 		return
 	}
-	defer utils.Close(conn)
+	// Transports close dst (and sometimes src) to unblock copies; we also defer
+	// Close. Make Close idempotent so ownership overlap is safe.
+	client := utils.OnceNetConn(conn)
+	defer utils.Close(client)
 
 	// actual proxy
 
@@ -178,21 +181,21 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	proxyDone := make(chan struct{})
 	errGroup.Go(func() error {
 		defer close(proxyDone)
-		err := route.Proxy(ctx, addr, proxyLocalAddr, conn, pr)
+		err := route.Proxy(ctx, addr, proxyLocalAddr, client, pr)
 		// Unblock the copy goroutine on both code paths it can be stuck in:
 		//
 		// 1. Stuck in pw.Write(): closing pr (the pipe reader) causes the next
 		//    pw.Write() to return io.ErrClosedPipe immediately, regardless of
 		//    whether data arrived between the conn.Read() and pw.Write() calls.
 		//
-		// 2. Stuck in conn.Read(): setting a past deadline on the hijacked
+		// 2. Stuck in client.Read(): setting a past deadline on the hijacked
 		//    connection causes the blocked Read to return a timeout error.
 		//
-		// Order matters — close the pipe first so that if conn.Read() returns
+		// Order matters — close the pipe first so that if client.Read() returns
 		// data before the deadline kicks in, the subsequent pw.Write() still
 		// unblocks (rather than blocking on a now-unread pipe).
-		pr.Close()                   //nolint:errcheck
-		conn.SetDeadline(time.Now()) //nolint:errcheck
+		pr.Close()                     //nolint:errcheck
+		client.SetDeadline(time.Now()) //nolint:errcheck
 		return err
 	})
 
@@ -206,7 +209,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Forward exactly the request parsed by net/http. Do not copy raw bytes from
-	// conn: those bytes may contain pipelined requests which must not bypass
+	// client: those bytes may contain pipelined requests which must not bypass
 	// authentication, routing, and hop-header filtering.
 	errGroup.Go(func() error {
 		if err := writeForwardRequest(pw, r, host); err != nil {
@@ -227,7 +230,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err = errGroup.Wait(); err != nil {
-		ServeProxyError(conn, r.Host, err)
+		ServeProxyError(client, r.Host, err)
 	}
 }
 
@@ -290,12 +293,16 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		ServeProxyError(w, r.Host, fmt.Errorf("hijack: %w", err))
 		return
 	}
-	defer utils.Close(conn)
+	// CONNECT uses the same conn as Proxy src and dst; transports close both
+	// to unblock copies while we also defer-Close. Idempotent Close avoids
+	// "use of closed network connection" from that intentional overlap.
+	client := utils.OnceNetConn(conn)
+	defer utils.Close(client)
 
 	// build remote addr
 	_, addr, err := BuildRemoteAddr(r)
 	if err != nil {
-		ServeProxyError(conn, r.Host, fmt.Errorf("build remote addr: %w", err))
+		ServeProxyError(client, r.Host, fmt.Errorf("build remote addr: %w", err))
 		return
 	}
 
@@ -304,7 +311,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	proxyLocalAddr := make(chan string)
 	errGroup.Go(func() error {
-		return route.Proxy(ctx, addr, proxyLocalAddr, conn, conn)
+		return route.Proxy(ctx, addr, proxyLocalAddr, client, client)
 	})
 
 	errGroup.Go(func() error {
@@ -315,7 +322,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// send proxy OK
-		if _, err = conn.Write(MessageConnectionEstablished); err != nil {
+		if _, err = client.Write(MessageConnectionEstablished); err != nil {
 			return fmt.Errorf("send connection established failed: %w", err)
 		}
 
@@ -324,6 +331,6 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	// wait for proxy to finish
 	if err = errGroup.Wait(); err != nil {
-		ServeProxyError(conn, r.Host, err)
+		ServeProxyError(client, r.Host, err)
 	}
 }
