@@ -24,7 +24,9 @@ func TestDirect_Basics(t *testing.T) {
 
 func TestDirect_DialPacket(t *testing.T) {
 	d := New().(transport.PacketDialer)
-	pc, err := d.DialPacket("udp", ":0")
+	// Connecting a UDP socket sends nothing, so a discard-port target is enough
+	// to exercise the bind without generating traffic.
+	pc, err := d.DialPacket("udp", "127.0.0.1:9")
 	if err != nil {
 		t.Fatalf("DialPacket() error = %v", err)
 	}
@@ -32,6 +34,59 @@ func TestDirect_DialPacket(t *testing.T) {
 
 	if _, ok := pc.LocalAddr().(*net.UDPAddr); !ok {
 		t.Errorf("DialPacket() did not return UDP addr")
+	}
+}
+
+// TestDirect_DialPacketRejectsUnspecifiedTarget verifies a malformed target is
+// rejected with a clear error rather than surfacing an OS-level bind failure.
+func TestDirect_DialPacketRejectsUnspecifiedTarget(t *testing.T) {
+	d := New().(transport.PacketDialer)
+	for _, addr := range []string{":0", "0.0.0.0:53", "127.0.0.1:0"} {
+		if _, err := d.DialPacket("udp", addr); err == nil {
+			t.Errorf("DialPacket(%q) error = nil, want invalid packet target", addr)
+		}
+	}
+}
+
+// TestDirect_DialPacketIsConnected verifies the returned socket only accepts
+// datagrams from the dialed peer. An unconnected socket would let an off-path
+// sender inject responses into a relayed flow.
+func TestDirect_DialPacketIsConnected(t *testing.T) {
+	peer, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("peer listen: %v", err)
+	}
+	defer peer.Close()
+
+	d := New().(transport.PacketDialer)
+	pc, err := d.DialPacket("udp", peer.LocalAddr().String())
+	if err != nil {
+		t.Fatalf("DialPacket() error = %v", err)
+	}
+	defer pc.Close()
+
+	// A third party sends directly to the socket's local port.
+	attacker, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("attacker listen: %v", err)
+	}
+	defer attacker.Close()
+	if _, err := attacker.WriteTo([]byte("spoofed"), pc.LocalAddr()); err != nil {
+		t.Fatalf("attacker write: %v", err)
+	}
+
+	// The kernel must drop it: the only readable datagram is the peer's.
+	if _, err := peer.WriteTo([]byte("legit"), pc.LocalAddr()); err != nil {
+		t.Fatalf("peer write: %v", err)
+	}
+	buf := make([]byte, 64)
+	_ = pc.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, _, err := pc.ReadFrom(buf)
+	if err != nil {
+		t.Fatalf("ReadFrom() error = %v", err)
+	}
+	if got := string(buf[:n]); got != "legit" {
+		t.Errorf("ReadFrom() = %q, want %q (spoofed datagram was not filtered)", got, "legit")
 	}
 }
 
@@ -151,5 +206,50 @@ func TestDirect_DialPacketTargetRejectsIPv6WhenDisabled(t *testing.T) {
 	}
 	if conn != nil || target != nil {
 		t.Fatalf("DialPacketTarget() on error = (%v, %v), want nil results", conn, target)
+	}
+}
+
+// TestDirect_DialPacketWriteToIgnoresAddr verifies WriteTo sends to the dialed
+// peer regardless of the address argument. A connected socket has exactly one
+// destination, and the relay relies on that when it passes the flow's target
+// address on every write.
+func TestDirect_DialPacketWriteToIgnoresAddr(t *testing.T) {
+	peer, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("peer listen: %v", err)
+	}
+	defer peer.Close()
+
+	other, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("other listen: %v", err)
+	}
+	defer other.Close()
+
+	d := New().(transport.PacketDialer)
+	pc, err := d.DialPacket("udp", peer.LocalAddr().String())
+	if err != nil {
+		t.Fatalf("DialPacket() error = %v", err)
+	}
+	defer pc.Close()
+
+	// Deliberately pass the wrong destination.
+	if _, err := pc.WriteTo([]byte("hello"), other.LocalAddr()); err != nil {
+		t.Fatalf("WriteTo() error = %v", err)
+	}
+
+	buf := make([]byte, 64)
+	_ = peer.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, _, err := peer.ReadFrom(buf)
+	if err != nil {
+		t.Fatalf("dialed peer did not receive the datagram: %v", err)
+	}
+	if got := string(buf[:n]); got != "hello" {
+		t.Errorf("peer read %q, want hello", got)
+	}
+
+	_ = other.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if _, _, err := other.ReadFrom(buf); err == nil {
+		t.Error("datagram reached the address passed to WriteTo; a connected socket must ignore it")
 	}
 }

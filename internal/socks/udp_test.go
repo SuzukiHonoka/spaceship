@@ -167,7 +167,7 @@ func TestUDPRelay_RejectsEgressWithoutUDP(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	relay, err := NewUDPRelay(nil)
+	relay, err := NewUDPRelay(nil, nil)
 	if err != nil {
 		t.Fatalf("NewUDPRelay() error = %v", err)
 	}
@@ -216,7 +216,7 @@ func TestUDPRelay_LargePayload(t *testing.T) {
 		}
 	}()
 
-	relay, err := NewUDPRelay(nil)
+	relay, err := NewUDPRelay(nil, nil)
 	if err != nil {
 		t.Fatalf("NewUDPRelay: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestUDPRelay_RejectsFragmentedPacket(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	relay, err := NewUDPRelay(nil)
+	relay, err := NewUDPRelay(nil, nil)
 	if err != nil {
 		t.Fatalf("NewUDPRelay: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestUDPRelay_RejectsWrongClientIP(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	relay, err := NewUDPRelay(net.ParseIP("10.0.0.1")) // only this IP is allowed
+	relay, err := NewUDPRelay(net.ParseIP("10.0.0.1"), nil) // only this IP is allowed
 	if err != nil {
 		t.Fatalf("NewUDPRelay: %v", err)
 	}
@@ -665,11 +665,11 @@ func TestNewUDPRelayAssociationLimitReleasedOnClose(t *testing.T) {
 		return &scriptedPacketConn{}, nil
 	}
 
-	first, err := newUDPRelayWithListener(clientIP, associations, natEntries, listen)
+	first, err := newUDPRelayWithListener(clientIP, nil, associations, natEntries, 0, listen)
 	if err != nil {
 		t.Fatalf("first newUDPRelay() error = %v", err)
 	}
-	if _, err := newUDPRelayWithListener(clientIP, associations, natEntries, listen); !errors.Is(err, ErrUDPAssociationLimit) {
+	if _, err := newUDPRelayWithListener(clientIP, nil, associations, natEntries, 0, listen); !errors.Is(err, ErrUDPAssociationLimit) {
 		first.Close()
 		t.Fatalf("second newUDPRelay() error = %v, want ErrUDPAssociationLimit", err)
 	}
@@ -677,7 +677,7 @@ func TestNewUDPRelayAssociationLimitReleasedOnClose(t *testing.T) {
 		t.Fatalf("first Close() error = %v", err)
 	}
 
-	third, err := newUDPRelayWithListener(clientIP, associations, natEntries, listen)
+	third, err := newUDPRelayWithListener(clientIP, nil, associations, natEntries, 0, listen)
 	if err != nil {
 		t.Fatalf("newUDPRelay() after release error = %v", err)
 	}
@@ -690,14 +690,14 @@ func TestNewUDPRelayListenFailureReleasesAssociationLimit(t *testing.T) {
 	clientIP := net.ParseIP("127.0.0.1")
 	listenErr := errors.New("listen failed")
 
-	_, err := newUDPRelayWithListener(clientIP, associations, natEntries, func(_, _ string) (net.PacketConn, error) {
+	_, err := newUDPRelayWithListener(clientIP, nil, associations, natEntries, 0, func(_, _ string) (net.PacketConn, error) {
 		return nil, listenErr
 	})
 	if !errors.Is(err, listenErr) {
 		t.Fatalf("newUDPRelayWithListener() error = %v, want %v", err, listenErr)
 	}
 
-	relay, err := newUDPRelayWithListener(clientIP, associations, natEntries, func(_, _ string) (net.PacketConn, error) {
+	relay, err := newUDPRelayWithListener(clientIP, nil, associations, natEntries, 0, func(_, _ string) (net.PacketConn, error) {
 		return &scriptedPacketConn{}, nil
 	})
 	if err != nil {
@@ -711,8 +711,10 @@ func TestUDPRelayDialFailureReleasesNATLimitAndRoute(t *testing.T) {
 	natEntries := newUDPResourceLimiter(1, 1)
 	relay, err := newUDPRelayWithListener(
 		net.ParseIP("127.0.0.1"),
+		nil,
 		associations,
 		natEntries,
+		0,
 		func(_, _ string) (net.PacketConn, error) { return &scriptedPacketConn{}, nil },
 	)
 	if err != nil {
@@ -751,8 +753,10 @@ func TestUDPRelayNATLimitReleasedOnClose(t *testing.T) {
 	natEntries := newUDPResourceLimiter(1, 1)
 	relay, err := newUDPRelayWithListener(
 		net.ParseIP("127.0.0.1"),
+		nil,
 		associations,
 		natEntries,
+		0,
 		func(_, _ string) (net.PacketConn, error) { return &scriptedPacketConn{}, nil },
 	)
 	if err != nil {
@@ -842,7 +846,7 @@ func TestReverseRelay_RelaysWithHeader(t *testing.T) {
 	outbound := &scriptedPacketConn{reads: []readEvent{
 		{data: []byte("PONG"), addr: &net.UDPAddr{IP: net.ParseIP("1.2.3.4"), Port: 53}},
 	}}
-	relay.reverseRelay(&natEntry{conn: outbound}, testClientAddr(), "1.2.3.4:53")
+	relay.reverseRelay(&natEntry{conn: outbound}, natKey(testClientAddr(), "1.2.3.4:53"), testClientAddr(), "1.2.3.4:53")
 
 	if relaySock.writeCount() != 1 {
 		t.Fatalf("writes to client = %d, want 1", relaySock.writeCount())
@@ -869,7 +873,7 @@ func TestReverseRelay_RelaysDomainHeader(t *testing.T) {
 	outbound := &scriptedPacketConn{reads: []readEvent{
 		{data: []byte("PONG"), addr: testPacketAddr("example.com:53")},
 	}}
-	relay.reverseRelay(&natEntry{conn: outbound}, testClientAddr(), "example.com:53")
+	relay.reverseRelay(&natEntry{conn: outbound}, natKey(testClientAddr(), "example.com:53"), testClientAddr(), "example.com:53")
 
 	if relaySock.writeCount() != 1 {
 		t.Fatalf("writes to client = %d, want 1", relaySock.writeCount())
@@ -897,7 +901,7 @@ func TestReverseRelay_DropsOversizedResponse(t *testing.T) {
 	outbound := &scriptedPacketConn{reads: []readEvent{
 		{data: oversizedPayload, addr: testPacketAddr(longHost + ":53")},
 	}}
-	relay.reverseRelay(&natEntry{conn: outbound}, testClientAddr(), longHost+":53")
+	relay.reverseRelay(&natEntry{conn: outbound}, natKey(testClientAddr(), longHost+":53"), testClientAddr(), longHost+":53")
 
 	if relaySock.writeCount() != 0 {
 		t.Errorf("writes = %d, want 0 for oversized response", relaySock.writeCount())
@@ -912,7 +916,7 @@ func TestReverseRelay_SkipsNonUDPAddr(t *testing.T) {
 	outbound := &scriptedPacketConn{reads: []readEvent{
 		{data: []byte("x"), addr: &net.IPAddr{IP: net.ParseIP("1.2.3.4")}},
 	}}
-	relay.reverseRelay(&natEntry{conn: outbound}, testClientAddr(), "1.2.3.4:53")
+	relay.reverseRelay(&natEntry{conn: outbound}, natKey(testClientAddr(), "1.2.3.4:53"), testClientAddr(), "1.2.3.4:53")
 
 	if relaySock.writeCount() != 0 {
 		t.Errorf("writes = %d, want 0 for non-UDP source addr", relaySock.writeCount())
@@ -928,14 +932,14 @@ func TestReverseRelay_TimeoutKeepAlive(t *testing.T) {
 	const target = "1.2.3.4:53"
 	entry := &natEntry{}
 	entry.lastSeen.Store(time.Now().UnixNano()) // recent
-	relay.natTable.Store(target, entry)
+	relay.natTable.Store(natKey(testClientAddr(), target), entry)
 
 	outbound := &scriptedPacketConn{reads: []readEvent{
 		{err: timeoutError{}}, // timeout -> keepalive -> continue
 		{data: []byte("PONG"), addr: &net.UDPAddr{IP: net.ParseIP("1.2.3.4"), Port: 53}},
 	}}
 	entry.conn = outbound
-	relay.reverseRelay(entry, testClientAddr(), target)
+	relay.reverseRelay(entry, natKey(testClientAddr(), target), testClientAddr(), target)
 
 	if relaySock.writeCount() != 1 {
 		t.Errorf("writes = %d, want 1 (keepalive should process the next datagram)", relaySock.writeCount())
@@ -952,7 +956,7 @@ func TestReverseRelay_TimeoutIdleReturns(t *testing.T) {
 		{err: timeoutError{}}, // timeout, no natTable entry -> idle -> return
 		{data: []byte("PONG"), addr: &net.UDPAddr{IP: net.ParseIP("1.2.3.4"), Port: 53}},
 	}}
-	relay.reverseRelay(&natEntry{conn: outbound}, testClientAddr(), "1.2.3.4:53")
+	relay.reverseRelay(&natEntry{conn: outbound}, natKey(testClientAddr(), "1.2.3.4:53"), testClientAddr(), "1.2.3.4:53")
 
 	if relaySock.writeCount() != 0 {
 		t.Errorf("writes = %d, want 0 (idle timeout should return)", relaySock.writeCount())
@@ -972,9 +976,266 @@ func TestReverseRelay_DoneReturns(t *testing.T) {
 		{err: timeoutError{}},
 		{data: []byte("PONG"), addr: &net.UDPAddr{IP: net.ParseIP("1.2.3.4"), Port: 53}},
 	}}
-	relay.reverseRelay(&natEntry{conn: outbound}, testClientAddr(), "1.2.3.4:53")
+	relay.reverseRelay(&natEntry{conn: outbound}, natKey(testClientAddr(), "1.2.3.4:53"), testClientAddr(), "1.2.3.4:53")
 
 	if relaySock.writeCount() != 0 {
 		t.Errorf("writes = %d, want 0 (relay closed)", relaySock.writeCount())
+	}
+}
+
+// TestUDPRelay_NATKeyedByClientAddr verifies two source ports on one association
+// get independent flows for the same target. Keying on the target alone would
+// share a single entry, and the reverse relay would deliver every response to
+// whichever source port opened the flow first.
+func TestUDPRelay_NATKeyedByClientAddr(t *testing.T) {
+	relay, err := newUDPRelayWithListener(
+		net.ParseIP("127.0.0.1"),
+		nil,
+		newUDPResourceLimiter(4, 4),
+		newUDPResourceLimiter(8, 8),
+		8,
+		func(_, _ string) (net.PacketConn, error) { return &scriptedPacketConn{}, nil },
+	)
+	if err != nil {
+		t.Fatalf("newUDPRelayWithListener() error = %v", err)
+	}
+	defer relay.Close()
+
+	relay.getRoute = func(host string) (transport.Transport, error) {
+		return &targetAwareTransport{
+			conn:   newBlockingPacketConn(),
+			target: testPacketAddr(net.JoinHostPort(host, "53")),
+		}, nil
+	}
+
+	const target = "127.0.0.1:53"
+	clientA := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1111}
+	clientB := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 2222}
+
+	entryA, err := relay.getOrCreateNAT(target, clientA)
+	if err != nil {
+		t.Fatalf("getOrCreateNAT(clientA) error = %v", err)
+	}
+	entryB, err := relay.getOrCreateNAT(target, clientB)
+	if err != nil {
+		t.Fatalf("getOrCreateNAT(clientB) error = %v", err)
+	}
+	if entryA == entryB {
+		t.Fatal("both client ports share a NAT entry; responses would go to the wrong port")
+	}
+
+	// The same client port must still reuse its own entry.
+	again, err := relay.getOrCreateNAT(target, clientA)
+	if err != nil {
+		t.Fatalf("getOrCreateNAT(clientA) repeat error = %v", err)
+	}
+	if again != entryA {
+		t.Error("same client port did not reuse its NAT entry")
+	}
+}
+
+// TestReverseRelay_DropsSpoofedSource verifies a datagram whose source is not the
+// flow's target is dropped rather than relayed to the client tagged with the
+// sender's address.
+func TestReverseRelay_DropsSpoofedSource(t *testing.T) {
+	relaySock := &scriptedPacketConn{}
+	relay := &UDPRelay{relay: relaySock, done: make(chan struct{})}
+
+	target := &net.UDPAddr{IP: net.ParseIP("1.2.3.4"), Port: 53}
+	outbound := &scriptedPacketConn{reads: []readEvent{
+		{data: []byte("SPOOF"), addr: &net.UDPAddr{IP: net.ParseIP("6.6.6.6"), Port: 53}},
+		{data: []byte("SPOOF"), addr: &net.UDPAddr{IP: net.ParseIP("1.2.3.4"), Port: 9999}},
+		{data: []byte("PONG"), addr: target},
+	}}
+	entry := &natEntry{conn: outbound, targetAddr: target}
+
+	relay.reverseRelay(entry, natKey(testClientAddr(), "1.2.3.4:53"), testClientAddr(), "1.2.3.4:53")
+
+	if relaySock.writeCount() != 1 {
+		t.Fatalf("writes to client = %d, want 1 (spoofed datagrams must be dropped)", relaySock.writeCount())
+	}
+	got := relaySock.writes[0]
+	hdr, err := ParseUDPHeader(got)
+	if err != nil {
+		t.Fatalf("relayed datagram header parse: %v", err)
+	}
+	if string(got[hdr.DataOffset:]) != "PONG" {
+		t.Errorf("relayed payload = %q, want PONG", got[hdr.DataOffset:])
+	}
+}
+
+// TestSourceMatchesTarget covers the filter's edge cases, including the domain
+// target used by proxied egress where no IP comparison is possible.
+func TestSourceMatchesTarget(t *testing.T) {
+	target := &net.UDPAddr{IP: net.ParseIP("1.2.3.4"), Port: 53}
+	tests := []struct {
+		name   string
+		src    net.Addr
+		target net.Addr
+		want   bool
+	}{
+		{"exact match", &net.UDPAddr{IP: net.ParseIP("1.2.3.4"), Port: 53}, target, true},
+		{"wrong ip", &net.UDPAddr{IP: net.ParseIP("6.6.6.6"), Port: 53}, target, false},
+		{"wrong port", &net.UDPAddr{IP: net.ParseIP("1.2.3.4"), Port: 9999}, target, false},
+		{"v4 in v6 form", &net.UDPAddr{IP: net.ParseIP("::ffff:1.2.3.4"), Port: 53}, target, true},
+		{"domain target accepted", &net.UDPAddr{IP: net.ParseIP("1.2.3.4"), Port: 53}, testPacketAddr("example.com:53"), true},
+		{"domain source accepted", testPacketAddr("example.com:53"), target, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sourceMatchesTarget(tt.src, tt.target); got != tt.want {
+				t.Errorf("sourceMatchesTarget() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestUDPSettings_Disable verifies the config kill switch refuses new relays so
+// handleAssociate can report "command not supported" and clients fall back to TCP.
+func TestUDPSettings_Disable(t *testing.T) {
+	t.Cleanup(func() { SetUDPSettings(UDPSettings{}) })
+
+	SetUDPSettings(UDPSettings{Disable: true})
+	if !UDPDisabled() {
+		t.Fatal("UDPDisabled() = false after Disable")
+	}
+	if _, err := NewUDPRelay(nil, nil); !errors.Is(err, ErrUDPDisabled) {
+		t.Fatalf("NewUDPRelay() error = %v, want ErrUDPDisabled", err)
+	}
+
+	SetUDPSettings(UDPSettings{})
+	if UDPDisabled() {
+		t.Fatal("UDPDisabled() = true after reset")
+	}
+	relay, err := NewUDPRelay(nil, nil)
+	if err != nil {
+		t.Fatalf("NewUDPRelay() after reset error = %v", err)
+	}
+	relay.Close()
+}
+
+// TestUDPSettings_LimitsApplied verifies configured limits replace the defaults
+// and that zero values fall back to them.
+func TestUDPSettings_LimitsApplied(t *testing.T) {
+	t.Cleanup(func() { SetUDPSettings(UDPSettings{}) })
+
+	SetUDPSettings(UDPSettings{MaxAssociations: 1, MaxAssociationsPerClient: 1, MaxNATEntries: 3})
+	if _, _, maxNAT := udpLimiters(); maxNAT != 3 {
+		t.Errorf("configured maxNAT = %d, want 3", maxNAT)
+	}
+
+	first, err := NewUDPRelay(net.ParseIP("127.0.0.1"), nil)
+	if err != nil {
+		t.Fatalf("first NewUDPRelay() error = %v", err)
+	}
+	defer first.Close()
+	if _, err := NewUDPRelay(net.ParseIP("127.0.0.1"), nil); !errors.Is(err, ErrUDPAssociationLimit) {
+		t.Fatalf("second NewUDPRelay() error = %v, want ErrUDPAssociationLimit", err)
+	}
+
+	SetUDPSettings(UDPSettings{})
+	if _, _, maxNAT := udpLimiters(); maxNAT != defaultMaxNATEntries {
+		t.Errorf("reset maxNAT = %d, want %d", maxNAT, defaultMaxNATEntries)
+	}
+}
+
+// TestRelayBindAddress verifies the relay binds where the client reached us
+// rather than on a dual-stack wildcard across every interface.
+//
+// The preferIPv4 cases matter: that setting governs egress to proxied
+// destinations, not this client-facing socket. Honoring it here would bind an
+// IPv4 socket for a client that reached us over IPv6, while the SOCKS reply
+// still advertises the IPv6 address — an association the client cannot use.
+func TestRelayBindAddress(t *testing.T) {
+	tests := []struct {
+		name        string
+		localIP     net.IP
+		preferIPv4  bool
+		wantNetwork string
+		wantAddr    string
+	}{
+		{"ipv4 local", net.ParseIP("192.0.2.10"), false, "udp4", "192.0.2.10:0"},
+		{"ipv6 local", net.ParseIP("2001:db8::1"), false, "udp6", "[2001:db8::1]:0"},
+		{"ipv6 local with ipv6 egress disabled", net.ParseIP("2001:db8::1"), true, "udp6", "[2001:db8::1]:0"},
+		{"ipv4 local with ipv6 egress disabled", net.ParseIP("192.0.2.10"), true, "udp4", "192.0.2.10:0"},
+		// A wildcard bind would report an unspecified BND.ADDR, which the client
+		// cannot send datagrams to; loopback is both usable and narrower.
+		{"unspecified falls back to loopback", net.IPv4zero, false, "udp4", "127.0.0.1:0"},
+		{"nil falls back to loopback", nil, false, "udp4", "127.0.0.1:0"},
+		{"nil falls back to loopback with ipv6 egress disabled", nil, true, "udp4", "127.0.0.1:0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.preferIPv4 {
+				transport.DisableIPv6()
+				t.Cleanup(transport.EnableIPv6)
+			}
+			network, addr := relayBindAddress(tt.localIP)
+			if network != tt.wantNetwork || addr != tt.wantAddr {
+				t.Errorf("relayBindAddress() = %s/%s, want %s/%s", network, addr, tt.wantNetwork, tt.wantAddr)
+			}
+		})
+	}
+}
+
+// TestRelayBindAddressReachableFromClient is an end-to-end check that the
+// address advertised to the client is actually one the relay socket receives on.
+// A family mismatch between bind and advertised address would silently produce
+// an association that drops every datagram.
+func TestRelayBindAddressReachableFromClient(t *testing.T) {
+	transport.DisableIPv6()
+	t.Cleanup(transport.EnableIPv6)
+
+	for _, localIP := range []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")} {
+		t.Run(localIP.String(), func(t *testing.T) {
+			network, bindAddr := relayBindAddress(localIP)
+			pc, err := net.ListenPacket(network, bindAddr)
+			if err != nil {
+				t.Skipf("cannot bind %s/%s on this host: %v", network, bindAddr, err)
+			}
+			defer pc.Close()
+
+			client, err := net.ListenPacket(network, "")
+			if err != nil {
+				t.Fatalf("client listen: %v", err)
+			}
+			defer client.Close()
+
+			if _, err := client.WriteTo([]byte("ping"), pc.LocalAddr()); err != nil {
+				t.Fatalf("client write to advertised addr %s: %v", pc.LocalAddr(), err)
+			}
+			_ = pc.SetReadDeadline(time.Now().Add(2 * time.Second))
+			buf := make([]byte, 16)
+			n, _, err := pc.ReadFrom(buf)
+			if err != nil {
+				t.Fatalf("relay did not receive on its advertised address %s: %v", pc.LocalAddr(), err)
+			}
+			if string(buf[:n]) != "ping" {
+				t.Errorf("relay read %q, want ping", buf[:n])
+			}
+		})
+	}
+}
+
+// TestNATKey verifies flow identity includes the client address, and degrades
+// safely when the client address is unknown.
+func TestNATKey(t *testing.T) {
+	clientA := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1111}
+	clientB := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 2222}
+	const target = "1.2.3.4:53"
+
+	if natKey(clientA, target) == natKey(clientB, target) {
+		t.Error("different client ports produced the same NAT key")
+	}
+	if natKey(clientA, target) != natKey(clientA, target) {
+		t.Error("NAT key is not stable for the same client and target")
+	}
+	if natKey(clientA, target) == natKey(clientA, "1.2.3.4:54") {
+		t.Error("different targets produced the same NAT key")
+	}
+	if got := natKey(nil, target); got != target {
+		t.Errorf("natKey(nil, %q) = %q, want %q", target, got, target)
 	}
 }

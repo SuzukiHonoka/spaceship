@@ -45,7 +45,7 @@ func TestUDPRelay_Stress(t *testing.T) {
 		}(es)
 	}
 
-	relay, err := NewUDPRelay(nil)
+	relay, err := NewUDPRelay(nil, nil)
 	if err != nil {
 		t.Fatalf("failed to create udp relay: %v", err)
 	}

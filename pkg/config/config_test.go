@@ -2,13 +2,17 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/socks"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
 	configClient "github.com/SuzukiHonoka/spaceship/v2/pkg/config/client"
+	"github.com/SuzukiHonoka/spaceship/v2/pkg/config/server"
 )
 
 func TestClientIdleTimeoutRemainsIntAPI(t *testing.T) {
@@ -322,5 +326,195 @@ func TestRoutesHasDefault(t *testing.T) {
 	}
 	if !routesHasDefault(router.Routes{router.RouteClientDefault}) {
 		t.Fatal("client default route should report default")
+	}
+}
+
+// TestApply_BufferSizeBounds verifies the transport buffer is validated against
+// the gRPC message limit. A payload chunk is one full buffer wrapped in a
+// protobuf envelope, so an oversized buffer would fail every send at runtime
+// rather than at startup.
+func TestApply_BufferSizeBounds(t *testing.T) {
+	oldBuffer := transport.GetBufferSize()
+	t.Cleanup(func() {
+		transport.EnableIPv6()
+		transport.SetBufferSize(uint16(oldBuffer / 1024))
+	})
+
+	maxKB := rpc.MaxTransportBufferSize / 1024
+	tests := []struct {
+		name    string
+		buffer  uint16
+		wantErr bool
+	}{
+		{"default omitted", 0, false},
+		{"small", 32, false},
+		{"at limit", uint16(maxKB), false},
+		{"just over limit", uint16(maxKB) + 1, true},
+		{"absurd", 65535, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := NewFromString(fmt.Sprintf(
+				`{"role":"client","log":"skip","uuid":"u","buffer":%d}`, tt.buffer))
+			if err != nil {
+				t.Fatalf("NewFromString() error = %v", err)
+			}
+			err = cfg.Apply()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Apply() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if tt.buffer > 0 && transport.GetBufferSize() != int(tt.buffer)*1024 {
+				t.Errorf("buffer size = %d, want %d", transport.GetBufferSize(), int(tt.buffer)*1024)
+			}
+		})
+	}
+}
+
+// TestApply_UDPSettings verifies the optional udp section reaches the SOCKS
+// relay, including the kill switch, and that negative limits are rejected.
+func TestApply_UDPSettings(t *testing.T) {
+	t.Cleanup(func() {
+		transport.EnableIPv6()
+		socks.SetUDPSettings(socks.UDPSettings{})
+	})
+
+	// Omitted section leaves UDP enabled.
+	cfg, err := NewFromString(`{"role":"client","log":"skip","uuid":"u"}`)
+	if err != nil {
+		t.Fatalf("NewFromString() error = %v", err)
+	}
+	if err := cfg.Apply(); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if socks.UDPDisabled() {
+		t.Error("UDP disabled with no udp section present")
+	}
+
+	// Explicit disable reaches the relay.
+	cfg, err = NewFromString(`{"role":"client","log":"skip","uuid":"u","udp":{"disable":true}}`)
+	if err != nil {
+		t.Fatalf("NewFromString() error = %v", err)
+	}
+	if err := cfg.Apply(); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if !socks.UDPDisabled() {
+		t.Error("udp.disable did not reach the relay")
+	}
+
+	// Negative limits are rejected rather than silently defaulted.
+	cfg, err = NewFromString(`{"role":"client","log":"skip","uuid":"u","udp":{"max_associations":-1}}`)
+	if err != nil {
+		t.Fatalf("NewFromString() error = %v", err)
+	}
+	if err := cfg.Apply(); err == nil {
+		t.Error("Apply() error = nil for negative udp.max_associations")
+	}
+}
+
+// TestApply_UDPSettingsResetOnReload verifies a reload that drops the udp
+// section restores defaults instead of leaving a previously configured
+// "disable" in effect, matching how ipv6 is re-applied both ways.
+func TestApply_UDPSettingsResetOnReload(t *testing.T) {
+	t.Cleanup(func() {
+		transport.EnableIPv6()
+		socks.SetUDPSettings(socks.UDPSettings{})
+	})
+
+	disabled, err := NewFromString(`{"role":"client","log":"skip","uuid":"u","udp":{"disable":true}}`)
+	if err != nil {
+		t.Fatalf("NewFromString() error = %v", err)
+	}
+	if err := disabled.Apply(); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if !socks.UDPDisabled() {
+		t.Fatal("udp.disable did not take effect")
+	}
+
+	// Reload without the section: UDP must come back on.
+	reloaded, err := NewFromString(`{"role":"client","log":"skip","uuid":"u"}`)
+	if err != nil {
+		t.Fatalf("NewFromString() error = %v", err)
+	}
+	if err := reloaded.Apply(); err != nil {
+		t.Fatalf("Apply() on reload error = %v", err)
+	}
+	if socks.UDPDisabled() {
+		t.Error("udp stayed disabled after a reload that dropped the udp section")
+	}
+}
+
+func TestNewFromConfigFile(t *testing.T) {
+	t.Cleanup(transport.EnableIPv6)
+
+	dir := t.TempDir()
+	path := dir + "/cfg.json"
+	raw := `{"role":"client","log":"skip","uuid":"6f1a6bb5-30f1-4a2e-9d0e-3a1c5f2b7e10","server_addr":"127.0.0.1:1"}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := NewFromConfigFile(path)
+	if err != nil {
+		t.Fatalf("NewFromConfigFile() error = %v", err)
+	}
+	if cfg.Role != RoleClient {
+		t.Fatalf("Role = %s, want client", cfg.Role)
+	}
+	if cfg.UUID != "6f1a6bb5-30f1-4a2e-9d0e-3a1c5f2b7e10" {
+		t.Fatalf("UUID = %s", cfg.UUID)
+	}
+	if err := cfg.Apply(); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+}
+
+func TestNewFromConfigFileMissing(t *testing.T) {
+	_, err := NewFromConfigFile(t.TempDir() + "/nope.json")
+	if err == nil {
+		t.Fatal("NewFromConfigFile() accepted missing file")
+	}
+}
+
+func TestNewFromConfigFileInvalidJSON(t *testing.T) {
+	path := t.TempDir() + "/bad.json"
+	if err := os.WriteFile(path, []byte(`{`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := NewFromConfigFile(path)
+	if err == nil {
+		t.Fatal("NewFromConfigFile() accepted invalid JSON")
+	}
+}
+
+func TestNewFromStringInvalidJSON(t *testing.T) {
+	_, err := NewFromString(`{`)
+	if err == nil {
+		t.Fatal("NewFromString() accepted invalid JSON")
+	}
+}
+
+func TestApply_NilEmbeddedConfigs(t *testing.T) {
+	t.Cleanup(transport.EnableIPv6)
+	cfg := &MixedConfig{
+		Role:    RoleServer,
+		LogMode: "skip",
+		Server: &server.Server{
+			Listen: "127.0.0.1:0",
+			Users:  server.Users{{UUID: "u"}},
+		},
+	}
+	// Client nil — ensureEmbeddedConfigs must fill it; Server already set.
+	cfg.Client = nil
+	if err := cfg.Apply(); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if cfg.Client == nil {
+		t.Fatal("ensureEmbeddedConfigs did not populate Client")
 	}
 }

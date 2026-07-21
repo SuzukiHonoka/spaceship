@@ -35,7 +35,10 @@ func (s *Statistic) AddRx(delta uint64) {
 }
 
 type Forwarder struct {
-	ctx           context.Context
+	ctx context.Context
+	// cancel aborts the underlying stream. Used to unblock a handshake Send that
+	// has exceeded its deadline.
+	cancel        context.CancelFunc
 	stream        proxy.Proxy_ProxyClient
 	writer        io.Writer
 	reader        io.Reader
@@ -46,9 +49,13 @@ type Forwarder struct {
 	Statistic *Statistic
 }
 
-func NewForwarder(ctx context.Context, s proxy.Proxy_ProxyClient, w io.Writer, r io.Reader) *Forwarder {
+func NewForwarder(ctx context.Context, cancel context.CancelFunc, s proxy.Proxy_ProxyClient, w io.Writer, r io.Reader) *Forwarder {
+	if cancel == nil {
+		cancel = func() {}
+	}
 	return &Forwarder{
 		ctx:       ctx,
+		cancel:    cancel,
 		stream:    s,
 		writer:    w,
 		reader:    r,
@@ -107,10 +114,17 @@ func (f *Forwarder) CopyTargetToSRC(ctx context.Context) error {
 	}()
 
 	select {
-	case <-ctx.Done():
-		return ctx.Err()
 	case err := <-errCh:
 		return err
+	case <-ctx.Done():
+		// Abort the stream so the receive goroutine unblocks from RecvMsg, then
+		// wait for it to exit. Returning early would leave it writing to the
+		// caller's io.Writer after Proxy has already returned, at which point the
+		// caller is entitled to treat the session as finished and reuse or close
+		// that writer.
+		f.cancel()
+		<-errCh
+		return ctx.Err()
 	}
 }
 
@@ -161,6 +175,14 @@ func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) error {
 	return nil
 }
 
+// CopySRCtoTarget pumps the caller's reader into the stream.
+//
+// Unlike the receive direction, a pending Read on a caller-owned io.Reader
+// cannot be interrupted from here — only the caller closing it will unblock the
+// goroutine. So on cancellation this returns while that read is still
+// outstanding, and the caller must keep the reader valid until it closes it.
+// Every caller satisfies this today by deferring Close on the connection it
+// passed in.
 func (f *Forwarder) CopySRCtoTarget(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {
@@ -204,7 +226,7 @@ func (f *Forwarder) Start(addr string, localAddrChan chan<- string) error {
 			},
 		},
 	}
-	if err := f.stream.Send(handshake); err != nil {
+	if err := sendHandshake(f.stream, handshake, f.cancel, rpc.GeneralTimeout, addr); err != nil {
 		return fmt.Errorf("rpc: send handshake to server: %s failed: %w", addr, err)
 	}
 
@@ -237,6 +259,12 @@ func (f *Forwarder) Start(addr string, localAddrChan chan<- string) error {
 		defer t.Stop()
 
 		select {
+		case <-ctx.Done():
+			// A sibling goroutine already failed the session — an auth rejection,
+			// an unreachable server, a refused target. Without this case the ack
+			// timer would still run to completion, so every fast failure would
+			// cost the caller the full timeout before it saw the real error.
+			return ctx.Err()
 		case <-t.C:
 			// timed out
 			return fmt.Errorf("rpc: server to %s ack timed out: %w", addr, os.ErrDeadlineExceeded)
@@ -244,7 +272,11 @@ func (f *Forwarder) Start(addr string, localAddrChan chan<- string) error {
 			if !ok {
 				return fmt.Errorf("rpc: server to %s ack failed", addr)
 			}
-			localAddrChan <- localAddr
+			select {
+			case localAddrChan <- localAddr:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 			// done
 			//log.Printf("rpc: server -> %s -> %s success", req.Host, localAddr)
 		}

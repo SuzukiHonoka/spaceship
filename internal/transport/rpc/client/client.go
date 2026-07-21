@@ -38,6 +38,11 @@ type Client struct {
 	DoneFunc func() error
 }
 
+// Compile-time guarantee that the proxy transport can carry UDP. router's
+// Egress.SupportsUDP claims this for EgressProxy without being able to construct
+// one cheaply, so the assertion lives here.
+var _ transport.PacketDialer = (*Client)(nil)
+
 func SetUUID(uid string) {
 	clientMu.Lock()
 	uuidVal = uid
@@ -119,7 +124,7 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 		return fmt.Errorf("setup grpc credential failed: %w", err)
 	}
 
-	params := NewParams(server, append(rpc.DialOptions,
+	params := NewParams(server, append(rpc.DialOptions(),
 		grpc.WithTransportCredentials(credential),
 		grpc.WithIdleTimeout(transport.GetIdleTimeout()),
 		grpc.WithUnaryInterceptor(rpc.UnaryClientAuthInterceptor(getUUID)),
@@ -242,22 +247,9 @@ func (c *Client) DialPacket(network, addr string) (net.PacketConn, error) {
 	// Bound the handshake so a stalled stream cannot block the caller — and, in
 	// the SOCKS UDP relay, a pool worker — indefinitely. ctx governs the stream's
 	// long-lived context, which outlives this handshake; only the Send is timed.
-	// The channel is buffered so the goroutine never leaks even if we time out.
-	timeout := transport.GetDialTimeout()
-	sendErr := make(chan error, 1)
-	go func() { sendErr <- stream.Send(req) }()
-
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case err := <-sendErr:
-		if err != nil {
-			cancel()
-			return nil, fmt.Errorf("rpc client: failed to send UDP handshake: %w", err)
-		}
-	case <-timer.C:
-		cancel() // aborts the stream, unblocking the goroutine's Send
-		return nil, fmt.Errorf("rpc client: UDP handshake timed out after %s", timeout)
+	if err := sendHandshake(stream, req, cancel, transport.GetDialTimeout(), addr); err != nil {
+		cancel()
+		return nil, fmt.Errorf("rpc client: UDP %w", err)
 	}
 
 	return NewStreamPacketConn(ctx, stream, cancel, addr), nil
@@ -278,7 +270,7 @@ func (c *Client) Proxy(ctx context.Context, addr string, localAddr chan<- string
 	start := time.Now()
 
 	//log.Printf("sending proto to rpc: %s", req.Host)
-	f := NewForwarder(sessionCtx, stream, w, r)
+	f := NewForwarder(sessionCtx, cancel, stream, w, r)
 	if err = f.Start(addr, localAddr); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("rpc client: proto failed: %w", err)
 	}

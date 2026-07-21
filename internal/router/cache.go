@@ -60,6 +60,21 @@ func GetRoute(dst string) (transport.Transport, error) {
 	return routesCache.GetRoute(key)
 }
 
+// AnyRouteSupportsUDP reports whether any installed route has an egress capable
+// of carrying UDP. When none can, SOCKS5 UDP ASSOCIATE is refused up front so
+// clients fall back to TCP rather than holding an association whose every
+// datagram would be dropped at dial time.
+func AnyRouteSupportsUDP() bool {
+	routesMu.RLock()
+	defer routesMu.RUnlock()
+	for _, route := range routesCache {
+		if route != nil && route.Destination.SupportsUDP() {
+			return true
+		}
+	}
+	return false
+}
+
 func GenerateCache() error {
 	for {
 		routesMu.RLock()
