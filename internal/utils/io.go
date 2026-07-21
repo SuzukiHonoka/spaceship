@@ -1,16 +1,47 @@
 package utils
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
+	"os"
+	"strings"
 )
 
-// Close closes the closer
+// Close closes closer and logs unexpected errors.
+//
+// "Already closed" and other benign teardown races are silent: concurrent
+// proxy paths often defer Close on the same conn after the peer or a sibling
+// goroutine has already closed it, which surfaces as net.ErrClosed /
+// "use of closed network connection". Logging those as failures is noise.
 func Close(closer io.Closer) {
-	if err := closer.Close(); err != nil {
-		log.Printf("closer: %v close failed, err=%s", closer, err)
+	if closer == nil {
+		return
 	}
+	if err := closer.Close(); err != nil && !isBenignCloseError(err) {
+		// %T avoids dumping opaque conn internals (&{{0x...}}).
+		log.Printf("close %T failed: %v", closer, err)
+	}
+}
+
+// isBenignCloseError reports close results that are expected during normal
+// connection teardown and should not be logged.
+func isBenignCloseError(err error) bool {
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrClosedPipe) ||
+		errors.Is(err, os.ErrClosed) {
+		return true
+	}
+	// Older stacks / wrappers may not wrap net.ErrClosed.
+	msg := err.Error()
+	return strings.Contains(msg, "use of closed network connection") ||
+		strings.Contains(msg, "connection reset by peer")
 }
 
 func PrettyByteSize(b float64) string {
