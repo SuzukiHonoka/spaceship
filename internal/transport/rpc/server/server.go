@@ -148,7 +148,13 @@ func (s *Server) Proxy(stream proto.Proxy_ProxyServer) error {
 				return nil
 			}
 		}
-		log.Printf("rpc: forwarder error=%v", err)
+		// One readable line, e.g.:
+		//   rpc: proxy 199.96.58.85:443 failed: dial: dial tcp …: connection timed out
+		if target := f.Target(); target != "" {
+			log.Printf("rpc: proxy %s failed: %v", target, err)
+		} else {
+			log.Printf("rpc: proxy failed: %v", err)
+		}
 	}
 	// send session end to client
 	return stream.Send(&proto.ProxyDST{
