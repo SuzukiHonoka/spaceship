@@ -90,7 +90,7 @@ func main() {
 			// Restore normal log output
 			log.SetOutput(os.Stderr)
 		}
-		log.Fatalf("launch failed, err=%v", err)
+		log.Fatalf("launch failed: %v", err)
 	}
 }
 

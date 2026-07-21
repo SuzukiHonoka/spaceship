@@ -36,3 +36,21 @@ func TestCloseAll(t *testing.T) {
 	pr, pw := io.Pipe()
 	CloseAll(pr, pw, "skip", nil)
 }
+
+type countCloser struct {
+	n int
+}
+
+func (c *countCloser) Close() error {
+	c.n++
+	return nil
+}
+
+func TestCloseAllDedupesSameCloser(t *testing.T) {
+	c := &countCloser{}
+	// CONNECT path: src and dst are the same client conn.
+	CloseAll(c, c, c)
+	if c.n != 1 {
+		t.Fatalf("Close count = %d, want 1", c.n)
+	}
+}

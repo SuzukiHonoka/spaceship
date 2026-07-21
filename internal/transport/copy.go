@@ -54,10 +54,28 @@ func CloseWriteOrClose(v any) {
 }
 
 // CloseAll closes every value that implements io.Closer.
+//
+// Identical closer values (same interface dynamic type and pointer) are only
+// closed once. HTTP CONNECT passes the same conn as both src and dst into
+// Proxy, and without dedupe that would close the client socket twice.
 func CloseAll(values ...any) {
+	seen := make([]io.Closer, 0, len(values))
 	for _, value := range values {
-		if closer, ok := value.(io.Closer); ok {
-			_ = closer.Close()
+		closer, ok := value.(io.Closer)
+		if !ok || closer == nil {
+			continue
 		}
+		dup := false
+		for _, prev := range seen {
+			if prev == closer {
+				dup = true
+				break
+			}
+		}
+		if dup {
+			continue
+		}
+		seen = append(seen, closer)
+		_ = closer.Close()
 	}
 }

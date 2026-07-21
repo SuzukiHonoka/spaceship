@@ -61,7 +61,7 @@ func NewServer(ctx context.Context, users config.Users, ssl *config.SSL, dnsConf
 	if ssl != nil {
 		tlsConfig, err := buildTLSConfig(ssl.PublicKey, ssl.PrivateKey)
 		if err != nil {
-			return nil, fmt.Errorf("setup tls failed, err=%w", err)
+			return nil, fmt.Errorf("setup tls: %w", err)
 		}
 		log.Println("using secure grpc [h2]")
 		transportOption = grpc.Creds(credentials.NewTLS(tlsConfig))
@@ -103,7 +103,7 @@ func (s *Server) ListenAndServe(addr string) error {
 		return fmt.Errorf("listen at %s error %w", addr, err)
 	}
 	defer utils.Close(listener)
-	log.Printf("rpc started at %s", addr)
+	log.Printf("rpc: listening at %s", addr)
 
 	serveDone := make(chan struct{})
 	go func() {
@@ -148,7 +148,13 @@ func (s *Server) Proxy(stream proto.Proxy_ProxyServer) error {
 				return nil
 			}
 		}
-		log.Printf("rpc: forwarder error=%v", err)
+		// One readable line, e.g.:
+		//   rpc: proxy 199.96.58.85:443 failed: dial: dial tcp …: connection timed out
+		if target := f.Target(); target != "" {
+			log.Printf("rpc: proxy %s failed: %v", target, err)
+		} else {
+			log.Printf("rpc: proxy failed: %v", err)
+		}
 	}
 	// send session end to client
 	return stream.Send(&proto.ProxyDST{

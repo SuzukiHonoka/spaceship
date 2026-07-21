@@ -40,10 +40,10 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	// the lifetime of the DNS server (which starves other connections).
 	client, err := rpcClient.New()
 	if err != nil {
-		log.Printf("DNS: failed to acquire RPC client: %v", err)
+		log.Printf("dns: acquire client failed: %v", err)
 		m.SetRcode(r, dns.RcodeServerFailure)
 		if writeErr := w.WriteMsg(m); writeErr != nil {
-			log.Printf("Failed to write DNS error response: %v", writeErr)
+			log.Printf("dns: write response failed: %v", writeErr)
 		}
 		return
 	}
@@ -66,10 +66,10 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	defer cancel()
 	results, rcode, err := client.DnsResolve(ctx, dnsReqList)
 	if err != nil {
-		log.Printf("DNS resolution via RPC failed: %v", err)
+		log.Printf("dns: resolve via rpc failed: %v", err)
 		m.SetRcode(r, dns.RcodeServerFailure)
 		if err = w.WriteMsg(m); err != nil {
-			log.Printf("Failed to write DNS response: %v", err)
+			log.Printf("dns: write response failed: %v", err)
 		}
 		return
 	}
@@ -78,25 +78,13 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	m.Answer = results
 	m.Rcode = rcode
 
-	// Add all returned DNS records to the answer section
-	//for _, rr := range results {
-	//	// Check if this record matches any of our questions
-	//	for _, question := range r.Question {
-	//		if dns.Fqdn(question.Name) == dns.Fqdn(rr.Header().Name) &&
-	//			question.Qtype == rr.Header().Rrtype {
-	//			m.Answer = append(m.Answer, rr)
-	//		}
-	//	}
-	//}
-
-	//log.Printf("Returning %d DNS answers", len(m.Answer))
 	if err = w.WriteMsg(m); err != nil {
-		log.Printf("Failed to write DNS response: %v", err)
+		log.Printf("dns: write response failed: %v", err)
 	}
 }
 
 func (s *Server) Start(ctx context.Context) error {
-	log.Printf("dns will listen at %s", s.srv.Addr)
+	log.Printf("dns: listening at %s", s.srv.Addr)
 
 	// Create error channel for server errors
 	serverErr := make(chan error, 1)

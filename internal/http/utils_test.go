@@ -3,6 +3,7 @@ package http
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -47,6 +48,30 @@ func TestServeError(t *testing.T) {
 	t.Run("nil writer does not panic", func(t *testing.T) {
 		ServeError(nil, errors.New("boom"))
 	})
+
+	t.Run("context.Canceled is a no-op", func(t *testing.T) {
+		var buf bytes.Buffer
+		ServeError(&buf, context.Canceled)
+		if buf.Len() != 0 {
+			t.Errorf("wrote %q for context.Canceled, want nothing", buf.String())
+		}
+	})
+}
+
+func TestServeProxyError_Writes503WithHost(t *testing.T) {
+	var buf bytes.Buffer
+	ServeProxyError(&buf, "199.96.58.85:443", errors.New("server ack timeout"))
+	if !strings.Contains(buf.String(), "503") {
+		t.Fatalf("response %q missing 503", buf.String())
+	}
+}
+
+func TestServeProxyError_CanceledSkipsResponse(t *testing.T) {
+	var buf bytes.Buffer
+	ServeProxyError(&buf, "example.com:443", context.Canceled)
+	if buf.Len() != 0 {
+		t.Fatalf("wrote %q for canceled, want empty", buf.String())
+	}
 }
 
 func TestBuildRemoteAddr(t *testing.T) {

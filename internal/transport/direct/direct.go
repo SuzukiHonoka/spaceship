@@ -119,7 +119,9 @@ func (d *Direct) Proxy(ctx context.Context, addr string, localAddr chan<- string
 
 	conn, err := d.Dial(transport.GetNetwork(), addr)
 	if err != nil {
-		return fmt.Errorf("direct: failed to dial: %w", err)
+		// net.DialTimeout already returns "dial tcp …: …"; don't re-wrap as
+		// "direct: failed to dial: dial tcp …" (server logs add "dial:" once).
+		return err
 	}
 	localAddr <- conn.LocalAddr().String()
 	defer utils.Close(conn)

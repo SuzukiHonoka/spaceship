@@ -56,12 +56,20 @@ type Forwarder struct {
 	Ctx    context.Context
 	Stream proto.Proxy_ProxyServer
 	Conn   net.Conn
+	// target is the dial address from the client header (host:port). Set during
+	// handshake for readable server logs even when dial fails.
+	target string
 	// network is the dial network chosen during handshake ("tcp"/"udp"/…).
 	// Used to decide whether an empty payload ends the session (TCP) or is a
 	// valid zero-length datagram (UDP).
 	network   string
 	Ack       chan struct{}
 	closeOnce sync.Once
+}
+
+// Target returns the dial address from the last handshake, or empty if none.
+func (f *Forwarder) Target() string {
+	return f.target
 }
 
 func NewForwarder(ctx context.Context, stream proto.Proxy_ProxyServer) *Forwarder {
@@ -103,7 +111,7 @@ func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 		},
 	}
 	if err = f.Stream.Send(msgAccept); err != nil {
-		return fmt.Errorf("send local addr to client error: %w", err)
+		return fmt.Errorf("send accept: %w", err)
 	}
 
 	// Closing the target connection is sufficient to interrupt a blocked Read.
@@ -172,17 +180,18 @@ func (f *Forwarder) handshake() error {
 
 	network, addr := resolveTarget(header)
 	f.network = network
+	f.target = addr
 
 	// Auth is handled by the stream interceptor.
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		return fmt.Errorf("invalid addr %s: %w", addr, err)
+		return fmt.Errorf("invalid address %q: %w", addr, err)
 	}
 	route, err := router.GetRoute(host)
 	if err != nil {
-		return fmt.Errorf("get route for %s error: %w", host, err)
+		return fmt.Errorf("route: %w", err)
 	}
-	log.Printf("proxy accepted: [%s] %s -> %s", network, host, route)
+	log.Printf("rpc: proxy accepted [%s] %s -> %s", network, host, route)
 
 	// dial to target
 	f.Conn, err = route.Dial(network, addr)
@@ -190,7 +199,8 @@ func (f *Forwarder) handshake() error {
 		_ = f.Stream.Send(&proto.ProxyDST{
 			Status: proto.ProxyStatus_Error,
 		})
-		return fmt.Errorf("dial target error: %w", err)
+		// Keep the dial error text from net (includes host); outer log adds target once.
+		return fmt.Errorf("dial: %w", err)
 	}
 	return nil
 }
@@ -198,9 +208,9 @@ func (f *Forwarder) handshake() error {
 func (f *Forwarder) CopyClientToTarget(ctx context.Context) error {
 	defer close(f.Ack)
 
-	// do the handshake first
+	// do the handshake first — return as-is (no "handshake error:" wrapper).
 	if err := f.handshake(); err != nil {
-		return fmt.Errorf("handshake error: %w", err)
+		return err
 	}
 
 	// trigger read
@@ -267,7 +277,12 @@ func (f *Forwarder) Start() error {
 			if err == io.EOF {
 				return err
 			}
-			return fmt.Errorf("copy client to target error: %w", err)
+			// Handshake failures already carry a short prefix (dial:/route:…).
+			// Mid-session write failures get an "upload:" tag.
+			if f.Conn == nil {
+				return err
+			}
+			return fmt.Errorf("upload: %w", err)
 		}
 		return nil
 	})
@@ -276,7 +291,7 @@ func (f *Forwarder) Start() error {
 			if err == io.EOF {
 				return err
 			}
-			return fmt.Errorf("copy target to client error: %w", err)
+			return fmt.Errorf("download: %w", err)
 		}
 		return nil
 	})

@@ -2,9 +2,9 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +15,13 @@ import (
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+)
+
+// Sentinel errors for the TCP proxy handshake path. Outer layers (HTTP/SOCKS)
+// attach the target host when logging so messages stay one short line.
+var (
+	errServerAckTimeout = errors.New("server ack timeout")
+	errServerRejected   = errors.New("server rejected connection")
 )
 
 type Statistic struct {
@@ -227,7 +234,7 @@ func (f *Forwarder) Start(addr string, localAddrChan chan<- string) error {
 		},
 	}
 	if err := sendHandshake(f.stream, handshake, f.cancel, rpc.GeneralTimeout, addr); err != nil {
-		return fmt.Errorf("rpc: send handshake to server: %s failed: %w", addr, err)
+		return fmt.Errorf("handshake to %s: %w", addr, err)
 	}
 
 	errGroup, ctx := errgroup.WithContext(f.ctx)
@@ -237,7 +244,7 @@ func (f *Forwarder) Start(addr string, localAddrChan chan<- string) error {
 			if err == io.EOF {
 				return err
 			}
-			return fmt.Errorf("copy target to src error: %w", err)
+			return fmt.Errorf("download: %w", err)
 		}
 		return nil
 	})
@@ -248,7 +255,7 @@ func (f *Forwarder) Start(addr string, localAddrChan chan<- string) error {
 			if err == io.EOF {
 				return err
 			}
-			return fmt.Errorf("copy src to target error: %w", err)
+			return fmt.Errorf("upload: %w", err)
 		}
 		return nil
 	})
@@ -266,11 +273,13 @@ func (f *Forwarder) Start(addr string, localAddrChan chan<- string) error {
 			// cost the caller the full timeout before it saw the real error.
 			return ctx.Err()
 		case <-t.C:
-			// timed out
-			return fmt.Errorf("rpc: server to %s ack timed out: %w", addr, os.ErrDeadlineExceeded)
+			// Do not wrap os.ErrDeadlineExceeded: its Error() is "i/o timeout",
+			// which reads as a socket I/O failure rather than a missing server ack.
+			// Omit the target here — HTTP/SOCKS log the host once on the outer line.
+			return errServerAckTimeout
 		case localAddr, ok := <-f.localAddr:
 			if !ok {
-				return fmt.Errorf("rpc: server to %s ack failed", addr)
+				return errServerRejected
 			}
 			select {
 			case localAddrChan <- localAddr:

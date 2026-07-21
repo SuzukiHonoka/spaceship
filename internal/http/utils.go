@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -14,13 +15,31 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 )
 
+// ServeError logs err and writes a 503 response when the client still expects
+// HTTP framing. Prefer ServeProxyError when a target host is known.
 func ServeError(w io.Writer, err error) {
-	// errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET)
-	if err == nil || errors.Is(err, io.EOF) {
+	ServeProxyError(w, "", err)
+}
+
+// ServeProxyError logs a single readable failure line and writes 503 when
+// appropriate.
+//
+//	http: proxy example.com:443 failed: server ack timeout
+//
+// Benign terminal conditions (nil, EOF, context canceled) are silent and do
+// not write a response body — the peer is already gone or the session was
+// deliberately aborted.
+func ServeProxyError(w io.Writer, host string, err error) {
+	if err == nil || errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
 		return
 	}
 
-	log.Println(err)
+	if host != "" {
+		log.Printf("http: proxy %s failed: %v", host, err)
+	} else {
+		log.Printf("http: %v", err)
+	}
+
 	if w == nil {
 		return
 	}
@@ -30,8 +49,8 @@ func ServeError(w io.Writer, err error) {
 		return
 	}
 
-	if _, err = w.Write(MessageServiceUnavailable); err != nil {
-		log.Printf("http: write error status failed: %v", err)
+	if _, writeErr := w.Write(MessageServiceUnavailable); writeErr != nil {
+		log.Printf("http: write error status failed: %v", writeErr)
 	}
 }
 

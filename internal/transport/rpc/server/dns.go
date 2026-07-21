@@ -19,16 +19,16 @@ func (s *Server) resolveDNSRecords(fqdn string, qtype uint16) ([]dns.RR, int) {
 	// Query DNS server using the shared client (safe for concurrent use)
 	response, _, err := s.dnsClient.Exchange(m, s.dnsAddr)
 	if err != nil {
-		log.Printf("DNS resolution failed for %s using server %s: %v", fqdn, s.dnsAddr, err)
+		log.Printf("dns: resolve %s via %s failed: %v", fqdn, s.dnsAddr, err)
 		return nil, dns.RcodeServerFailure
 	}
 
 	if response == nil {
-		log.Printf("DNS resolution returned nil response for %s", fqdn)
+		log.Printf("dns: resolve %s: empty response", fqdn)
 		return nil, dns.RcodeServerFailure
 	}
 	if response.Rcode != dns.RcodeSuccess {
-		log.Printf("DNS resolution failed for %s: response code %d", fqdn, response.Rcode)
+		log.Printf("dns: resolve %s: rcode %d", fqdn, response.Rcode)
 	}
 
 	// Return all answer records

@@ -82,7 +82,7 @@ func (s *Server) Close() (err error) {
 
 // Serve is used to serve connections from a listener
 func (s *Server) Serve() error {
-	log.Printf("socks started at %s", s.listener.Addr())
+	log.Printf("socks: listening at %s", s.listener.Addr())
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
@@ -96,7 +96,7 @@ func (s *Server) Serve() error {
 		}
 		go func() {
 			if err := s.ServeConn(conn); err != nil {
-				log.Printf("[ERR] socks: %v", err)
+				log.Printf("socks: %v", err)
 			}
 		}()
 	}
@@ -104,29 +104,32 @@ func (s *Server) Serve() error {
 
 // ServeConn is used to serve a single connection.
 func (s *Server) ServeConn(conn net.Conn) error {
+	// Transports close the client conn (as Proxy dst) to unblock copies; we
+	// also defer-Close here. Idempotent Close makes that ownership overlap safe.
+	conn = utils.OnceNetConn(conn)
 	defer utils.Close(conn)
 	bufConn := bufio.NewReader(conn)
 
 	// Read the version byte
 	version := []byte{0}
 	if _, err := bufConn.Read(version); err != nil {
-		err = fmt.Errorf("failed to get version byte: %v", err)
-		log.Printf("[ERR] socks: %v", err)
+		err = fmt.Errorf("read version: %w", err)
+		log.Printf("socks: %v", err)
 		return err
 	}
 
 	// Ensure we are compatible
 	if version[0] != socks5Version {
-		err := fmt.Errorf("unsupported socks version: %v", version)
-		log.Printf("[ERR] socks: %v", err)
+		err := fmt.Errorf("unsupported version %d", version[0])
+		log.Printf("socks: %v", err)
 		return err
 	}
 
 	// Authenticate the connection
 	authContext, err := s.authenticate(conn, bufConn)
 	if err != nil {
-		err = fmt.Errorf("failed to authenticate: %v", err)
-		log.Printf("[ERR] socks: %v", err)
+		err = fmt.Errorf("authenticate: %w", err)
+		log.Printf("socks: %v", err)
 		return err
 	}
 
@@ -134,10 +137,10 @@ func (s *Server) ServeConn(conn net.Conn) error {
 	if err != nil {
 		if errors.Is(err, ErrUnrecognizedAddrType) {
 			if err := sendReply(conn, addrTypeNotSupported, nil); err != nil {
-				return fmt.Errorf("failed to send reply: %v", err)
+				return fmt.Errorf("send reply: %w", err)
 			}
 		}
-		return fmt.Errorf("failed to read destination address: %v", err)
+		return fmt.Errorf("read request: %w", err)
 	}
 	request.AuthContext = authContext
 	if client, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
@@ -149,8 +152,8 @@ func (s *Server) ServeConn(conn net.Conn) error {
 
 	// Process the client request
 	if err = s.handleRequest(request, conn); err != nil {
-		err = fmt.Errorf("failed to handle request: %v", err)
-		log.Printf("[ERR] socks: %v", err)
+		err = fmt.Errorf("handle request: %w", err)
+		log.Printf("socks: %v", err)
 		return err
 	}
 
