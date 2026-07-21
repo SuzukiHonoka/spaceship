@@ -204,9 +204,34 @@ func (s *Server) handleAssociate(ctx context.Context, conn ConnWriter, req *Requ
 		clientIP = req.RemoteAddr.IP
 	}
 
-	relay, err := NewUDPRelay(clientIP)
+	// The local side of the TCP control connection tells us where the client
+	// reached us, which is where the relay should bind.
+	var localIP net.IP
+	if tc, ok := conn.(interface{ LocalAddr() net.Addr }); ok {
+		if tcpAddr, ok := tc.LocalAddr().(*net.TCPAddr); ok {
+			localIP = tcpAddr.IP
+		}
+	}
+
+	// Refuse up front when no association could carry traffic — disabled by
+	// config, or no installed route has a UDP-capable egress (a forward proxy or
+	// blackhole cannot dial packets). A client that receives "command not
+	// supported" falls back to TCP; one handed a working association would wait
+	// forever for datagrams we would drop at dial time.
+	if UDPDisabled() || !router.AnyRouteSupportsUDP() {
+		if err := sendReply(conn, commandNotSupported, nil); err != nil {
+			return fmt.Errorf("failed to send reply: %w", err)
+		}
+		return nil
+	}
+
+	relay, err := NewUDPRelay(clientIP, localIP)
 	if err != nil {
-		if sendErr := sendReply(conn, serverFailure, nil); sendErr != nil {
+		reply := uint8(serverFailure)
+		if errors.Is(err, ErrUDPDisabled) {
+			reply = commandNotSupported
+		}
+		if sendErr := sendReply(conn, reply, nil); sendErr != nil {
 			return fmt.Errorf("failed to send reply: %w", sendErr)
 		}
 		return fmt.Errorf("socks5: udp associate: %w", err)
@@ -216,14 +241,23 @@ func (s *Server) handleAssociate(ctx context.Context, conn ConnWriter, req *Requ
 	relayAddr := relay.RelayAddr().(*net.UDPAddr)
 	bind := &AddrSpec{IP: relayAddr.IP, Port: uint16(relayAddr.Port)}
 
-	// If the relay bound to an unspecified address (0.0.0.0), substitute the
-	// local side of the TCP connection so the client knows where to send datagrams.
-	if bind.IP.IsUnspecified() {
-		if tc, ok := conn.(interface{ LocalAddr() net.Addr }); ok {
-			if tcpAddr, ok := tc.LocalAddr().(*net.TCPAddr); ok {
-				bind.IP = tcpAddr.IP
-			}
+	// If the relay still bound to an unspecified address, substitute the local
+	// side of the TCP connection so the client knows where to send datagrams.
+	if bind.IP.IsUnspecified() && localIP != nil {
+		bind.IP = localIP
+	}
+
+	// An unspecified BND.ADDR is unusable — the client has nowhere to send
+	// datagrams — so fail the associate rather than handing back an address that
+	// silently swallows everything. Should be unreachable now that the relay
+	// always binds a concrete address, but the failure mode is bad enough to be
+	// worth an explicit guard.
+	if bind.IP == nil || bind.IP.IsUnspecified() {
+		_ = relay.Close()
+		if sendErr := sendReply(conn, serverFailure, nil); sendErr != nil {
+			return fmt.Errorf("failed to send reply: %w", sendErr)
 		}
+		return fmt.Errorf("socks5: udp associate: relay bound to an unusable address %s", relay.RelayAddr())
 	}
 
 	if err = sendReply(conn, successReply, bind); err != nil {

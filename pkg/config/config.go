@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/socks"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/forward"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
@@ -139,8 +140,48 @@ func (c *MixedConfig) Apply() error {
 
 	// custom buffer size
 	if c.Buffer > 0 {
+		// A payload chunk is one full buffer wrapped in a protobuf envelope, so an
+		// oversized buffer exceeds the gRPC message limit and fails every send at
+		// runtime. Reject it at startup instead.
+		if bufferBytes := int(c.Buffer) * 1024; bufferBytes > rpc.MaxTransportBufferSize {
+			return fmt.Errorf("buffer too large: %dK exceeds maximum %dK",
+				c.Buffer, rpc.MaxTransportBufferSize/1024)
+		}
 		log.Printf("custom buffer size: %dK", c.Buffer)
 		transport.SetBufferSize(c.Buffer)
+	}
+
+	// socks5 udp associate relay. Applied unconditionally so a reload that drops
+	// the section restores defaults, the same way ipv6 is re-enabled below —
+	// otherwise a previously configured "disable" would silently persist.
+	var udpSettings socks.UDPSettings
+	if c.UDP != nil {
+		for _, limit := range []struct {
+			name  string
+			value int
+		}{
+			{"max_associations", c.UDP.MaxAssociations},
+			{"max_associations_per_client", c.UDP.MaxAssociationsPerClient},
+			{"max_nat_entries", c.UDP.MaxNATEntries},
+			{"max_nat_entries_total", c.UDP.MaxNATEntriesTotal},
+			{"max_nat_entries_per_client", c.UDP.MaxNATEntriesPerClient},
+		} {
+			if limit.value < 0 {
+				return fmt.Errorf("udp.%s must be non-negative: %d", limit.name, limit.value)
+			}
+		}
+		udpSettings = socks.UDPSettings{
+			Disable:                  c.UDP.Disable,
+			MaxAssociations:          c.UDP.MaxAssociations,
+			MaxAssociationsPerClient: c.UDP.MaxAssociationsPerClient,
+			MaxNATEntries:            c.UDP.MaxNATEntries,
+			MaxNATEntriesGlobal:      c.UDP.MaxNATEntriesTotal,
+			MaxNATEntriesPerClient:   c.UDP.MaxNATEntriesPerClient,
+		}
+	}
+	socks.SetUDPSettings(udpSettings)
+	if udpSettings.Disable {
+		log.Println("socks5 udp associate disabled")
 	}
 
 	// custom grpc service name

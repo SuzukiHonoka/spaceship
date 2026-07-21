@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
 )
 
 func TestNewRequest(t *testing.T) {
@@ -138,6 +140,14 @@ func TestSendReply(t *testing.T) {
 }
 
 func TestHandleAssociate_ContextCancelStopsRelay(t *testing.T) {
+	// handleAssociate refuses up front unless some installed route has a
+	// UDP-capable egress, so give it one.
+	if err := router.SetRoutes(router.Routes{
+		{MatchType: router.TypeDefault, Destination: router.EgressDirect},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

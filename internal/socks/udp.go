@@ -30,19 +30,112 @@ const (
 	// the worker pool. When full, further datagrams are dropped (correct UDP
 	// behavior under overload) so the reader keeps draining the socket.
 	udpJobQueueSize = 64
+)
 
-	// udpMaxNATEntries bounds outbound sockets owned by one UDP association.
-	// Creating a flow for every unique destination is otherwise an unbounded
+// Default resource limits.
+//
+// Memory note: every active NAT entry owns a reverse-relay goroutine holding a
+// udpMaxPacketSize buffer (~64KB) for the flow's lifetime. The buffer is kept at
+// full datagram size deliberately — a short read on a UDP socket truncates and
+// discards the remainder, so a smaller buffer would silently corrupt any
+// oversized datagram rather than merely delaying it.
+//
+// That makes the global NAT cap the dominant memory term:
+//
+//	defaultMaxNATEntriesGlobal × ~64KB ≈ 32MB worst case
+//
+// Operators who need more concurrent flows, or less memory, should tune the udp
+// config section rather than assume these values fit their workload.
+//
+// The per-client cap must stay at or above the per-association cap, otherwise a
+// single association could not reach its own limit.
+const (
+	// defaultMaxNATEntries bounds outbound sockets owned by one association.
+	// Creating a flow per unique destination is otherwise an unbounded
 	// resource-allocation primitive controlled by the client.
-	udpMaxNATEntries = 64
+	defaultMaxNATEntries = 64
 
 	// Process-wide and per-client limits bound client-facing sockets, worker
-	// goroutines, outbound sockets, and persistent reverse-relay buffers.
-	udpMaxAssociations          = 64
-	udpMaxAssociationsPerClient = 8
-	udpMaxNATEntriesGlobal      = 1024
-	udpMaxNATEntriesPerClient   = 256
+	// goroutines, outbound sockets, and reverse-relay buffers.
+	defaultMaxAssociations          = 64
+	defaultMaxAssociationsPerClient = 8
+	defaultMaxNATEntriesGlobal      = 512
+	defaultMaxNATEntriesPerClient   = 256
 )
+
+// UDPSettings tunes the SOCKS5 UDP ASSOCIATE relay. A zero value in any numeric
+// field selects the built-in default, so a partially populated struct is valid.
+type UDPSettings struct {
+	// Disable makes UDP ASSOCIATE report "command not supported", which lets
+	// clients cleanly fall back to TCP instead of establishing an association
+	// that cannot carry traffic.
+	Disable bool
+	// MaxAssociations bounds concurrent associations process-wide;
+	// MaxAssociationsPerClient bounds them for a single client IP.
+	MaxAssociations          int
+	MaxAssociationsPerClient int
+	// MaxNATEntries bounds outbound sockets per association. MaxNATEntriesGlobal
+	// and MaxNATEntriesPerClient bound them process-wide and per client IP.
+	MaxNATEntries          int
+	MaxNATEntriesGlobal    int
+	MaxNATEntriesPerClient int
+}
+
+var (
+	udpSettingsMu sync.RWMutex
+	udpDisabled   bool
+	udpMaxNAT     = defaultMaxNATEntries
+
+	udpAssociationLimiter = newUDPResourceLimiter(defaultMaxAssociations, defaultMaxAssociationsPerClient)
+	udpNATLimiter         = newUDPResourceLimiter(defaultMaxNATEntriesGlobal, defaultMaxNATEntriesPerClient)
+)
+
+func orDefault(v, fallback int) int {
+	if v <= 0 {
+		return fallback
+	}
+	return v
+}
+
+// SetUDPSettings applies UDP relay settings. It replaces the process-wide
+// limiters, so it must be called during startup before any association exists —
+// counts held by live associations would otherwise be lost.
+func SetUDPSettings(s UDPSettings) {
+	udpSettingsMu.Lock()
+	defer udpSettingsMu.Unlock()
+
+	udpDisabled = s.Disable
+	udpMaxNAT = orDefault(s.MaxNATEntries, defaultMaxNATEntries)
+	udpAssociationLimiter = newUDPResourceLimiter(
+		orDefault(s.MaxAssociations, defaultMaxAssociations),
+		orDefault(s.MaxAssociationsPerClient, defaultMaxAssociationsPerClient),
+	)
+	udpNATLimiter = newUDPResourceLimiter(
+		orDefault(s.MaxNATEntriesGlobal, defaultMaxNATEntriesGlobal),
+		orDefault(s.MaxNATEntriesPerClient, defaultMaxNATEntriesPerClient),
+	)
+}
+
+// UDPDisabled reports whether UDP ASSOCIATE is turned off by config.
+func UDPDisabled() bool {
+	udpSettingsMu.RLock()
+	defer udpSettingsMu.RUnlock()
+	return udpDisabled
+}
+
+// udpConfig reads the whole settings snapshot under one lock, so a concurrent
+// SetUDPSettings cannot interleave between the disabled check and the limiters
+// a new relay is built from.
+func udpConfig() (disabled bool, associations, nat *udpResourceLimiter, maxNAT int) {
+	udpSettingsMu.RLock()
+	defer udpSettingsMu.RUnlock()
+	return udpDisabled, udpAssociationLimiter, udpNATLimiter, udpMaxNAT
+}
+
+func udpLimiters() (associations, nat *udpResourceLimiter, maxNAT int) {
+	_, associations, nat, maxNAT = udpConfig()
+	return associations, nat, maxNAT
+}
 
 // udpWorkerCount is the size of the per-relay worker pool that processes
 // inbound datagrams. Bounded so a traffic burst cannot spawn an unbounded
@@ -55,9 +148,7 @@ var (
 	ErrUDPFQDNTooLong      = errors.New("socks5: UDP FQDN exceeds 255 bytes")
 	ErrUDPAssociationLimit = errors.New("socks5: UDP association limit reached")
 	ErrUDPNATLimit         = errors.New("socks5: UDP NAT limit reached")
-
-	udpAssociationLimiter = newUDPResourceLimiter(udpMaxAssociations, udpMaxAssociationsPerClient)
-	udpNATLimiter         = newUDPResourceLimiter(udpMaxNATEntriesGlobal, udpMaxNATEntriesPerClient)
+	ErrUDPDisabled         = errors.New("socks5: UDP associate is disabled")
 
 	udpBufferPool = sync.Pool{
 		New: func() any {
@@ -373,26 +464,63 @@ type UDPRelay struct {
 
 type udpListenFunc func(network, address string) (net.PacketConn, error)
 
+// relayBindAddress picks the network and address for the client-facing socket.
+//
+// Binding the wildcard ":0" would expose a dual-stack socket on every interface,
+// which is wider than the SOCKS listener the client actually reached. Binding
+// the local address of that TCP control connection keeps the relay reachable
+// exactly where the client already is, and pins the address family so replies
+// are not black-holed on a dual-stack socket.
+//
+// This deliberately ignores transport.PreferIPv4. That setting governs egress to
+// proxied destinations; the relay socket faces the local client, and forcing it
+// to IPv4 for a client that reached us over IPv6 would bind a socket the client
+// cannot reach while the SOCKS reply still advertises the IPv6 address.
+func relayBindAddress(localIP net.IP) (network, address string) {
+	if localIP != nil && !localIP.IsUnspecified() {
+		if localIP.To4() != nil {
+			return "udp4", net.JoinHostPort(localIP.String(), "0")
+		}
+		return "udp6", net.JoinHostPort(localIP.String(), "0")
+	}
+	// The control connection exposes no usable local IP — a unix-socket
+	// listener, most commonly. Such a client is necessarily on this host, so
+	// bind loopback rather than a wildcard: a wildcard socket reports an
+	// unspecified BND.ADDR, and a client has nowhere to send datagrams to that.
+	return "udp4", "127.0.0.1:0"
+}
+
 // NewUDPRelay creates a UDP relay bound to a random local port.
-// clientIP restricts which IP is allowed to send datagrams.
-func NewUDPRelay(clientIP net.IP) (*UDPRelay, error) {
-	return newUDPRelay(clientIP, udpAssociationLimiter, udpNATLimiter)
+// clientIP restricts which IP is allowed to send datagrams; localIP is the local
+// address of the TCP control connection and determines where the relay binds.
+func NewUDPRelay(clientIP, localIP net.IP) (*UDPRelay, error) {
+	disabled, associations, nat, maxNAT := udpConfig()
+	if disabled {
+		return nil, ErrUDPDisabled
+	}
+	return newUDPRelay(clientIP, localIP, associations, nat, maxNAT)
 }
 
-func newUDPRelay(clientIP net.IP, associationLimiter, natLimiter *udpResourceLimiter) (*UDPRelay, error) {
-	return newUDPRelayWithListener(clientIP, associationLimiter, natLimiter, net.ListenPacket)
+func newUDPRelay(clientIP, localIP net.IP, associationLimiter, natLimiter *udpResourceLimiter, maxNAT int) (*UDPRelay, error) {
+	return newUDPRelayWithListener(clientIP, localIP, associationLimiter, natLimiter, maxNAT, net.ListenPacket)
 }
 
-func newUDPRelayWithListener(clientIP net.IP, associationLimiter, natLimiter *udpResourceLimiter, listen udpListenFunc) (*UDPRelay, error) {
+func newUDPRelayWithListener(
+	clientIP, localIP net.IP,
+	associationLimiter, natLimiter *udpResourceLimiter,
+	maxNAT int,
+	listen udpListenFunc,
+) (*UDPRelay, error) {
 	clientKey := udpClientKey(clientIP)
 	if !associationLimiter.acquire(clientKey) {
 		return nil, ErrUDPAssociationLimit
 	}
 
-	relayConn, err := listen("udp", ":0")
+	network, bindAddr := relayBindAddress(localIP)
+	relayConn, err := listen(network, bindAddr)
 	if err != nil {
 		associationLimiter.release(clientKey)
-		return nil, fmt.Errorf("socks5: udp relay listen: %w", err)
+		return nil, fmt.Errorf("socks5: udp relay listen on %s: %w", bindAddr, err)
 	}
 
 	if uc, ok := relayConn.(*net.UDPConn); ok {
@@ -405,7 +533,7 @@ func newUDPRelayWithListener(clientIP net.IP, associationLimiter, natLimiter *ud
 		clientIP:           clientIP,
 		jobs:               make(chan udpPacket, udpJobQueueSize),
 		done:               make(chan struct{}),
-		maxNATEntries:      udpMaxNATEntries,
+		maxNATEntries:      orDefault(maxNAT, defaultMaxNATEntries),
 		clientKey:          clientKey,
 		associationLimiter: associationLimiter,
 		natLimiter:         natLimiter,
@@ -532,6 +660,18 @@ func (r *UDPRelay) handlePacket(job udpPacket) {
 	transport.GlobalStats.AddTx(uint64(nw))
 }
 
+// natKey identifies a flow. Both the client source address and the target
+// belong in the key: a client may use several source ports on one association,
+// and the reverse relay delivers to the address bound when the entry was
+// created. Keying on the target alone would send every response to whichever
+// source port happened to open the flow first.
+func natKey(clientAddr net.Addr, targetAddr string) string {
+	if clientAddr == nil {
+		return targetAddr
+	}
+	return clientAddr.String() + "|" + targetAddr
+}
+
 func (r *UDPRelay) getOrCreateNAT(targetAddr string, clientAddr net.Addr) (*natEntry, error) {
 	select {
 	case <-r.done:
@@ -539,13 +679,14 @@ func (r *UDPRelay) getOrCreateNAT(targetAddr string, clientAddr net.Addr) (*natE
 	default:
 	}
 
-	if entry, ok := r.natTable.Load(targetAddr); ok {
+	key := natKey(clientAddr, targetAddr)
+	if entry, ok := r.natTable.Load(key); ok {
 		return entry, nil
 	}
 
-	res, err, _ := r.dialGroup.Do(targetAddr, func() (any, error) {
+	res, err, _ := r.dialGroup.Do(key, func() (any, error) {
 		// Double check after singleflight block
-		if entry, ok := r.natTable.Load(targetAddr); ok {
+		if entry, ok := r.natTable.Load(key); ok {
 			return entry, nil
 		}
 
@@ -573,7 +714,7 @@ func (r *UDPRelay) getOrCreateNAT(targetAddr string, clientAddr net.Addr) (*natE
 
 		limiter := r.natLimiter
 		if limiter == nil {
-			limiter = udpNATLimiter
+			_, limiter, _ = udpLimiters()
 		}
 		if !limiter.acquire(r.clientKey) {
 			_ = route.Close()
@@ -596,11 +737,8 @@ func (r *UDPRelay) getOrCreateNAT(targetAddr string, clientAddr net.Addr) (*natE
 		}
 		entry.lastSeen.Store(time.Now().UnixNano())
 
-		limit := r.maxNATEntries
-		if limit <= 0 {
-			limit = udpMaxNATEntries
-		}
-		actual, evicted, installed := r.natTable.Install(targetAddr, entry, limit)
+		limit := orDefault(r.maxNATEntries, defaultMaxNATEntries)
+		actual, evicted, installed := r.natTable.Install(key, entry, limit)
 		if evicted != nil {
 			evicted.Close()
 		}
@@ -614,14 +752,14 @@ func (r *UDPRelay) getOrCreateNAT(targetAddr string, clientAddr net.Addr) (*natE
 		// closed, Close() may have missed this entry, so we clean it up here.
 		select {
 		case <-r.done:
-			r.natTable.DeleteIf(targetAddr, entry)
+			r.natTable.DeleteIf(key, entry)
 			entry.Close()
 			return nil, net.ErrClosed
 		default:
 		}
 
 		// Start reverse relay goroutine: target → client.
-		go r.reverseRelay(entry, clientAddr, targetAddr)
+		go r.reverseRelay(entry, key, clientAddr, targetAddr)
 
 		return entry, nil
 	})
@@ -673,10 +811,10 @@ func dialPacketTarget(route transport.Transport, network, targetAddr string) (ne
 
 // reverseRelay reads responses from the target and sends them back to the SOCKS5
 // client with a proper UDP header prepended.
-func (r *UDPRelay) reverseRelay(entry *natEntry, clientAddr net.Addr, targetAddr string) {
+func (r *UDPRelay) reverseRelay(entry *natEntry, key string, clientAddr net.Addr, targetAddr string) {
 	defer func() {
 		entry.Close()
-		r.natTable.DeleteIf(targetAddr, entry)
+		r.natTable.DeleteIf(key, entry)
 	}()
 	outbound := entry.conn
 
@@ -700,7 +838,7 @@ func (r *UDPRelay) reverseRelay(entry *natEntry, clientAddr net.Addr, targetAddr
 
 			if ne, ok := errors.AsType[net.Error](err); ok && ne.Timeout() {
 				// check if we've been active in the other direction recently
-				if current, ok := r.natTable.Load(targetAddr); ok && current == entry {
+				if current, ok := r.natTable.Load(key); ok && current == entry {
 					lastSeen := time.Unix(0, current.lastSeen.Load())
 					if time.Since(lastSeen) < udpIdleTimeout {
 						continue // keep alive
@@ -713,6 +851,16 @@ func (r *UDPRelay) reverseRelay(entry *natEntry, clientAddr net.Addr, targetAddr
 			}
 			log.Printf("socks5: udp reverse relay %s: %v", targetAddr, err)
 			return
+		}
+
+		// Defense in depth against off-path injection. A connected socket (what
+		// the direct transport hands back) already filters in the kernel, so this
+		// only bites if a transport returns an unconnected socket — in which case
+		// a spoofed datagram would otherwise be relayed to the client tagged with
+		// the attacker's address.
+		if !sourceMatchesTarget(respAddr, entry.targetAddr) {
+			log.Printf("socks5: udp reverse relay %s: dropped datagram from unexpected source %s", targetAddr, respAddr)
+			continue
 		}
 
 		respSpec, ok := addrSpecFromNetAddr(respAddr)
@@ -730,7 +878,7 @@ func (r *UDPRelay) reverseRelay(entry *natEntry, clientAddr net.Addr, targetAddr
 			continue
 		}
 
-		if current, ok := r.natTable.Load(targetAddr); ok && current == entry {
+		if current, ok := r.natTable.Load(key); ok && current == entry {
 			current.lastSeen.Store(time.Now().UnixNano())
 		}
 
@@ -771,6 +919,23 @@ func (r *UDPRelay) Close() error {
 		}
 	})
 	return nil
+}
+
+// sourceMatchesTarget reports whether a datagram's source is the flow's target.
+//
+// Flows whose target is a domain (a proxied egress, where the remote side
+// resolves the name and the tunnel itself authenticates the peer) carry no
+// comparable IP, so they are accepted unconditionally.
+func sourceMatchesTarget(src, target net.Addr) bool {
+	srcUDP, ok := src.(*net.UDPAddr)
+	if !ok {
+		return true
+	}
+	targetUDP, ok := target.(*net.UDPAddr)
+	if !ok {
+		return true
+	}
+	return srcUDP.Port == targetUDP.Port && srcUDP.IP.Equal(targetUDP.IP)
 }
 
 func addrSpecFromNetAddr(addr net.Addr) (*AddrSpec, bool) {

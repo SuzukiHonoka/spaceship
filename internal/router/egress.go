@@ -21,6 +21,21 @@ const (
 	EgressBlackHole Egress = "blackhole"
 )
 
+// SupportsUDP reports whether this egress can carry packet-oriented traffic.
+//
+// Determined statically because constructing an EgressProxy transport checks out
+// a pooled gRPC connection, which is far too side-effecting for a capability
+// probe. TestEgressSupportsUDPMatchesTransports keeps this in sync with the
+// transports that actually implement transport.PacketDialer.
+func (e Egress) SupportsUDP() bool {
+	switch e {
+	case EgressDirect, EgressProxy:
+		return true
+	default:
+		return false
+	}
+}
+
 func (e Egress) GetTransport() (transport.Transport, error) {
 	switch e {
 	case EgressUnknown:

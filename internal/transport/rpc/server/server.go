@@ -77,7 +77,7 @@ func NewServer(ctx context.Context, users config.Users, ssl *config.SSL, dnsConf
 
 	// create grpc server and register
 	matchMap := users.ToMatchMap()
-	s := grpc.NewServer(append(rpc.ServerOptions,
+	s := grpc.NewServer(append(rpc.ServerOptions(),
 		transportOption,
 		grpc.UnaryInterceptor(rpc.UnaryServerAuthInterceptor(matchMap.Match)),
 		grpc.StreamInterceptor(rpc.StreamServerAuthInterceptor(matchMap.Match)),
