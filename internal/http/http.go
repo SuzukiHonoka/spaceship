@@ -134,14 +134,14 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// not "host:port".
 	host, addr, err := BuildRemoteAddr(r)
 	if err != nil {
-		ServeError(w, fmt.Errorf("http: build remote addr failed: %w", err))
+		ServeProxyError(w, r.Host, fmt.Errorf("build remote addr: %w", err))
 		return
 	}
 
 	// get route for host
 	route, err := router.GetRoute(host)
 	if err != nil {
-		ServeError(w, fmt.Errorf("http: get route for %s failed, error=%w", host, err))
+		ServeProxyError(w, host, fmt.Errorf("no route: %w", err))
 		return
 	}
 	defer utils.Close(route)
@@ -151,7 +151,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// hijack the connection
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		ServeError(w, errors.New("webserver doesn't support hijacking"))
+		ServeProxyError(w, r.Host, errors.New("hijack not supported"))
 		return
 	}
 	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Expect")), "100-continue") {
@@ -162,7 +162,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	conn, _, err := hj.Hijack()
 	if err != nil {
-		ServeError(w, fmt.Errorf("http: hijack connection failed: %w", err))
+		ServeProxyError(w, r.Host, fmt.Errorf("hijack: %w", err))
 		return
 	}
 	defer utils.Close(conn)
@@ -227,7 +227,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err = errGroup.Wait(); err != nil {
-		ServeError(conn, fmt.Errorf("http: proxy failed for %s, err=%w", r.Host, err))
+		ServeProxyError(conn, r.Host, err)
 	}
 }
 
@@ -265,14 +265,14 @@ func writeForwardRequest(w io.Writer, r *http.Request, host string) error {
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	host, _, err := net.SplitHostPort(r.Host)
 	if err != nil {
-		ServeError(w, fmt.Errorf("http: invalid host, err=%w", err))
+		ServeProxyError(w, r.Host, fmt.Errorf("invalid host: %w", err))
 		return
 	}
 
 	// get route for host
 	route, err := router.GetRoute(host)
 	if err != nil {
-		ServeError(w, fmt.Errorf("http: get route for %s failed, error=%w", r.Host, err))
+		ServeProxyError(w, r.Host, fmt.Errorf("no route: %w", err))
 		return
 	}
 	defer utils.Close(route)
@@ -282,12 +282,12 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// hijack the connection
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		ServeError(w, errors.New("webserver doesn't support hijacking"))
+		ServeProxyError(w, r.Host, errors.New("hijack not supported"))
 		return
 	}
 	conn, _, err := hj.Hijack()
 	if err != nil {
-		ServeError(w, fmt.Errorf("http: hijack connection failed: %w", err))
+		ServeProxyError(w, r.Host, fmt.Errorf("hijack: %w", err))
 		return
 	}
 	defer utils.Close(conn)
@@ -295,7 +295,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// build remote addr
 	_, addr, err := BuildRemoteAddr(r)
 	if err != nil {
-		ServeError(conn, fmt.Errorf("http: build remote addr failed: %w", err))
+		ServeProxyError(conn, r.Host, fmt.Errorf("build remote addr: %w", err))
 		return
 	}
 
@@ -324,6 +324,6 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	// wait for proxy to finish
 	if err = errGroup.Wait(); err != nil {
-		ServeError(conn, fmt.Errorf("http: proxy failed for %s, err=%w", r.Host, err))
+		ServeProxyError(conn, r.Host, err)
 	}
 }

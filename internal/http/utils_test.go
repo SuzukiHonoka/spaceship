@@ -3,6 +3,7 @@ package http
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -46,6 +47,14 @@ func TestServeError(t *testing.T) {
 
 	t.Run("nil writer does not panic", func(t *testing.T) {
 		ServeError(nil, errors.New("boom"))
+	})
+
+	t.Run("context.Canceled is a no-op", func(t *testing.T) {
+		var buf bytes.Buffer
+		ServeError(&buf, context.Canceled)
+		if buf.Len() != 0 {
+			t.Errorf("wrote %q for context.Canceled, want nothing", buf.String())
+		}
 	})
 }
 

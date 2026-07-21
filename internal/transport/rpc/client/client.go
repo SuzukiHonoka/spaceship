@@ -272,7 +272,9 @@ func (c *Client) Proxy(ctx context.Context, addr string, localAddr chan<- string
 	//log.Printf("sending proto to rpc: %s", req.Host)
 	f := NewForwarder(sessionCtx, cancel, stream, w, r)
 	if err = f.Start(addr, localAddr); err != nil && !errors.Is(err, context.Canceled) {
-		return fmt.Errorf("rpc client: proto failed: %w", err)
+		// Pass the forwarder error through; outer layers (http/socks) add the
+		// front-end context. Avoid "rpc client: proto failed: rpc: …" chains.
+		return err
 	}
 
 	log.Printf("session: %s duration %v, %s sent, %s received",

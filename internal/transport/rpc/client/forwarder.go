@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -227,7 +226,7 @@ func (f *Forwarder) Start(addr string, localAddrChan chan<- string) error {
 		},
 	}
 	if err := sendHandshake(f.stream, handshake, f.cancel, rpc.GeneralTimeout, addr); err != nil {
-		return fmt.Errorf("rpc: send handshake to server: %s failed: %w", addr, err)
+		return fmt.Errorf("handshake to %s: %w", addr, err)
 	}
 
 	errGroup, ctx := errgroup.WithContext(f.ctx)
@@ -237,7 +236,7 @@ func (f *Forwarder) Start(addr string, localAddrChan chan<- string) error {
 			if err == io.EOF {
 				return err
 			}
-			return fmt.Errorf("copy target to src error: %w", err)
+			return fmt.Errorf("download: %w", err)
 		}
 		return nil
 	})
@@ -248,7 +247,7 @@ func (f *Forwarder) Start(addr string, localAddrChan chan<- string) error {
 			if err == io.EOF {
 				return err
 			}
-			return fmt.Errorf("copy src to target error: %w", err)
+			return fmt.Errorf("upload: %w", err)
 		}
 		return nil
 	})
@@ -266,11 +265,12 @@ func (f *Forwarder) Start(addr string, localAddrChan chan<- string) error {
 			// cost the caller the full timeout before it saw the real error.
 			return ctx.Err()
 		case <-t.C:
-			// timed out
-			return fmt.Errorf("rpc: server to %s ack timed out: %w", addr, os.ErrDeadlineExceeded)
+			// Do not wrap os.ErrDeadlineExceeded: its Error() is "i/o timeout",
+			// which reads as a socket I/O failure rather than a missing server ack.
+			return fmt.Errorf("server ack timeout for %s", addr)
 		case localAddr, ok := <-f.localAddr:
 			if !ok {
-				return fmt.Errorf("rpc: server to %s ack failed", addr)
+				return fmt.Errorf("server rejected %s", addr)
 			}
 			select {
 			case localAddrChan <- localAddr:

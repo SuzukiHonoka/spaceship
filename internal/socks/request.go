@@ -179,8 +179,9 @@ func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Reques
 		return nil
 	})
 
-	if err = errGroup.Wait(); err != nil && !errors.Is(err, io.EOF) {
-		log.Printf("socks: %v", err)
+	if err = errGroup.Wait(); err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
+		// One short line: host already logged on the route line above.
+		log.Printf("socks: %s failed: %v", addr, err)
 	}
 	return nil
 }

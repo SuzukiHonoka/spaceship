@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -14,13 +15,28 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 )
 
+// ServeError logs a proxy failure (once, in a readable form) and writes a 503
+// response when the client still expects HTTP framing.
+//
+// host is the destination shown in the log line (e.g. "example.com:443"). Pass
+// an empty host for errors not tied to a single target.
 func ServeError(w io.Writer, err error) {
-	// errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET)
-	if err == nil || errors.Is(err, io.EOF) {
+	ServeProxyError(w, "", err)
+}
+
+// ServeProxyError is like ServeError but includes host in the log line so the
+// message stays one line and avoids nested "err=… err=…" wrapping.
+func ServeProxyError(w io.Writer, host string, err error) {
+	if err == nil || errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
 		return
 	}
 
-	log.Println(err)
+	if host != "" {
+		log.Printf("http: proxy %s failed: %v", host, err)
+	} else {
+		log.Printf("http: %v", err)
+	}
+
 	if w == nil {
 		return
 	}
@@ -30,8 +46,8 @@ func ServeError(w io.Writer, err error) {
 		return
 	}
 
-	if _, err = w.Write(MessageServiceUnavailable); err != nil {
-		log.Printf("http: write error status failed: %v", err)
+	if _, writeErr := w.Write(MessageServiceUnavailable); writeErr != nil {
+		log.Printf("http: write error status failed: %v", writeErr)
 	}
 }
 
