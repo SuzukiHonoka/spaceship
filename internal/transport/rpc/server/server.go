@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
@@ -109,18 +108,9 @@ func (s *Server) ListenAndServe(addr string) error {
 	go func() {
 		select {
 		case <-s.Ctx.Done():
-		case <-serveDone:
-			return
-		}
-		stopped := make(chan struct{})
-		go func() {
-			s.srv.GracefulStop()
-			close(stopped)
-		}()
-		select {
-		case <-stopped:
-		case <-time.After(rpc.GeneralTimeout):
+			log.Println("rpc: stopping all connections")
 			s.srv.Stop()
+		case <-serveDone:
 		}
 	}()
 

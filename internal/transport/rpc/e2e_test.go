@@ -21,6 +21,7 @@ import (
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/forward"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/server"
 	serverconfig "github.com/SuzukiHonoka/spaceship/v2/pkg/config/server"
@@ -108,6 +109,34 @@ func routeAllDirect(t *testing.T) {
 	}
 }
 
+type blockingTargetDialer struct {
+	started     chan struct{}
+	release     chan struct{}
+	startOnce   sync.Once
+	releaseOnce sync.Once
+}
+
+func newBlockingTargetDialer() *blockingTargetDialer {
+	return &blockingTargetDialer{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (d *blockingTargetDialer) Dial(_, _ string) (net.Conn, error) {
+	d.startOnce.Do(func() {
+		close(d.started)
+	})
+	<-d.release
+	return nil, io.EOF
+}
+
+func (d *blockingTargetDialer) unblock() {
+	d.releaseOnce.Do(func() {
+		close(d.release)
+	})
+}
+
 // startUDPEcho runs a UDP echo server and returns its address.
 func startUDPEcho(t *testing.T) string {
 	t.Helper()
@@ -130,6 +159,87 @@ func startUDPEcho(t *testing.T) string {
 		}
 	}()
 	return pc.LocalAddr().String()
+}
+
+func TestServerCancelForceClosesConnectionsWithBlockedHandler(t *testing.T) {
+	dialer := newBlockingTargetDialer()
+	forward.Attach(dialer)
+	t.Cleanup(func() {
+		dialer.unblock()
+		forward.Attach(nil)
+		if err := router.SetRoutes(router.Routes{
+			{MatchType: router.TypeDefault, Destination: router.EgressDirect},
+		}); err != nil {
+			t.Errorf("restoring direct route: %v", err)
+		}
+	})
+	if err := router.SetRoutes(router.Routes{
+		{MatchType: router.TypeDefault, Destination: router.EgressForward},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	addr := freeLoopbackAddr(t)
+	serverCtx, cancelServer := context.WithCancel(context.Background())
+	defer cancelServer()
+	srv, err := server.NewServer(serverCtx, serverconfig.Users{{UUID: testUUID}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.ListenAndServe(addr) }()
+	waitForListener(t, addr)
+
+	connectClient(t, addr)
+	proxyClient, err := client.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxyClient.Close()
+
+	proxyCtx, cancelProxy := context.WithCancel(context.Background())
+	defer cancelProxy()
+	sourceReader, sourceWriter := io.Pipe()
+	defer sourceReader.Close()
+	defer sourceWriter.Close()
+	proxyErr := make(chan error, 1)
+	go func() {
+		proxyErr <- proxyClient.Proxy(
+			proxyCtx,
+			"blocked.example:443",
+			make(chan string, 1),
+			io.Discard,
+			sourceReader,
+		)
+	}()
+
+	select {
+	case <-dialer.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("server handler did not enter the blocking target dial")
+	}
+
+	started := time.Now()
+	cancelServer()
+	select {
+	case err := <-serveErr:
+		if err != nil && err != context.Canceled {
+			t.Fatalf("ListenAndServe returned %v after cancellation", err)
+		}
+		if elapsed := time.Since(started); elapsed > time.Second {
+			t.Fatalf("forced shutdown took %s; want at most 1s", elapsed)
+		}
+	case <-time.After(2 * time.Second):
+		dialer.unblock()
+		t.Fatal("server waited for a blocked handler instead of force-closing connections")
+	}
+
+	select {
+	case <-proxyErr:
+	case <-time.After(2 * time.Second):
+		dialer.unblock()
+		t.Fatal("client proxy remained connected after forced server shutdown")
+	}
 }
 
 // TestEndToEnd_UDPRoundTripOverGRPC drives a datagram through the whole stack:

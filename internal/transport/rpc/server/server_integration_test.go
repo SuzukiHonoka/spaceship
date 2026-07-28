@@ -67,7 +67,6 @@ func TestNewServerAndListenCancel(t *testing.T) {
 	select {
 	case err := <-errCh:
 		if err != nil && err != context.Canceled {
-			// Graceful stop may surface context.Canceled or nil/ErrServerStopped mapped.
 			t.Logf("ListenAndServe returned: %v", err)
 		}
 	case <-time.After(5 * time.Second):

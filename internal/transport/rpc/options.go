@@ -170,9 +170,8 @@ func ServerOptions() []grpc.ServerOption {
 		}),
 		grpc.ConnectionTimeout(GeneralTimeout),
 		experimental.BufferPool(payloadBufferPool()),
-		// WaitForHandlers is deliberately NOT set. ListenAndServe already bounds
-		// shutdown by racing GracefulStop against a timeout and falling back to
-		// Stop; making Stop itself wait for handlers would make that fallback
-		// unbounded, which is the opposite of what it exists for.
+		// WaitForHandlers is deliberately NOT set. Signal-driven shutdown calls
+		// Stop so every transport is closed immediately, even if an application
+		// handler is still blocked in a cancellation-unaware target dial.
 	}
 }
