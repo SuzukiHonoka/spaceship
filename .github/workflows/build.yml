@@ -1,11 +1,15 @@
 name: Build
 
 on:
-  release:
-    types: [ published ]
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
 
 jobs:
-  build:
+  verify-and-build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -14,13 +18,45 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: ^1.26
+          go-version: 1.26.5
 
       - name: Install dependencies
-        run: go mod tidy -v
+        run: |
+          go mod download
+          go mod verify
+
+      - name: Verify release tag matches the binary version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          actual="$(go run ./cmd/spaceship -v)"
+          expected="spaceship ${RELEASE_TAG}"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "version mismatch: binary reports '$actual', tag expects '$expected'"
+            exit 1
+          fi
 
       - name: Go Vet
         run: go vet ./...
+
+      - name: Unit and race tests
+        run: go test -count=1 -race ./...
+
+      - name: Install netfilter integration tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends iproute2 iptables util-linux
+
+      - name: Netfilter redirect integration
+        run: |
+          go test -c -race -o "$RUNNER_TEMP/redirect-integration.test" ./internal/redirect
+          sudo env \
+            SPACESHIP_REDIRECT_INTEGRATION=1 \
+            SPACESHIP_REDIRECT_INTEGRATION_IPV6=1 \
+            "$RUNNER_TEMP/redirect-integration.test" \
+            -test.run='^TestNetfilterRedirectIntegration$' \
+            -test.count=1 \
+            -test.v
 
       - name: Build
         run: ./build.sh cmd/spaceship
@@ -30,9 +66,24 @@ jobs:
         with:
           name: release
           path: build/*
+          if-no-files-found: error
+
+  release:
+    needs: verify-and-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified build
+        uses: actions/download-artifact@v7
+        with:
+          name: release
+          path: build
 
       - name: Release
         uses: softprops/action-gh-release@v3
-        if: github.ref_type == 'tag'
         with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: build/*

@@ -101,22 +101,45 @@ func (s *Server) ListenAndServe(addr string) error {
 	if err != nil {
 		return fmt.Errorf("listen at %s error %w", addr, err)
 	}
-	defer utils.Close(listener)
-	log.Printf("rpc: listening at %s", addr)
+	return s.serve(listener)
+}
+
+func (s *Server) serve(listener net.Listener) error {
+	if listener == nil {
+		return errors.New("rpc: nil listener")
+	}
+
+	trackedListener, ok := listener.(*connectionTrackingListener)
+	if !ok {
+		trackedListener = newConnectionTrackingListener(listener)
+	}
+	defer utils.Close(trackedListener)
+	log.Printf("rpc: listening at %s", trackedListener.Addr())
 
 	serveDone := make(chan struct{})
+	watchDone := make(chan struct{})
 	go func() {
+		defer close(watchDone)
 		select {
 		case <-s.Ctx.Done():
 			log.Println("rpc: stopping all connections")
+			// Close application-owned sockets before Stop. In particular, this
+			// releases grpc-go's serveWG entries that have not completed their
+			// TLS/HTTP2 handshake and are therefore absent from grpc's transport
+			// registry.
+			if err := trackedListener.Close(); err != nil {
+				log.Printf("rpc: close listener and connections: %v", err)
+			}
 			s.srv.Stop()
 		case <-serveDone:
 		}
 	}()
 
-	err = s.srv.Serve(listener)
+	err := s.srv.Serve(trackedListener)
 	close(serveDone)
-	if s.Ctx.Err() != nil && (err == nil || errors.Is(err, grpc.ErrServerStopped)) {
+	<-watchDone
+	if s.Ctx.Err() != nil &&
+		(err == nil || errors.Is(err, grpc.ErrServerStopped) || errors.Is(err, net.ErrClosed)) {
 		return s.Ctx.Err()
 	}
 	return err
@@ -188,7 +211,12 @@ func (s *Server) DnsResolve(_ context.Context, request *proto.DnsRequest) (*prot
 
 		// Perform actual DNS resolution using configured DNS server
 		records, rcode := s.resolveDNSRecords(item.Fqdn, qtype)
-		result.Rcode = uint32(rcode)
+		encodedRcode, ok := safeIntToUint32(rcode)
+		if !ok {
+			log.Printf("dns: invalid response code %d", rcode)
+			encodedRcode = mdns.RcodeServerFailure
+		}
+		result.Rcode = encodedRcode
 
 		// Filter out IPv6 (AAAA) records if blocking is enabled
 		if item.BlockIpv6 {

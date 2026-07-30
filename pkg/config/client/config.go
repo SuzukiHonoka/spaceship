@@ -11,6 +11,8 @@ type Client struct {
 	ListenSocks     string        `json:"listen_socks,omitempty"`
 	ListenSocksUnix string        `json:"listen_socks_unix,omitempty"`
 	ListenHttp      string        `json:"listen_http,omitempty"`
+	ListenRedirect  string        `json:"listen_redirect,omitempty"` // Linux TCP transparent REDIRECT listener
+	Redirect        *Redirect     `json:"redirect,omitempty"`
 	ListenDns       string        `json:"listen_dns,omitempty"`
 	BasicAuth       []string      `json:"basic_auth,omitempty"` // user:password
 	Mux             uint8         `json:"mux"`                  // 0 -> disabled, n (>0) -> limited connection
@@ -24,6 +26,13 @@ type Client struct {
 	// UDP tunes the SOCKS5 UDP ASSOCIATE relay. Omit the whole section to keep
 	// UDP enabled with built-in defaults.
 	UDP *UDP `json:"udp,omitempty"`
+}
+
+// Redirect configures the Linux TCP transparent redirect listener. Zero-valued
+// limits select safe built-in defaults.
+type Redirect struct {
+	// MaxConnections bounds accepted TCP sessions and proxy goroutines.
+	MaxConnections int `json:"max_connections,omitempty"`
 }
 
 // UDP configures the SOCKS5 UDP ASSOCIATE relay. Every numeric field is

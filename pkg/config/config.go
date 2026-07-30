@@ -21,6 +21,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config/server"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/dns"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/logger"
+	"golang.org/x/net/proxy"
 )
 
 // MixedConfig is a server/client mixed config, along with general config.
@@ -127,6 +128,9 @@ func (c *MixedConfig) Apply() error {
 			return fmt.Errorf("idle_timeout exceeds maximum duration: %d", c.IdleTimeout)
 		}
 	}
+	if c.Redirect != nil && c.Redirect.MaxConnections < 0 {
+		return fmt.Errorf("redirect.max_connections must be non-negative: %d", c.Redirect.MaxConnections)
+	}
 
 	// log mode
 	c.LogMode.Set()
@@ -199,14 +203,19 @@ func (c *MixedConfig) Apply() error {
 		rpcClient.SetUUID(c.UUID)
 	}
 
-	// forward proxy
+	// Forward proxy. Apply this unconditionally so a later Apply that drops the
+	// setting does not retain a stale process-global dialer from the old config.
+	var forwardDialer proxy.Dialer
 	if c.Forward != "" {
 		d, err := utils.LoadProxy(c.Forward)
 		if err != nil {
 			return err
 		}
-		forward.Attach(d)
-		log.Println("forward-proxy attached")
+		forwardDialer = d
+	}
+	preparedForwardDialer, err := forward.PrepareDialer(forwardDialer)
+	if err != nil {
+		return fmt.Errorf("forward proxy: %w", err)
 	}
 
 	// Routes: empty list installs the role default. An explicit list is used as-is
@@ -227,6 +236,14 @@ func (c *MixedConfig) Apply() error {
 	}
 	if err := router.SetRoutes(routes); err != nil {
 		return err
+	}
+
+	// Activate the prepared dialer only after route installation succeeds. A
+	// rejected reload must leave both the live route table and its forward egress
+	// unchanged.
+	preparedForwardDialer.Activate()
+	if forwardDialer != nil {
+		log.Println("forward-proxy attached")
 	}
 
 	// IPv6 dial preference must be set both ways so a later Apply/reload can

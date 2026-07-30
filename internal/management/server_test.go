@@ -172,7 +172,9 @@ func TestServe_EndToEnd(t *testing.T) {
 		t.Fatalf("GET /api/health: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	if err := resp.Body.Close(); err != nil {
+		t.Fatalf("close health response body: %v", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("health status = %d, want 200 (body=%s)", resp.StatusCode, body)
 	}
@@ -182,7 +184,9 @@ func TestServe_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /api/stats: %v", err)
 	}
-	resp.Body.Close()
+	if err := resp.Body.Close(); err != nil {
+		t.Fatalf("close stats response body: %v", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("stats status = %d, want 200", resp.StatusCode)
 	}
@@ -194,7 +198,9 @@ func TestServe_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET with forged host: %v", err)
 	}
-	resp.Body.Close()
+	if err := resp.Body.Close(); err != nil {
+		t.Fatalf("close forged-host response body: %v", err)
+	}
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("forged-host status = %d, want 403", resp.StatusCode)
 	}

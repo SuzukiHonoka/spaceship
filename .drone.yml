@@ -4,19 +4,19 @@ name: golang-ci
 
 steps:
   - name: lint
-    image: golangci/golangci-lint:v2.0.2-alpine
+    image: golangci/golangci-lint:v2.12.2-alpine
     commands:
       - golangci-lint run --timeout=5m ./...
 
   - name: format-check
-    image: golang:alpine
+    image: golang:1.26.5-alpine
     commands:
       - apk add --no-cache bash
       - gofmt -l . | tee /dev/stderr
       - test -z "$(gofmt -l .)" # Fail if any files are not formatted
 
   - name: dependency-check
-    image: golang:alpine
+    image: golang:1.26.5-alpine
     commands:
       - apk add --no-cache git
       - go mod tidy
@@ -24,12 +24,12 @@ steps:
       - go mod verify
 
   - name: security-scan
-    image: securego/gosec
+    image: ghcr.io/securego/gosec:2.28.0
     commands:
-      - gosec ./...
+      - gosec -exclude-generated ./...
 
   - name: test-with-coverage
-    image: golang:alpine
+    image: golang:1.26.5-alpine
     environment:
       GO111MODULE: on
       GOCACHE: /go/cache
@@ -42,9 +42,31 @@ steps:
       - go tool cover -func=coverage.out
       - |
         COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
-        THRESHOLD=80
+        # Ratchet this floor upward as repository-wide coverage grows.
+        THRESHOLD=68.0
         echo "Code coverage is $COVERAGE%, threshold is $THRESHOLD%"
-        echo "Skipping coverage threshold check during early development"
+        awk -v coverage="$COVERAGE" -v threshold="$THRESHOLD" \
+          'BEGIN { if (coverage < threshold) exit 1 }'
+
+  # Drone only permits privileged steps for trusted repositories. This job
+  # creates a disposable network namespace and never modifies the host rules.
+  - name: netfilter-redirect-integration
+    image: golang:1.26.5-alpine
+    privileged: true
+    environment:
+      CGO_ENABLED: "1"
+      SPACESHIP_REDIRECT_INTEGRATION: "1"
+      SPACESHIP_REDIRECT_INTEGRATION_IPV6: "1"
+    commands:
+      - apk add --no-cache gcc musl-dev iproute2 iptables util-linux
+      - go test -count=1 -race -run '^TestNetfilterRedirectIntegration$' ./internal/redirect
+    depends_on:
+      - test-with-coverage
+    # Never execute pull-request code with host-equivalent container privileges.
+    when:
+      event:
+        - push
+        - tag
 
   - name: coverage-report
     image: robertstettner/drone-codecov
@@ -71,3 +93,4 @@ trigger:
   event:
     - push
     - pull_request
+    - tag

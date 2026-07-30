@@ -53,7 +53,7 @@ func TestForwarder_Close(t *testing.T) {
 	}
 
 	c1, c2 := net.Pipe()
-	defer c2.Close()
+	defer func() { _ = c2.Close() }()
 	f.Conn = c1
 	if err := f.Close(); err != nil {
 		t.Errorf("Close conn error: %v", err)
@@ -79,7 +79,7 @@ func TestForwarder_CopyTargetToClientCancellationClosesTarget(t *testing.T) {
 		sent: make(chan *proto.ProxyDST, 1),
 	}
 	target, peer := net.Pipe()
-	defer peer.Close()
+	defer func() { _ = peer.Close() }()
 	f := NewForwarder(ctx, stream)
 	f.Conn = target
 	f.network = "tcp"

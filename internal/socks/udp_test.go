@@ -171,7 +171,7 @@ func TestUDPRelay_RejectsEgressWithoutUDP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewUDPRelay() error = %v", err)
 	}
-	defer relay.Close()
+	defer func() { _ = relay.Close() }()
 
 	const target = "8.8.8.8:53"
 	_, err = relay.getOrCreateNAT(target, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 12345})
@@ -203,7 +203,7 @@ func TestUDPRelay_LargePayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("echo listen: %v", err)
 	}
-	defer es.Close()
+	defer func() { _ = es.Close() }()
 	big := bytes.Repeat([]byte{0xAB}, respSize)
 	go func() {
 		buf := make([]byte, 2048)
@@ -221,13 +221,13 @@ func TestUDPRelay_LargePayload(t *testing.T) {
 		t.Fatalf("NewUDPRelay: %v", err)
 	}
 	go func() { _ = relay.Run() }()
-	defer relay.Close()
+	defer func() { _ = relay.Close() }()
 
 	client, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("client listen: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	target := &AddrSpec{IP: net.ParseIP("127.0.0.1"), Port: uint16(es.LocalAddr().(*net.UDPAddr).Port)}
 	header, _ := MarshalUDPHeader(target)
@@ -271,7 +271,7 @@ func TestUDPRelay_RejectsFragmentedPacket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewUDPRelay: %v", err)
 	}
-	defer relay.Close()
+	defer func() { _ = relay.Close() }()
 
 	header, _ := MarshalUDPHeader(&AddrSpec{IP: net.ParseIP("127.0.0.1"), Port: 9999})
 	header[2] = 1 // FRAG byte != 0
@@ -297,7 +297,7 @@ func TestUDPRelay_RejectsWrongClientIP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewUDPRelay: %v", err)
 	}
-	defer relay.Close()
+	defer func() { _ = relay.Close() }()
 
 	header, _ := MarshalUDPHeader(&AddrSpec{IP: net.ParseIP("127.0.0.1"), Port: 9999})
 	packet := append(header, []byte("data")...)
@@ -670,7 +670,7 @@ func TestNewUDPRelayAssociationLimitReleasedOnClose(t *testing.T) {
 		t.Fatalf("first newUDPRelay() error = %v", err)
 	}
 	if _, err := newUDPRelayWithListener(clientIP, nil, associations, natEntries, 0, listen); !errors.Is(err, ErrUDPAssociationLimit) {
-		first.Close()
+		_ = first.Close()
 		t.Fatalf("second newUDPRelay() error = %v, want ErrUDPAssociationLimit", err)
 	}
 	if err := first.Close(); err != nil {
@@ -681,7 +681,7 @@ func TestNewUDPRelayAssociationLimitReleasedOnClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newUDPRelay() after release error = %v", err)
 	}
-	defer third.Close()
+	defer func() { _ = third.Close() }()
 }
 
 func TestNewUDPRelayListenFailureReleasesAssociationLimit(t *testing.T) {
@@ -703,7 +703,7 @@ func TestNewUDPRelayListenFailureReleasesAssociationLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newUDPRelayWithListener() after listen failure error = %v", err)
 	}
-	defer relay.Close()
+	defer func() { _ = relay.Close() }()
 }
 
 func TestUDPRelayDialFailureReleasesNATLimitAndRoute(t *testing.T) {
@@ -720,7 +720,7 @@ func TestUDPRelayDialFailureReleasesNATLimitAndRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newUDPRelayWithListener() error = %v", err)
 	}
-	defer relay.Close()
+	defer func() { _ = relay.Close() }()
 
 	dialErr := errors.New("dial failed")
 	outbound := &scriptedPacketConn{}
@@ -770,11 +770,11 @@ func TestUDPRelayNATLimitReleasedOnClose(t *testing.T) {
 	}
 
 	if _, err := relay.getOrCreateNAT("127.0.0.1:53001", testClientAddr()); err != nil {
-		relay.Close()
+		_ = relay.Close()
 		t.Fatalf("first getOrCreateNAT() error = %v", err)
 	}
 	if _, err := relay.getOrCreateNAT("127.0.0.1:53002", testClientAddr()); !errors.Is(err, ErrUDPNATLimit) {
-		relay.Close()
+		_ = relay.Close()
 		t.Fatalf("second getOrCreateNAT() error = %v, want ErrUDPNATLimit", err)
 	}
 	if err := relay.Close(); err != nil {
@@ -999,7 +999,7 @@ func TestUDPRelay_NATKeyedByClientAddr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newUDPRelayWithListener() error = %v", err)
 	}
-	defer relay.Close()
+	defer func() { _ = relay.Close() }()
 
 	relay.getRoute = func(host string) (transport.Transport, error) {
 		return &targetAwareTransport{
@@ -1112,7 +1112,7 @@ func TestUDPSettings_Disable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewUDPRelay() after reset error = %v", err)
 	}
-	relay.Close()
+	_ = relay.Close()
 }
 
 // TestUDPSettings_LimitsApplied verifies configured limits replace the defaults
@@ -1129,7 +1129,7 @@ func TestUDPSettings_LimitsApplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first NewUDPRelay() error = %v", err)
 	}
-	defer first.Close()
+	defer func() { _ = first.Close() }()
 	if _, err := NewUDPRelay(net.ParseIP("127.0.0.1"), nil); !errors.Is(err, ErrUDPAssociationLimit) {
 		t.Fatalf("second NewUDPRelay() error = %v, want ErrUDPAssociationLimit", err)
 	}
@@ -1195,13 +1195,13 @@ func TestRelayBindAddressReachableFromClient(t *testing.T) {
 			if err != nil {
 				t.Skipf("cannot bind %s/%s on this host: %v", network, bindAddr, err)
 			}
-			defer pc.Close()
+			defer func() { _ = pc.Close() }()
 
 			client, err := net.ListenPacket(network, "")
 			if err != nil {
 				t.Fatalf("client listen: %v", err)
 			}
-			defer client.Close()
+			defer func() { _ = client.Close() }()
 
 			if _, err := client.WriteTo([]byte("ping"), pc.LocalAddr()); err != nil {
 				t.Fatalf("client write to advertised addr %s: %v", pc.LocalAddr(), err)
@@ -1226,13 +1226,14 @@ func TestNATKey(t *testing.T) {
 	clientB := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 2222}
 	const target = "1.2.3.4:53"
 
-	if natKey(clientA, target) == natKey(clientB, target) {
+	keyA := natKey(clientA, target)
+	if keyA == natKey(clientB, target) {
 		t.Error("different client ports produced the same NAT key")
 	}
-	if natKey(clientA, target) != natKey(clientA, target) {
+	if got := natKey(clientA, target); got != keyA {
 		t.Error("NAT key is not stable for the same client and target")
 	}
-	if natKey(clientA, target) == natKey(clientA, "1.2.3.4:54") {
+	if keyA == natKey(clientA, "1.2.3.4:54") {
 		t.Error("different targets produced the same NAT key")
 	}
 	if got := natKey(nil, target); got != target {

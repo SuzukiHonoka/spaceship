@@ -135,7 +135,7 @@ func (w ConnWrappers) GetConnectionDetails() []ConnectionDetail {
 		}
 
 		// Get real gRPC connectivity state
-		grpcState := wrapper.ClientConn.GetState()
+		grpcState := wrapper.GetState()
 		connectivityState := grpcStateToString(grpcState)
 
 		// Derive health status from gRPC state and load

@@ -54,7 +54,7 @@ func TestBlackHole_Proxy_ContextCancel(t *testing.T) {
 
 	// A reader that blocks forever
 	r, w := io.Pipe()
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	errCh := make(chan error, 1)
 	go func() {

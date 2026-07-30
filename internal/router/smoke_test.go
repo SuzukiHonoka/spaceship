@@ -156,7 +156,7 @@ func TestSetRoutesRejectsInvalidGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed reload replaced the previous route set: %v", err)
 	}
-	defer tr.Close()
+	defer func() { _ = tr.Close() }()
 	if tr.String() != "direct" {
 		t.Fatalf("route after failed reload = %s, want direct", tr)
 	}
@@ -179,7 +179,7 @@ func TestSetRoutesClonesCallerState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("caller mutation changed installed route: %v", err)
 	}
-	defer tr.Close()
+	defer func() { _ = tr.Close() }()
 	if tr.String() != "direct" {
 		t.Fatalf("installed route = %s, want direct", tr)
 	}

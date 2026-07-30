@@ -44,7 +44,9 @@ func main() {
 	var cancel context.CancelFunc
 
 	if *showStats {
-		if term.IsTerminal(int(os.Stdout.Fd())) {
+		// os.File.Fd returns the platform descriptor that x/term requires as an
+		// int; this is the canonical round trip for a live os.File descriptor.
+		if term.IsTerminal(int(os.Stdout.Fd())) { // #nosec G115 -- descriptor originated from the OS int handle
 			// Skip internal logging
 			launcher.SkipInternalLogging()
 

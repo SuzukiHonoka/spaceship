@@ -25,7 +25,7 @@ func (c *countCloser) Write(p []byte) (int, error) { return len(p), nil }
 func TestOnceNetConnIdempotentClose(t *testing.T) {
 	// net.Conn requires the full interface — use a real pipe.
 	c1, c2 := net.Pipe()
-	defer c2.Close()
+	defer func() { _ = c2.Close() }()
 
 	oc := OnceNetConn(c1)
 	if err := oc.Close(); err != nil {
@@ -77,7 +77,7 @@ func TestOnceReadWriteCloserPropagatesFirstError(t *testing.T) {
 
 func TestOnceNetConnConcurrentClose(t *testing.T) {
 	c1, c2 := net.Pipe()
-	defer c2.Close()
+	defer func() { _ = c2.Close() }()
 	oc := OnceNetConn(c1)
 
 	var wg sync.WaitGroup

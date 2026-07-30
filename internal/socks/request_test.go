@@ -152,12 +152,12 @@ func TestHandleAssociate_ContextCancelStopsRelay(t *testing.T) {
 	defer cancel()
 
 	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
-	defer clientConn.Close()
+	defer func() { _ = serverConn.Close() }()
+	defer func() { _ = clientConn.Close() }()
 
 	pr, pw := io.Pipe()
-	defer pr.Close()
-	defer pw.Close()
+	defer func() { _ = pr.Close() }()
+	defer func() { _ = pw.Close() }()
 
 	req := &Request{
 		RemoteAddr: &AddrSpec{IP: net.ParseIP("127.0.0.1"), Port: 12345},

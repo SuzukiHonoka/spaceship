@@ -10,6 +10,7 @@ import (
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/dns"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/http"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/redirect"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/socks"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/server"
@@ -69,6 +70,9 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 	// check uuid format
 	if _, err := uuid.Parse(cfg.UUID); err != nil {
 		return err
+	}
+	if cfg.ListenRedirect != "" && !redirect.Supported() {
+		return redirect.ErrUnsupported
 	}
 
 	// destroy any left connections
@@ -133,6 +137,25 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 		errGroup.Go(func() error {
 			if err := h.ListenAndServe("tcp", cfg.ListenHttp); err != nil {
 				return fmt.Errorf("serve http failed: %w", err)
+			}
+			return nil
+		})
+	}
+
+	// create Linux TCP transparent redirect server
+	if cfg.ListenRedirect != "" {
+		redirectCfg := new(redirect.Config)
+		if cfg.Redirect != nil {
+			redirectCfg.MaxConnections = cfg.Redirect.MaxConnections
+		}
+		s, err := redirect.New(ctx, redirectCfg)
+		if err != nil {
+			return fmt.Errorf("configure redirect: %w", err)
+		}
+
+		errGroup.Go(func() error {
+			if err := s.ListenAndServe(cfg.ListenRedirect); err != nil {
+				return fmt.Errorf("serve redirect failed: %w", err)
 			}
 			return nil
 		})

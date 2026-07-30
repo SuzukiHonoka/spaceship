@@ -23,6 +23,7 @@ type Direct struct{}
 // Compile-time guarantee that direct egress can carry UDP, as claimed by
 // router's Egress.SupportsUDP for EgressDirect.
 var _ transport.PacketTargetDialer = (*Direct)(nil)
+var _ transport.ContextDialer = (*Direct)(nil)
 
 func New() transport.Transport {
 	return &Direct{}
@@ -33,7 +34,12 @@ func (d *Direct) String() string {
 }
 
 func (d *Direct) Dial(network, addr string) (net.Conn, error) {
-	return net.DialTimeout(transport.DialNetwork(network), addr, transport.GetDialTimeout())
+	return d.DialContext(context.Background(), network, addr)
+}
+
+func (d *Direct) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := net.Dialer{Timeout: transport.GetDialTimeout()}
+	return dialer.DialContext(ctx, transport.DialNetwork(network), addr)
 }
 
 // connectedPacketConn adapts a connected *net.UDPConn to net.PacketConn.
@@ -55,14 +61,14 @@ type connectedPacketConn struct {
 // ReadFrom reports the dialed peer as the source: the kernel has already
 // guaranteed the datagram came from it.
 func (c *connectedPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
-	n, err := c.UDPConn.Read(p)
+	n, err := c.Read(p)
 	return n, c.remote, err
 }
 
 // WriteTo ignores addr — a connected socket has exactly one destination, and
 // the relay keeps one of these per target address.
 func (c *connectedPacketConn) WriteTo(p []byte, _ net.Addr) (int, error) {
-	return c.UDPConn.Write(p)
+	return c.Write(p)
 }
 
 // DialPacket opens a connected UDP socket for packet-oriented communication.
@@ -117,9 +123,9 @@ func (d *Direct) Close() error {
 func (d *Direct) Proxy(ctx context.Context, addr string, localAddr chan<- string, dst io.Writer, src io.Reader) (err error) {
 	defer close(localAddr)
 
-	conn, err := d.Dial(transport.GetNetwork(), addr)
+	conn, err := d.DialContext(ctx, transport.GetNetwork(), addr)
 	if err != nil {
-		// net.DialTimeout already returns "dial tcp …: …"; don't re-wrap as
+		// net.Dialer already returns "dial tcp …: …"; don't re-wrap as
 		// "direct: failed to dial: dial tcp …" (server logs add "dial:" once).
 		return err
 	}

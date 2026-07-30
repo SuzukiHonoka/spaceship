@@ -240,7 +240,17 @@ func (s *Server) handleAssociate(ctx context.Context, conn ConnWriter, req *Requ
 
 	// Parse the relay's bound address to build the SOCKS5 reply.
 	relayAddr := relay.RelayAddr().(*net.UDPAddr)
-	bind := &AddrSpec{IP: relayAddr.IP, Port: uint16(relayAddr.Port)}
+	if relayAddr.Port < 0 || relayAddr.Port > 65535 {
+		_ = relay.Close()
+		if sendErr := sendReply(conn, serverFailure, nil); sendErr != nil {
+			return fmt.Errorf("failed to send reply: %w", sendErr)
+		}
+		return fmt.Errorf("socks5: udp associate: invalid relay port %d", relayAddr.Port)
+	}
+	bind := &AddrSpec{
+		IP:   relayAddr.IP,
+		Port: uint16(relayAddr.Port), // #nosec G115 -- explicitly bounded above
+	}
 
 	// If the relay still bound to an unspecified address, substitute the local
 	// side of the TCP connection so the client knows where to send datagrams.

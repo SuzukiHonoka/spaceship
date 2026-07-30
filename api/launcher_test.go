@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SuzukiHonoka/spaceship/v2/internal/redirect"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config/client"
@@ -161,6 +163,31 @@ func TestLaunchRejectsInvalidUUID(t *testing.T) {
 
 	if err := launcher.Launch(cfg); err == nil {
 		t.Fatal("Launch() accepted invalid UUID")
+	}
+}
+
+func TestLaunchRejectsRedirectOnUnsupportedPlatform(t *testing.T) {
+	if redirect.Supported() {
+		t.Skip("platform supports transparent redirect")
+	}
+	t.Cleanup(transport.EnableIPv6)
+
+	launcher := NewLauncher()
+	launcher.SkipInternalLogging()
+	cfg := &config.MixedConfig{
+		Role: config.RoleClient,
+		Client: &client.Client{
+			ServerAddr:     "127.0.0.1:1",
+			UUID:           testUserUUID,
+			ListenRedirect: "127.0.0.1:12345",
+			Mux:            1,
+		},
+		Server: &server.Server{},
+	}
+
+	err := launcher.Launch(cfg)
+	if !errors.Is(err, redirect.ErrUnsupported) {
+		t.Fatalf("Launch() error = %v, want ErrUnsupported", err)
 	}
 }
 

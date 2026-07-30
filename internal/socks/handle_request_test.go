@@ -17,8 +17,8 @@ func TestHandleRequest_BindUnsupported(t *testing.T) {
 	s := New(ctx, &Config{})
 
 	serverSide, clientSide := net.Pipe()
-	defer serverSide.Close()
-	defer clientSide.Close()
+	defer func() { _ = serverSide.Close() }()
+	defer func() { _ = clientSide.Close() }()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -118,7 +118,7 @@ func TestHandleConnect_SuccessDirect(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 		_, _ = io.Copy(c, c)
 	}()
 
@@ -127,8 +127,8 @@ func TestHandleConnect_SuccessDirect(t *testing.T) {
 	s := New(ctx, &Config{})
 
 	serverSide, clientSide := net.Pipe()
-	defer serverSide.Close()
-	defer clientSide.Close()
+	defer func() { _ = serverSide.Close() }()
+	defer func() { _ = clientSide.Close() }()
 
 	host, portStr, err := net.SplitHostPort(ln.Addr().String())
 	if err != nil {
@@ -150,8 +150,8 @@ func TestHandleConnect_SuccessDirect(t *testing.T) {
 	// downloads: target → conn (serverSide → clientSide)
 	// uploads: bufConn → target
 	pr, pw := io.Pipe()
-	defer pr.Close()
-	defer pw.Close()
+	defer func() { _ = pr.Close() }()
+	defer func() { _ = pw.Close() }()
 
 	req := &Request{
 		Command:  ConnectCommand,

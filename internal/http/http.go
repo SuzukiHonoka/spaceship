@@ -146,7 +146,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	defer utils.Close(route)
 
-	log.Printf("http: %q -> %s", r.Host, route)
+	log.Printf("http: %q -> %s", r.Host, route) // #nosec G706 -- %q escapes request-controlled log characters
 
 	// hijack the connection
 	hj, ok := w.(http.Hijacker)
@@ -194,8 +194,8 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		// Order matters — close the pipe first so that if client.Read() returns
 		// data before the deadline kicks in, the subsequent pw.Write() still
 		// unblocks (rather than blocking on a now-unread pipe).
-		pr.Close()                     //nolint:errcheck
-		client.SetDeadline(time.Now()) //nolint:errcheck
+		_ = pr.Close()
+		_ = client.SetDeadline(time.Now())
 		return err
 	})
 
@@ -280,7 +280,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	defer utils.Close(route)
 
-	log.Printf("http: CONNECT %q -> %s", r.Host, route)
+	log.Printf("http: CONNECT %q -> %s", r.Host, route) // #nosec G706 -- %q escapes request-controlled log characters
 
 	// hijack the connection
 	hj, ok := w.(http.Hijacker)

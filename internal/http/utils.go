@@ -35,9 +35,11 @@ func ServeProxyError(w io.Writer, host string, err error) {
 	}
 
 	if host != "" {
-		log.Printf("http: proxy %s failed: %v", host, err)
+		// %q escapes CR/LF and other control characters from both request-derived
+		// values before they reach the line-oriented application log.
+		log.Printf("http: proxy %q failed: %q", host, err) // #nosec G706 -- both tainted values are quoted
 	} else {
-		log.Printf("http: %v", err)
+		log.Printf("http: %q", err) // #nosec G706 -- quoted formatting escapes log-control characters
 	}
 
 	if w == nil {

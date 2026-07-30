@@ -124,11 +124,19 @@ func newBlockingTargetDialer() *blockingTargetDialer {
 }
 
 func (d *blockingTargetDialer) Dial(_, _ string) (net.Conn, error) {
+	return d.DialContext(context.Background(), "", "")
+}
+
+func (d *blockingTargetDialer) DialContext(ctx context.Context, _, _ string) (net.Conn, error) {
 	d.startOnce.Do(func() {
 		close(d.started)
 	})
-	<-d.release
-	return nil, io.EOF
+	select {
+	case <-d.release:
+		return nil, io.EOF
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (d *blockingTargetDialer) unblock() {
@@ -163,10 +171,14 @@ func startUDPEcho(t *testing.T) string {
 
 func TestServerCancelForceClosesConnectionsWithBlockedHandler(t *testing.T) {
 	dialer := newBlockingTargetDialer()
-	forward.Attach(dialer)
+	if err := forward.Attach(dialer); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		dialer.unblock()
-		forward.Attach(nil)
+		if err := forward.Attach(nil); err != nil {
+			t.Errorf("detaching forward dialer: %v", err)
+		}
 		if err := router.SetRoutes(router.Routes{
 			{MatchType: router.TypeDefault, Destination: router.EgressDirect},
 		}); err != nil {
@@ -195,13 +207,13 @@ func TestServerCancelForceClosesConnectionsWithBlockedHandler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer proxyClient.Close()
+	defer func() { _ = proxyClient.Close() }()
 
 	proxyCtx, cancelProxy := context.WithCancel(context.Background())
 	defer cancelProxy()
 	sourceReader, sourceWriter := io.Pipe()
-	defer sourceReader.Close()
-	defer sourceWriter.Close()
+	defer func() { _ = sourceReader.Close() }()
+	defer func() { _ = sourceWriter.Close() }()
 	proxyErr := make(chan error, 1)
 	go func() {
 		proxyErr <- proxyClient.Proxy(
@@ -257,13 +269,13 @@ func TestEndToEnd_UDPRoundTripOverGRPC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.New() error = %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	pc, err := c.DialPacket("udp", echoAddr)
 	if err != nil {
 		t.Fatalf("DialPacket(%s) error = %v", echoAddr, err)
 	}
-	defer pc.Close()
+	defer func() { _ = pc.Close() }()
 
 	target, err := net.ResolveUDPAddr("udp", echoAddr)
 	if err != nil {
@@ -300,13 +312,13 @@ func TestEndToEnd_UDPMultipleDatagrams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.New() error = %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	pc, err := c.DialPacket("udp", echoAddr)
 	if err != nil {
 		t.Fatalf("DialPacket() error = %v", err)
 	}
-	defer pc.Close()
+	defer func() { _ = pc.Close() }()
 
 	target, err := net.ResolveUDPAddr("udp", echoAddr)
 	if err != nil {
@@ -367,7 +379,7 @@ func TestEndToEnd_TCPRoundTripOverGRPC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tcp echo listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	payload := []byte("hello through the tunnel")
 	go func() {
@@ -375,7 +387,7 @@ func TestEndToEnd_TCPRoundTripOverGRPC(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		buf := make([]byte, len(payload))
 		if _, err := io.ReadFull(conn, buf); err != nil {
 			return
@@ -389,7 +401,7 @@ func TestEndToEnd_TCPRoundTripOverGRPC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.New() error = %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -446,7 +458,7 @@ func TestEndToEnd_FailFastWhenServerUnreachable(t *testing.T) {
 		// Failing this early is also acceptable — it is still fail-fast.
 		return
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	done := make(chan error, 1)
 	go func() {

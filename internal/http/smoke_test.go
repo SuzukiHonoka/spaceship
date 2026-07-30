@@ -106,7 +106,7 @@ func TestHandleRequestDoesNotForwardPipelinedRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	firstHost := strings.TrimPrefix(firstOrigin.URL, "http://")
 	secondHost := strings.TrimPrefix(secondOrigin.URL, "http://")
@@ -197,7 +197,7 @@ func TestHandleRequestSupportsExpectContinue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
 
 	host := strings.TrimPrefix(origin.URL, "http://")

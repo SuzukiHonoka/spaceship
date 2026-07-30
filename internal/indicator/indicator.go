@@ -83,7 +83,9 @@ func (sw *Indicator) handleResize() {
 
 // getTerminalSize returns the width and height of the terminal
 func getTerminalSize() (width, height int) {
-	width, height, err := term.GetSize(int(os.Stdout.Fd()))
+	// os.File.Fd returns the platform descriptor that x/term requires as an
+	// int; this is the canonical round trip for a live os.File descriptor.
+	width, height, err := term.GetSize(int(os.Stdout.Fd())) // #nosec G115 -- descriptor originated from the OS int handle
 	if err != nil {
 		// Default fallback values if we can't detect
 		return 80, 24

@@ -198,13 +198,13 @@ func TestPoolInitProxyAndStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c2.Close()
+	defer func() { _ = c2.Close() }()
 
 	pc, err := c2.DialPacket("udp", "127.0.0.1:53")
 	if err != nil {
 		t.Fatalf("DialPacket: %v", err)
 	}
-	defer pc.Close()
+	defer func() { _ = pc.Close() }()
 
 	_ = pc.LocalAddr()
 	_ = pc.SetDeadline(time.Now().Add(3 * time.Second))
@@ -258,4 +258,3 @@ func TestGrpcStateHelpers(t *testing.T) {
 		t.Fatalf("details = %v", d)
 	}
 }
-

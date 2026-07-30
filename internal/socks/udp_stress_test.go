@@ -73,7 +73,7 @@ func TestUDPRelay_Stress(t *testing.T) {
 				t.Errorf("failed to start client: %v", err)
 				return
 			}
-			defer client.Close()
+			defer func() { _ = client.Close() }()
 
 			if uc, ok := client.(*net.UDPConn); ok {
 				_ = uc.SetReadBuffer(1024 * 1024)

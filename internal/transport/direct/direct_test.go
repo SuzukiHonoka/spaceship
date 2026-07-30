@@ -3,6 +3,7 @@ package direct
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -30,7 +31,7 @@ func TestDirect_DialPacket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DialPacket() error = %v", err)
 	}
-	defer pc.Close()
+	defer func() { _ = pc.Close() }()
 
 	if _, ok := pc.LocalAddr().(*net.UDPAddr); !ok {
 		t.Errorf("DialPacket() did not return UDP addr")
@@ -56,21 +57,21 @@ func TestDirect_DialPacketIsConnected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("peer listen: %v", err)
 	}
-	defer peer.Close()
+	defer func() { _ = peer.Close() }()
 
 	d := New().(transport.PacketDialer)
 	pc, err := d.DialPacket("udp", peer.LocalAddr().String())
 	if err != nil {
 		t.Fatalf("DialPacket() error = %v", err)
 	}
-	defer pc.Close()
+	defer func() { _ = pc.Close() }()
 
 	// A third party sends directly to the socket's local port.
 	attacker, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("attacker listen: %v", err)
 	}
-	defer attacker.Close()
+	defer func() { _ = attacker.Close() }()
 	if _, err := attacker.WriteTo([]byte("spoofed"), pc.LocalAddr()); err != nil {
 		t.Fatalf("attacker write: %v", err)
 	}
@@ -96,14 +97,14 @@ func TestDirect_Proxy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Listen() error = %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		buf := make([]byte, 1024)
 		for {
 			n, err := conn.Read(buf)
@@ -157,6 +158,20 @@ func TestDirect_Proxy_DialError(t *testing.T) {
 	}
 }
 
+func TestDirect_Proxy_CancelsDial(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	localAddr := make(chan string, 1)
+
+	err := New().Proxy(ctx, "127.0.0.1:1", localAddr, nil, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Proxy() error = %v, want context.Canceled", err)
+	}
+	if _, ok := <-localAddr; ok {
+		t.Fatal("localAddr channel remained open after canceled dial")
+	}
+}
+
 // TestDirect_DialPacket_FamilyMatchesTarget locks in the fix for silent UDP
 // reply black-holing: the local socket must be bound on the same address
 // family as the target. A dual-stack [::] socket does not reliably receive
@@ -169,7 +184,7 @@ func TestDirect_DialPacket_FamilyMatchesTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DialPacketTarget(ipv4) error = %v", err)
 	}
-	defer pc4.Close()
+	defer func() { _ = pc4.Close() }()
 	if la := pc4.LocalAddr().(*net.UDPAddr); la.IP.To4() == nil {
 		t.Errorf("IPv4 target bound non-IPv4 socket %s (would black-hole replies)", la)
 	}
@@ -183,7 +198,7 @@ func TestDirect_DialPacket_FamilyMatchesTarget(t *testing.T) {
 	if err != nil {
 		t.Skipf("DialPacketTarget(ipv6) unavailable on this host: %v", err)
 	}
-	defer pc6.Close()
+	defer func() { _ = pc6.Close() }()
 	if la := pc6.LocalAddr().(*net.UDPAddr); la.IP.To4() != nil {
 		t.Errorf("IPv6 target bound IPv4 socket %s", la)
 	}
@@ -218,20 +233,20 @@ func TestDirect_DialPacketWriteToIgnoresAddr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("peer listen: %v", err)
 	}
-	defer peer.Close()
+	defer func() { _ = peer.Close() }()
 
 	other, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("other listen: %v", err)
 	}
-	defer other.Close()
+	defer func() { _ = other.Close() }()
 
 	d := New().(transport.PacketDialer)
 	pc, err := d.DialPacket("udp", peer.LocalAddr().String())
 	if err != nil {
 		t.Fatalf("DialPacket() error = %v", err)
 	}
-	defer pc.Close()
+	defer func() { _ = pc.Close() }()
 
 	// Deliberately pass the wrong destination.
 	if _, err := pc.WriteTo([]byte("hello"), other.LocalAddr()); err != nil {

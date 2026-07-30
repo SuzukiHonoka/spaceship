@@ -1,7 +1,10 @@
 package config
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"testing"
@@ -10,15 +13,111 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/socks"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/forward"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
 	configClient "github.com/SuzukiHonoka/spaceship/v2/pkg/config/client"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config/server"
 )
 
+type fixedErrorDialer struct {
+	err error
+}
+
+func (d *fixedErrorDialer) Dial(_, _ string) (net.Conn, error) {
+	return nil, d.err
+}
+
+func (d *fixedErrorDialer) DialContext(context.Context, string, string) (net.Conn, error) {
+	return nil, d.err
+}
+
 func TestClientIdleTimeoutRemainsIntAPI(t *testing.T) {
 	cfg := configClient.Client{IdleTimeout: 30}
 	if cfg.IdleTimeout != 30 {
 		t.Fatalf("IdleTimeout = %d, want 30", cfg.IdleTimeout)
+	}
+}
+
+func TestNewFromStringParsesRedirectListener(t *testing.T) {
+	cfg, err := NewFromString(`{
+		"role":"client",
+			"log":"skip",
+			"uuid":"00000000-0000-0000-0000-000000000001",
+			"listen_redirect":"0.0.0.0:12345",
+			"redirect":{"max_connections":2048}
+		}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.ListenRedirect, "0.0.0.0:12345"; got != want {
+		t.Fatalf("ListenRedirect = %q, want %q", got, want)
+	}
+	if cfg.Redirect == nil || cfg.Redirect.MaxConnections != 2048 {
+		t.Fatalf("Redirect = %+v, want max_connections 2048", cfg.Redirect)
+	}
+}
+
+func TestApplyRejectsNegativeRedirectLimit(t *testing.T) {
+	t.Cleanup(transport.EnableIPv6)
+	cfg, err := NewFromString(`{
+		"role":"client",
+		"log":"skip",
+		"uuid":"00000000-0000-0000-0000-000000000001",
+		"ipv6":true,
+		"redirect":{"max_connections":-1}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Apply(); err == nil {
+		t.Fatal("Apply() accepted a negative redirect.max_connections")
+	}
+}
+
+func TestApplyAttachesAndResetsForwardProxy(t *testing.T) {
+	t.Cleanup(func() {
+		transport.EnableIPv6()
+		if err := forward.Attach(nil); err != nil {
+			t.Errorf("detach forward proxy: %v", err)
+		}
+	})
+
+	withForward, err := NewFromString(`{
+		"role":"client",
+		"log":"skip",
+		"uuid":"forward-config-user",
+		"ipv6":true,
+		"forward":"socks5://127.0.0.1:1080"
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := withForward.Apply(); err != nil {
+		t.Fatalf("Apply() with forward proxy error = %v", err)
+	}
+
+	dialer := forward.New().(transport.ContextDialer)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := dialer.DialContext(ctx, "tcp", "example.com:443"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("configured forward DialContext() error = %v, want context.Canceled", err)
+	}
+
+	withoutForward, err := NewFromString(`{
+		"role":"client",
+		"log":"skip",
+		"uuid":"forward-config-user",
+		"ipv6":true
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := withoutForward.Apply(); err != nil {
+		t.Fatalf("Apply() without forward proxy error = %v", err)
+	}
+	if _, err := forward.New().Dial("tcp", "example.com:443"); err == nil ||
+		err.Error() != "forward: dialer not attached" {
+		t.Fatalf("Dial() after forward reset error = %v, want unattached dialer", err)
 	}
 }
 
@@ -277,14 +376,30 @@ func TestApply_IPv6ToggleReload(t *testing.T) {
 	}
 }
 
-func TestApply_InvalidRoutesPreserveIPv6ModeAndLiveRoutes(t *testing.T) {
-	t.Cleanup(transport.EnableIPv6)
+func TestApply_InvalidRoutesPreserveLiveRoutesForwardDialerAndIPv6Mode(t *testing.T) {
+	t.Cleanup(func() {
+		transport.EnableIPv6()
+		if err := forward.Attach(nil); err != nil {
+			t.Errorf("detach forward proxy: %v", err)
+		}
+	})
 
-	valid, err := NewFromString(`{"role":"server","log":"skip","listen":"127.0.0.1:0","users":[{"uuid":"u"}],"ipv6":true}`)
+	valid, err := NewFromString(`{
+		"role":"server",
+		"log":"skip",
+		"listen":"127.0.0.1:0",
+		"users":[{"uuid":"u"}],
+		"ipv6":true,
+		"route":[{"dst":"forward","type":"default"}]
+	}`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := valid.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	activeDialErr := errors.New("active forward dialer")
+	if err := forward.Attach(&fixedErrorDialer{err: activeDialErr}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -293,6 +408,7 @@ func TestApply_InvalidRoutesPreserveIPv6ModeAndLiveRoutes(t *testing.T) {
 		"log":"skip",
 		"listen":"127.0.0.1:0",
 		"users":[{"uuid":"u"}],
+		"forward":"socks5://127.0.0.1:1080",
 		"route":[{"src":["["],"dst":"direct","type":"regex"}]
 	}`)
 	if err != nil {
@@ -309,9 +425,12 @@ func TestApply_InvalidRoutesPreserveIPv6ModeAndLiveRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed reload replaced live routes: %v", err)
 	}
-	defer tr.Close()
-	if tr.String() != "direct" {
-		t.Fatalf("live route after failed reload = %s, want direct", tr)
+	defer func() { _ = tr.Close() }()
+	if tr.String() != "forward" {
+		t.Fatalf("live route after failed reload = %s, want forward", tr)
+	}
+	if _, err := tr.Dial("tcp", "example.com:443"); !errors.Is(err, activeDialErr) {
+		t.Fatalf("live forward dialer after failed reload error = %v, want %v", err, activeDialErr)
 	}
 }
 

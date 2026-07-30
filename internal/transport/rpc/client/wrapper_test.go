@@ -16,7 +16,9 @@ func TestConnWrapper_InUse(t *testing.T) {
 		t.Errorf("expected load 1, got %v", load)
 	}
 
-	w.Done()
+	if err := w.Done(); err != nil {
+		t.Fatalf("Done() error = %v", err)
+	}
 	if load := w.GetCurrentLoad(); load != 0 {
 		t.Errorf("expected load 0, got %v", load)
 	}

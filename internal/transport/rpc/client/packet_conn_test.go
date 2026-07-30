@@ -436,7 +436,7 @@ func TestClient_DialPacket_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DialPacket() error = %v", err)
 	}
-	defer pc.Close()
+	defer func() { _ = pc.Close() }()
 	if _, ok := pc.(*StreamPacketConn); !ok {
 		t.Errorf("DialPacket() returned %T, want *StreamPacketConn", pc)
 	}

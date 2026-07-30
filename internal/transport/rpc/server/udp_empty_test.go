@@ -41,8 +41,8 @@ func (c *singleReadConn) Read(p []byte) (int, error) {
 
 func TestCopyClientToTarget_EmptyPayload_TCP_EOF(t *testing.T) {
 	c1, c2 := net.Pipe()
-	defer c1.Close()
-	defer c2.Close()
+	defer func() { _ = c1.Close() }()
+	defer func() { _ = c2.Close() }()
 
 	f := &Forwarder{Conn: c1, network: "tcp"}
 	err := f.copyClientToTarget(&proto.ProxySRC{
@@ -59,13 +59,13 @@ func TestCopyClientToTarget_EmptyPayload_UDP_OK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 
 	client, err := net.Dial("udp4", server.LocalAddr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	done := make(chan []byte, 1)
 	go func() {

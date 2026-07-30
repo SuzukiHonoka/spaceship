@@ -307,7 +307,9 @@ func MarshalUDPHeader(addr *AddrSpec) ([]byte, error) {
 			return nil, ErrUDPFQDNTooLong
 		}
 		atyp = fqdnAddress
-		addrBytes = append([]byte{byte(len(addr.FQDN))}, []byte(addr.FQDN)...)
+		// SOCKS5 encodes the domain length in one octet; the bound above
+		// proves the conversion is lossless.
+		addrBytes = append([]byte{byte(len(addr.FQDN))}, []byte(addr.FQDN)...) // #nosec G115 -- FQDN length is explicitly bounded above
 	} else {
 		return nil, fmt.Errorf("socks5: cannot marshal UDP header: invalid address")
 	}
@@ -554,7 +556,7 @@ func (r *UDPRelay) RelayAddr() net.Addr {
 // kernel socket buffer doesn't back up) while capping the number of goroutines
 // regardless of packet rate.
 func (r *UDPRelay) Run() error {
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 
 	var workers sync.WaitGroup
 	workers.Add(udpWorkerCount)
@@ -657,7 +659,9 @@ func (r *UDPRelay) handlePacket(job udpPacket) {
 		return
 	}
 	entry.lastSeen.Store(time.Now().UnixNano())
-	transport.GlobalStats.AddTx(uint64(nw))
+	if nw > 0 {
+		transport.GlobalStats.AddTx(uint64(nw)) // #nosec G115 -- net.PacketConn guarantees non-negative n
+	}
 }
 
 // natKey identifies a flow. Both the client source address and the target
@@ -895,7 +899,9 @@ func (r *UDPRelay) reverseRelay(entry *natEntry, key string, clientAddr net.Addr
 			log.Printf("socks5: udp reverse relay: write to client: %v", err)
 			continue
 		}
-		transport.GlobalStats.AddRx(uint64(nw))
+		if nw > 0 {
+			transport.GlobalStats.AddRx(uint64(nw)) // #nosec G115 -- net.PacketConn guarantees non-negative n
+		}
 	}
 }
 

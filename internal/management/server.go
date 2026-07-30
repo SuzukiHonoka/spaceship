@@ -119,7 +119,9 @@ func serve(ctx context.Context, ln net.Listener) error {
 	// Stop the server when the context is canceled.
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		// Preserve request-scoped values while deliberately detaching from the
+		// canceled parent so Shutdown has its own bounded cleanup window.
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Printf("management server shutdown error: %v", err)

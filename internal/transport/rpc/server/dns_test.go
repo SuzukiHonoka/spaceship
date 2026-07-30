@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"math"
 	"net"
+	"strconv"
 	"testing"
 	"time"
 
@@ -117,5 +119,34 @@ func TestDnsResolveReturnsResultForLocallyHandledQuestions(t *testing.T) {
 				t.Fatalf("result = %+v, want one result with rcode %d", response.Result, tt.want)
 			}
 		})
+	}
+}
+
+func TestSafeIntToUint32(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		in   int
+		want uint32
+		ok   bool
+	}{
+		{name: "negative", in: -1},
+		{name: "zero", in: 0, want: 0, ok: true},
+		{name: "dns rcode", in: dns.RcodeNameError, want: dns.RcodeNameError, ok: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := safeIntToUint32(tt.in)
+			if got != tt.want || ok != tt.ok {
+				t.Fatalf("safeIntToUint32(%d) = (%d, %v), want (%d, %v)",
+					tt.in, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+
+	if strconv.IntSize > 32 {
+		tooLargeValue := int64(math.MaxUint32) + 1
+		tooLarge := int(tooLargeValue)
+		if _, ok := safeIntToUint32(tooLarge); ok {
+			t.Fatalf("safeIntToUint32(%d) accepted uint32 overflow", tooLarge)
+		}
 	}
 }

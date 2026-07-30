@@ -52,12 +52,14 @@ func TestRoute_GenerateCache_ExtFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(tmpfile.Name())
+	t.Cleanup(func() { _ = os.Remove(tmpfile.Name()) })
 
 	if _, err := tmpfile.WriteString("file.example.com\nanother.com\n"); err != nil {
 		t.Fatal(err)
 	}
-	tmpfile.Close()
+	if err := tmpfile.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	r := &Route{
 		Sources:   []string{"manual.com"},
@@ -77,7 +79,9 @@ func TestRoute_Match_Exact(t *testing.T) {
 		Sources:   []string{"example.com"},
 		MatchType: TypeExact,
 	}
-	r.GenerateCache()
+	if err := r.GenerateCache(); err != nil {
+		t.Fatalf("GenerateCache() error = %v", err)
+	}
 
 	if !r.Match("example.com") {
 		t.Errorf("expected match for example.com")
@@ -98,7 +102,9 @@ func TestRoute_Match_Domain(t *testing.T) {
 		Sources:   []string{"google.com"},
 		MatchType: TypeDomain,
 	}
-	r.GenerateCache()
+	if err := r.GenerateCache(); err != nil {
+		t.Fatalf("GenerateCache() error = %v", err)
+	}
 
 	if !r.Match("google.com") {
 		t.Errorf("expected match for google.com")
@@ -142,12 +148,14 @@ func TestRoute_GenerateCache_ExtFile_SkipsEmptyAndComments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(tmpfile.Name())
+	t.Cleanup(func() { _ = os.Remove(tmpfile.Name()) })
 
 	if _, err := tmpfile.WriteString("keep.com\n\n# comment\n  also.com  \n"); err != nil {
 		t.Fatal(err)
 	}
-	tmpfile.Close()
+	if err := tmpfile.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	r := &Route{
 		Ext:       tmpfile.Name(),

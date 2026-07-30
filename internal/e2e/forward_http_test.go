@@ -47,7 +47,7 @@ func startUpstreamSOCKS(t *testing.T) string {
 }
 
 func serveUpstreamSOCKSConn(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Method negotiation: accept no-auth only.
 	head := make([]byte, 2)
@@ -99,7 +99,7 @@ func serveUpstreamSOCKSConn(conn net.Conn) {
 		_, _ = conn.Write([]byte{socks5Ver, 0x01, 0, atypIPv4, 0, 0, 0, 0, 0, 0})
 		return
 	}
-	defer target.Close()
+	defer func() { _ = target.Close() }()
 
 	if _, err := conn.Write([]byte{socks5Ver, repSuccess, 0, atypIPv4, 0, 0, 0, 0, 0, 0}); err != nil {
 		return
@@ -119,8 +119,14 @@ func TestFullStack_ForwardEgressThroughUpstreamProxy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("building upstream dialer: %v", err)
 	}
-	forward.Attach(dialer)
-	t.Cleanup(func() { forward.Attach(nil) })
+	if err := forward.Attach(dialer); err != nil {
+		t.Fatalf("attaching upstream dialer: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := forward.Attach(nil); err != nil {
+			t.Errorf("detaching upstream dialer: %v", err)
+		}
+	})
 
 	routeAll(t, router.EgressForward)
 	echo := startTCPEcho(t)
@@ -153,8 +159,14 @@ func TestFullStack_ForwardEgressRejectsUDP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("building upstream dialer: %v", err)
 	}
-	forward.Attach(dialer)
-	t.Cleanup(func() { forward.Attach(nil) })
+	if err := forward.Attach(dialer); err != nil {
+		t.Fatalf("attaching upstream dialer: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := forward.Attach(nil); err != nil {
+			t.Errorf("detaching upstream dialer: %v", err)
+		}
+	})
 
 	routeAll(t, router.EgressForward)
 	socksAddr := startSocksServer(t)
@@ -200,7 +212,7 @@ func TestFullStack_HTTPProxyConnect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial http proxy: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if err := conn.SetDeadline(time.Now().Add(20 * time.Second)); err != nil {
 		t.Fatalf("SetDeadline: %v", err)
 	}
@@ -215,7 +227,7 @@ func TestFullStack_HTTPProxyConnect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading CONNECT response: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != nethttp.StatusOK {
 		t.Fatalf("CONNECT status = %d, want 200", resp.StatusCode)
 	}
@@ -265,7 +277,7 @@ func TestFullStack_HTTPProxyPlainRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("proxied GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

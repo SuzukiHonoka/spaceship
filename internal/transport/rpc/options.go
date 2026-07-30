@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"crypto/tls"
+	"math"
 	"net"
 	"runtime"
 	"slices"
@@ -35,8 +36,8 @@ const (
 	MaxTransportBufferSize = MaxMessageSize - MessageFramingOverhead
 
 	// connBufferSize is the per-connection read/write batching buffer. This is
-	// also the gRPC default; it is stated explicitly because SharedWriteBuffer
-	// changes how the write side is allocated and the pairing matters.
+	// also the gRPC default; it remains explicit so memory sizing does not drift
+	// unnoticed if the upstream default changes.
 	connBufferSize = 32 * 1024
 
 	// keepaliveTime is how often an idle connection is pinged to detect a peer
@@ -126,10 +127,6 @@ func DialOptions() []grpc.DialOption {
 		grpc.WithContextDialer(dialContext),
 		grpc.WithWriteBufferSize(connBufferSize),
 		grpc.WithReadBufferSize(connBufferSize),
-		// One write buffer per connection instead of per stream. A proxy
-		// multiplexes many streams onto few connections, so this keeps write
-		// buffer memory flat as concurrent connections grow.
-		grpc.WithSharedWriteBuffer(true),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(MaxMessageSize),
 			grpc.MaxCallSendMsgSize(MaxMessageSize),
@@ -149,20 +146,28 @@ func DialOptions() []grpc.DialOption {
 	}
 }
 
+func streamWorkerCount() uint32 {
+	workers := runtime.GOMAXPROCS(0)
+	if int64(workers) > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	// GOMAXPROCS is positive and the upper bound above proves the conversion.
+	return uint32(workers) // #nosec G115 -- explicitly bounds the conversion
+}
+
 // ServerOptions returns the base server options. See DialOptions for why this
 // is a function.
 func ServerOptions() []grpc.ServerOption {
 	return []grpc.ServerOption{
 		grpc.ReadBufferSize(connBufferSize),
 		grpc.WriteBufferSize(connBufferSize),
-		grpc.SharedWriteBuffer(true),
 		grpc.MaxRecvMsgSize(MaxMessageSize),
 		grpc.MaxSendMsgSize(MaxMessageSize),
 		grpc.MaxConcurrentStreams(maxConcurrentStreams),
 		// Reuse a fixed pool of goroutines for stream handling rather than
 		// spawning one per stream. GOMAXPROCS (container-aware since Go 1.25) is
 		// the value upstream benchmarks found most performant.
-		grpc.NumStreamWorkers(uint32(runtime.GOMAXPROCS(0))),
+		grpc.NumStreamWorkers(streamWorkerCount()),
 		grpc.KeepaliveParams(serverKeepaliveParams()),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             keepaliveMinTime,

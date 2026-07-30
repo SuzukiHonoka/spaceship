@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
@@ -105,5 +106,11 @@ func TestDialOptionsConstructs(t *testing.T) {
 		if got := len(ServerOptions()); got == 0 {
 			t.Errorf("buffer=%dK: ServerOptions() is empty", bufferKB)
 		}
+	}
+}
+
+func TestStreamWorkerCountMatchesGOMAXPROCS(t *testing.T) {
+	if got, want := streamWorkerCount(), runtime.GOMAXPROCS(0); int64(got) != int64(want) {
+		t.Fatalf("streamWorkerCount() = %d, want %d", got, want)
 	}
 }

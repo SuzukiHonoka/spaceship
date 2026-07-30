@@ -128,7 +128,7 @@ func TestEndToEnd_TCPRoundTripOverTLS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tcp echo listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	payload := []byte("hello through TLS")
 	go func() {
@@ -136,7 +136,7 @@ func TestEndToEnd_TCPRoundTripOverTLS(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		buf := make([]byte, len(payload))
 		if _, err := io.ReadFull(conn, buf); err != nil {
 			return
@@ -150,7 +150,7 @@ func TestEndToEnd_TCPRoundTripOverTLS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.New() error = %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -200,13 +200,13 @@ func TestEndToEnd_UDPRoundTripOverTLS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.New() error = %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	pc, err := c.DialPacket("udp", echoAddr)
 	if err != nil {
 		t.Fatalf("DialPacket() over TLS error = %v", err)
 	}
-	defer pc.Close()
+	defer func() { _ = pc.Close() }()
 
 	target, err := net.ResolveUDPAddr("udp", echoAddr)
 	if err != nil {
@@ -248,7 +248,7 @@ func TestEndToEnd_TLSRejectsUntrustedCertificate(t *testing.T) {
 		// Failing this early is a valid rejection too.
 		return
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

@@ -502,7 +502,7 @@ func TestSystem_HTTPProxyAuthenticated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial http proxy: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if err := conn.SetDeadline(time.Now().Add(20 * time.Second)); err != nil {
 		t.Fatalf("SetDeadline: %v", err)
 	}
@@ -525,7 +525,7 @@ func TestSystem_HTTPProxyAuthenticated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial http proxy: %v", err)
 	}
-	defer authed.Close()
+	defer func() { _ = authed.Close() }()
 	if err := authed.SetDeadline(time.Now().Add(20 * time.Second)); err != nil {
 		t.Fatalf("SetDeadline: %v", err)
 	}
@@ -586,7 +586,7 @@ func TestSystem_HTTPProxyPlainRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("proxied GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

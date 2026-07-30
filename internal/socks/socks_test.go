@@ -17,8 +17,8 @@ func TestServer_ServeConn_NoAuth(t *testing.T) {
 
 	// mock connection
 	c1, c2 := net.Pipe()
-	defer c1.Close()
-	defer c2.Close()
+	defer func() { _ = c1.Close() }()
+	defer func() { _ = c2.Close() }()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -38,7 +38,10 @@ func TestServer_ServeConn_NoAuth(t *testing.T) {
 			errCh <- io.ErrUnexpectedEOF
 			return
 		}
-		c1.Close()
+		if err := c1.Close(); err != nil {
+			errCh <- err
+			return
+		}
 		errCh <- nil
 	}()
 
@@ -61,8 +64,8 @@ func TestServer_ServeConn_UserPass(t *testing.T) {
 	s := New(ctx, cfg)
 
 	c1, c2 := net.Pipe()
-	defer c1.Close()
-	defer c2.Close()
+	defer func() { _ = c1.Close() }()
+	defer func() { _ = c2.Close() }()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -103,7 +106,10 @@ func TestServer_ServeConn_UserPass(t *testing.T) {
 			errCh <- io.ErrUnexpectedEOF
 			return
 		}
-		c1.Close()
+		if err := c1.Close(); err != nil {
+			errCh <- err
+			return
+		}
 		errCh <- nil
 	}()
 
@@ -124,28 +130,43 @@ func TestServer_ServeConn_UserPass_Failure(t *testing.T) {
 	s := New(ctx, cfg)
 
 	c1, c2 := net.Pipe()
-	defer c1.Close()
-	defer c2.Close()
+	defer func() { _ = c1.Close() }()
+	defer func() { _ = c2.Close() }()
 
 	errCh := make(chan error, 1)
 	go func() {
-		c1.Write([]byte{socks5Version, 1, UserPassAuth})
+		if _, err := c1.Write([]byte{socks5Version, 1, UserPassAuth}); err != nil {
+			errCh <- err
+			return
+		}
 		resp := make([]byte, 2)
-		io.ReadFull(c1, resp)
+		if _, err := io.ReadFull(c1, resp); err != nil {
+			errCh <- err
+			return
+		}
 
 		user := "user"
 		pass := "wrong"
 		authReq := append([]byte{userAuthVersion, byte(len(user))}, []byte(user)...)
 		authReq = append(authReq, byte(len(pass)))
 		authReq = append(authReq, []byte(pass)...)
-		c1.Write(authReq)
+		if _, err := c1.Write(authReq); err != nil {
+			errCh <- err
+			return
+		}
 
-		io.ReadFull(c1, resp)
+		if _, err := io.ReadFull(c1, resp); err != nil {
+			errCh <- err
+			return
+		}
 		if resp[0] != userAuthVersion || resp[1] != authFailure {
 			errCh <- io.ErrUnexpectedEOF
 			return
 		}
-		c1.Close()
+		if err := c1.Close(); err != nil {
+			errCh <- err
+			return
+		}
 		errCh <- nil
 	}()
 
@@ -166,20 +187,29 @@ func TestServer_ServeConn_NoAcceptable(t *testing.T) {
 	s := New(ctx, cfg)
 
 	c1, c2 := net.Pipe()
-	defer c1.Close()
-	defer c2.Close()
+	defer func() { _ = c1.Close() }()
+	defer func() { _ = c2.Close() }()
 
 	errCh := make(chan error, 1)
 	go func() {
 		// Client only supports NoAuth, but server requires Credentials
-		c1.Write([]byte{socks5Version, 1, NoAuth})
+		if _, err := c1.Write([]byte{socks5Version, 1, NoAuth}); err != nil {
+			errCh <- err
+			return
+		}
 		resp := make([]byte, 2)
-		io.ReadFull(c1, resp)
+		if _, err := io.ReadFull(c1, resp); err != nil {
+			errCh <- err
+			return
+		}
 		if resp[0] != socks5Version || resp[1] != noAcceptable {
 			errCh <- io.ErrUnexpectedEOF
 			return
 		}
-		c1.Close()
+		if err := c1.Close(); err != nil {
+			errCh <- err
+			return
+		}
 		errCh <- nil
 	}()
 

@@ -68,7 +68,6 @@ func freeLoopbackAddr(t *testing.T) string {
 // test binary rarely collide with each other.
 var freePortSeq atomic.Uint64
 
-
 func waitForListener(t *testing.T, addr string) {
 	t.Helper()
 	waitForListenerNetwork(t, "tcp", addr)
@@ -164,7 +163,7 @@ func startTCPEcho(t *testing.T) *net.TCPAddr {
 				return
 			}
 			go func() {
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				_, _ = io.Copy(conn, conn)
 			}()
 		}

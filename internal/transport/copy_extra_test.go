@@ -11,7 +11,7 @@ func TestCloseWriteOrClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	go func() {
 		c, _ := ln.Accept()
 		if c != nil {

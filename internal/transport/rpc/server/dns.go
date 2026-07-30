@@ -2,6 +2,7 @@ package server
 
 import (
 	"log"
+	"math"
 	"time"
 
 	"github.com/miekg/dns"
@@ -41,4 +42,11 @@ func safeUint32ToUint16(val uint32) (uint16, bool) {
 		return 0, false
 	}
 	return uint16(val), true
+}
+
+func safeIntToUint32(val int) (uint32, bool) {
+	if val < 0 || int64(val) > math.MaxUint32 {
+		return 0, false
+	}
+	return uint32(val), true // #nosec G115 -- explicitly bounded above
 }

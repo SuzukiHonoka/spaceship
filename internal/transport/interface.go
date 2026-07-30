@@ -13,6 +13,13 @@ type Transport interface {
 	Close() error
 }
 
+// ContextDialer is implemented by transports whose connection establishment can
+// be canceled. Long-lived frontends should prefer it so shutdown is not held by
+// an in-progress network dial.
+type ContextDialer interface {
+	DialContext(ctx context.Context, network, addr string) (net.Conn, error)
+}
+
 // PacketDialer is an optional interface implemented by transports that support
 // packet-oriented (UDP) communication. Use a type assertion to check support:
 //

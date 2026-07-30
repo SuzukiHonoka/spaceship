@@ -136,7 +136,7 @@ func TestWriteForwardRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("forwarded request is not valid HTTP: %v\n%s", err, raw)
 	}
-	defer parsed.Body.Close()
+	defer func() { _ = parsed.Body.Close() }()
 	gotBody, err := io.ReadAll(parsed.Body)
 	if err != nil {
 		t.Fatalf("read forwarded body: %v", err)
@@ -173,7 +173,7 @@ func TestWriteForwardRequestReencodesChunkedBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse forwarded chunked request: %v", err)
 	}
-	defer parsed.Body.Close()
+	defer func() { _ = parsed.Body.Close() }()
 	got, err := io.ReadAll(parsed.Body)
 	if err != nil {
 		t.Fatalf("read chunked body: %v", err)

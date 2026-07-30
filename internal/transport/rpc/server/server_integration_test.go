@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net"
 	"os"
@@ -53,24 +54,156 @@ func TestNewServerAndListenCancel(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe(addr) }()
 
+	started := false
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		c, err := net.DialTimeout("tcp", addr, 50*time.Millisecond)
 		if err == nil {
 			_ = c.Close()
+			started = true
 			break
 		}
 		time.Sleep(15 * time.Millisecond)
+	}
+	if !started {
+		select {
+		case err := <-errCh:
+			t.Fatalf("ListenAndServe exited before startup: %v", err)
+		default:
+			t.Fatal("ListenAndServe did not start")
+		}
 	}
 
 	cancel()
 	select {
 	case err := <-errCh:
-		if err != nil && err != context.Canceled {
-			t.Logf("ListenAndServe returned: %v", err)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("ListenAndServe error = %v, want context.Canceled", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("server did not stop after cancel")
+	}
+}
+
+func TestServerServeRejectsNilListener(t *testing.T) {
+	srv, err := NewServer(context.Background(), config.Users{{UUID: "nil-listener-user"}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.serve(nil); err == nil {
+		t.Fatal("serve(nil) succeeded")
+	}
+}
+
+type readSignalConn struct {
+	net.Conn
+	reads chan<- struct{}
+}
+
+func (c *readSignalConn) Read(p []byte) (int, error) {
+	select {
+	case c.reads <- struct{}{}:
+	default:
+	}
+	return c.Conn.Read(p)
+}
+
+type readSignalListener struct {
+	net.Listener
+	reads chan<- struct{}
+}
+
+func (l *readSignalListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &readSignalConn{Conn: conn, reads: l.reads}, nil
+}
+
+func waitForReadCall(t *testing.T, reads <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-reads:
+	case <-time.After(3 * time.Second):
+		t.Fatal("server did not enter the connection handshake read")
+	}
+}
+
+func TestServerCancelClosesPartialHandshakesImmediately(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload []byte
+		tls     bool
+	}{
+		{
+			name:    "HTTP2 preface",
+			payload: []byte("PRI * HT"),
+		},
+		{
+			name:    "TLS record",
+			payload: []byte{0x16, 0x03, 0x03, 0x01, 0x00, 0x01},
+			tls:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			var sslConfig *config.SSL
+			if tt.tls {
+				certPath, keyPath := writeSelfSigned(t)
+				sslConfig = &config.SSL{PublicKey: certPath, PrivateKey: keyPath}
+			}
+			srv, err := NewServer(ctx, config.Users{{UUID: "handshake-user"}}, sslConfig, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			base, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			reads := make(chan struct{}, 8)
+			listener := &readSignalListener{Listener: base, reads: reads}
+			serveErr := make(chan error, 1)
+			go func() {
+				serveErr <- srv.serve(listener)
+			}()
+
+			client, err := net.Dial("tcp", base.Addr().String())
+			if err != nil {
+				_ = base.Close()
+				t.Fatal(err)
+			}
+			defer func() { _ = client.Close() }()
+
+			// The first read is blocked waiting for handshake bytes. Supplying an
+			// intentionally incomplete preface/record makes it return once, then
+			// the second read proves grpc is waiting for the missing remainder.
+			waitForReadCall(t, reads)
+			if _, err := client.Write(tt.payload); err != nil {
+				t.Fatal(err)
+			}
+			waitForReadCall(t, reads)
+
+			started := time.Now()
+			cancel()
+			select {
+			case err := <-serveErr:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("serve() error = %v, want context.Canceled", err)
+				}
+				if elapsed := time.Since(started); elapsed > 2*time.Second {
+					t.Fatalf("forced shutdown took %s, want at most 2s", elapsed)
+				}
+			case <-time.After(3 * time.Second):
+				_ = client.Close()
+				t.Fatal("server waited for the handshake timeout during forced shutdown")
+			}
+		})
 	}
 }
 

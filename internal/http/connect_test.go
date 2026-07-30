@@ -56,7 +56,7 @@ func TestHandleConnect_RoundTrip(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 		_, _ = io.Copy(c, c)
 	}()
 
@@ -80,7 +80,7 @@ func TestHandleConnect_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 
 	target := origin.Addr().String()
@@ -92,7 +92,7 @@ func TestHandleConnect_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read response: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != nethttp.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
