@@ -14,6 +14,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/socks"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/server"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/tun"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/logger"
 	"github.com/google/uuid"
@@ -42,7 +43,14 @@ func (l *Launcher) launchServer(ctx context.Context, cfg *config.MixedConfig) er
 	errGroup, ctx := errgroup.WithContext(ctx)
 
 	// create server
-	s, err := server.NewServer(ctx, cfg.Users, cfg.SSL, cfg.DNS)
+	s, err := server.NewServer(
+		ctx,
+		cfg.Users,
+		cfg.SSL,
+		cfg.DNS,
+		server.WithDNSExchangeLimits(cfg.DNSExchange),
+		server.WithProxySessionLimits(cfg.ProxySessions),
+	)
 	if err != nil {
 		return fmt.Errorf("create server failed: %w", err)
 	}
@@ -74,6 +82,9 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 	if cfg.ListenRedirect != "" && !redirect.Supported() {
 		return redirect.ErrUnsupported
 	}
+	if cfg.TUN != nil && !tun.Supported() {
+		return tun.ErrUnsupported
+	}
 
 	// destroy any left connections
 	defer client.Destroy()
@@ -98,6 +109,27 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 	}
 
 	errGroup, ctx := errgroup.WithContext(ctx)
+
+	// Create the Linux gVisor TUN frontend before starting the other listeners so
+	// a device/configuration failure is atomic from the operator's perspective.
+	if cfg.TUN != nil {
+		tunConfig, err := tun.FromClientConfig(cfg.TUN, cfg.BlockIPv6DNS)
+		if err != nil {
+			return fmt.Errorf("configure tun: %w", err)
+		}
+		tunService, err := tun.New(ctx, tunConfig)
+		if err != nil {
+			return fmt.Errorf("create tun: %w", err)
+		}
+		defer tunService.Close()
+
+		errGroup.Go(func() error {
+			if err := tunService.Run(); err != nil {
+				return fmt.Errorf("serve tun: %w", err)
+			}
+			return nil
+		})
+	}
 
 	// create socks server
 	if cfg.ListenSocks != "" {

@@ -17,8 +17,9 @@ var (
 	globalServiceConfig = func() *ServiceConfig {
 		cfg := &ServiceConfig{serviceName: "proxy.Proxy"}
 		cfg.methodNames = map[string]string{
-			"DnsResolve": "/proxy.Proxy/DnsResolve",
-			"Proxy":      "/proxy.Proxy/Proxy",
+			"DnsResolve":  "/proxy.Proxy/DnsResolve",
+			"DnsExchange": "/proxy.Proxy/DnsExchange",
+			"Proxy":       "/proxy.Proxy/Proxy",
 		}
 		return cfg
 	}()
@@ -38,8 +39,9 @@ func SetServiceName(name string) {
 
 	// Update method names
 	globalServiceConfig.methodNames = map[string]string{
-		"DnsResolve": fmt.Sprintf("/%s/DnsResolve", name),
-		"Proxy":      fmt.Sprintf("/%s/Proxy", name),
+		"DnsResolve":  fmt.Sprintf("/%s/DnsResolve", name),
+		"DnsExchange": fmt.Sprintf("/%s/DnsExchange", name),
+		"Proxy":       fmt.Sprintf("/%s/Proxy", name),
 	}
 }
 
@@ -66,6 +68,11 @@ func GetMethodName(method string) string {
 // GetDnsResolveMethodName returns the full method name for DnsResolve
 func GetDnsResolveMethodName() string {
 	return GetMethodName("DnsResolve")
+}
+
+// GetDnsExchangeMethodName returns the full method name for DnsExchange.
+func GetDnsExchangeMethodName() string {
+	return GetMethodName("DnsExchange")
 }
 
 // GetProxyMethodName returns the full method name for Proxy

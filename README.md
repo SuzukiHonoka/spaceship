@@ -108,6 +108,172 @@ SPACESHIP_REDIRECT_INTEGRATION_IPV6=1 \
 go test -count=1 -run '^TestNetfilterRedirectIntegration$' ./internal/redirect
 ```
 
+## Linux TUN Frontend
+
+The client can terminate IP packets from a Linux TUN interface in its own
+gVisor network stack. Spaceship implements this frontend directly; it does not
+embed or invoke `tun2socks`. General TUN traffic is TCP-only. When DNS hijacking
+is enabled, UDP is admitted only for destination port 53 so classic DNS works
+without enabling a general UDP tunnel.
+
+```json
+{
+  "role": "client",
+  "server_addr": "tunnel.example.com:443",
+  "tls": true,
+  "uuid": "00000000-0000-0000-0000-000000000001",
+  "ipv6": true,
+  "mux": 2,
+  "block_ipv6_dns": false,
+  "tun": {
+    "name": "spaceship0",
+    "mtu": 1500,
+    "route_mode": "manual",
+    "bypass_mark": 21328,
+    "max_connections": 4096,
+    "max_pending_connections": 1024,
+    "dns_hijack": {
+      "enabled": true,
+      "query_timeout_seconds": 5,
+      "tcp_idle_timeout_seconds": 10,
+      "max_in_flight": 256
+    }
+  }
+}
+```
+
+Zero-valued limits select the values shown above. `dns_hijack.max_in_flight`
+has a hard maximum of 1024 because every active UDP DNS flow owns a receive
+buffer of up to 64 KiB for its idle lifetime; the ceiling bounds those buffers
+to about 64 MiB. `bypass_mark` also defaults to decimal `21328` (`0x5350`).
+With TUN enabled, an omitted or zero `mux` selects the minimum persistent gRPC
+pool needed for the configured TCP and DNS concurrency; the defaults above
+require two connections. An explicit smaller value is rejected during config
+validation. A non-zero `mux` is a warm minimum: the shared pool grows when all
+current connections reach Spaceship's native per-connection stream limit, up
+to 255 persistent connections. This lets TUN, SOCKS, HTTP, REDIRECT, and DNS
+share capacity without silently overloading the initial TUN-sized pool.
+Outside TUN mode, `mux: 0` retains the legacy unpooled behavior.
+
+The growth threshold matches the native Spaceship server's HTTP/2 limit. If an
+intermediary advertises a lower concurrent-stream limit, configure enough
+initial `mux` connections to cover the expected peak at that lower value;
+otherwise the intermediary can queue streams before the local pool reaches its
+growth threshold. Server-wide Proxy admission still applies across every
+connection, so adding transports cannot bypass the server resource boundary.
+Spaceship applies that mark with `SO_MARK` to its gRPC control connection,
+direct TCP/UDP egress, forward-proxy connection, and pure-Go resolver sockets.
+The policy-routing rules must exempt that mark from the TUN or the tunnel will
+recursively capture its own control traffic.
+
+`route_mode` currently accepts only `manual`. Spaceship creates the named
+`IFF_TUN|IFF_NO_PI` interface, sets its MTU, and brings it up, but deliberately
+does not change host addresses, routes, or policy rules. This keeps a bad config
+from replacing a production host's default route. One local-host pattern is:
+
+```shell
+# Run after Spaceship has created spaceship0.
+ip addr add 198.18.0.1/30 dev spaceship0
+ip route add default dev spaceship0 table 100
+
+# Spaceship egress must use the ordinary routing table.
+ip rule add pref 100 fwmark 0x5350/0xffffffff lookup main
+
+# Example: capture other unmarked, non-local IPv4 traffic.
+# The kernel's priority-0 local-table rule remains ahead of this rule.
+ip rule add pref 110 not fwmark 0x5350/0xffffffff lookup 100
+```
+
+Treat that as a starting point, not a copy-paste policy for every host. Prefer
+scoping the capture rule to an application UID, cgroup-applied mark, source
+subnet, or dedicated network namespace. Add explicit higher-priority rules for
+the Spaceship server IPs and management networks as defense in depth. If IPv6
+is required, assign an appropriate IPv6 address and install equivalent `ip -6
+route` and `ip -6 rule` entries. Remove the capture rule before stopping
+Spaceship; otherwise new connections will be black-holed by a route whose TUN
+reader no longer exists.
+
+Creating the interface and setting `SO_MARK` require Linux network
+administration capability (normally `CAP_NET_ADMIN`) and access to
+`/dev/net/tun`. The process also needs enough file descriptors for the
+configured connection limit. An externally provisioned descriptor may be
+passed as `tun.file_descriptor`; Spaceship duplicates it, validates that it is
+a single-queue `IFF_TUN|IFF_NO_PI` device without a virtio-net header, uses the
+interface's actual MTU, and closes only its duplicate. The descriptor's shared
+file status is made nonblocking as required by the gVisor endpoint.
+
+With `dns_hijack.enabled`, every TCP or UDP flow whose original destination
+port is 53 is intercepted before normal route selection. Spaceship preserves
+the DNS wire message, including flags, response codes, EDNS, DNSSEC records,
+and authority/additional sections, and sends it over the authenticated gRPC
+connection. The server queries only its configured `dns` resolver (or the
+server's existing default of `8.8.8.8:53`). An RPC or upstream failure becomes
+DNS `SERVFAIL`; the client never falls back to the original destination or a
+local resolver. DNS-over-TCP length framing, multiple queries per connection,
+and bounded pipelining are supported.
+
+The server applies non-blocking global and per-user concurrency and token-bucket
+rate limits before starting an upstream exchange. The following shows the
+built-in defaults explicitly:
+
+```json
+{
+  "role": "server",
+  "users": [{"uuid": "00000000-0000-0000-0000-000000000001"}],
+  "dns_exchange": {
+    "max_concurrent": 1024,
+    "max_concurrent_per_user": 256,
+    "queries_per_second": 4096,
+    "queries_per_second_per_user": 1024,
+    "burst": 1024,
+    "burst_per_user": 256
+  },
+  "proxy_sessions": {
+    "max_concurrent": 8192,
+    "max_concurrent_per_user": 4096,
+    "new_sessions_per_second": 8192,
+    "new_sessions_per_second_per_user": 4096,
+    "burst": 8192,
+    "burst_per_user": 4096,
+    "handshake_timeout_seconds": 10
+  }
+}
+```
+
+Zero selects the shown default for each field. When a rate is explicitly
+lowered and its burst remains zero, the implicit burst is capped at that rate;
+an explicitly configured larger burst is preserved. A per-user value cannot
+exceed its global counterpart. DNS admission covers both the wire exchange and
+the legacy record-oriented RPC; legacy batches are limited to 16 items.
+Saturated wire RPCs return gRPC `ResourceExhausted`, which the local DNS and TUN
+frontends convert to DNS `SERVFAIL` without fallback. Proxy admission is
+enforced across all HTTP/2 connections, and an authenticated stream that does
+not send its first routing header within the configured timeout is closed. This
+avoids hidden queues and idle-stream resource retention.
+
+Monotonic request, forwarding, upstream-failure, timeout, and rejection
+counters are exposed in the `dns_exchange` and `proxy_sessions` objects
+returned by the loopback management `/api/stats` endpoint.
+
+For a rolling upgrade, deploy servers with the wire DNS RPC before enabling
+`dns_hijack` on clients. A new client connected to an older server receives
+gRPC `Unimplemented`, returns DNS `SERVFAIL`, and deliberately does not bypass
+the tunnel through a local or destination resolver.
+
+All non-DNS UDP traffic remains unsupported and is rejected by the netstack.
+Because TUN destinations are IP literals, Spaceship route matching has the same
+constraint as transparent REDIRECT: CIDR, exact-IP, and default rules apply,
+while domain rules cannot infer a hostname.
+
+The opt-in Linux integration test creates an isolated network namespace and
+checks the real TUN device, kernel route, gVisor TCP handshake/stream, and
+TCP/UDP DNS interception:
+
+```shell
+SPACESHIP_TUN_INTEGRATION=1 \
+go test -count=1 -run '^TestKernelTUNIntegration$' ./internal/tun
+```
+
 ## Nginx Reserve Proxy Configuration
 
 ```nginx

@@ -49,11 +49,12 @@ const (
 	// clients would be disconnected for pinging too often.
 	keepaliveMinTime = 10 * time.Second
 
-	// maxConcurrentStreams caps in-flight streams per connection. Each proxied
+	// MaxConcurrentStreams caps in-flight streams per connection. Each proxied
 	// connection is one stream, so without this a single authenticated client
 	// can allocate unbounded server goroutines and buffers (the grpc-go default
-	// is math.MaxUint32). Generous enough that legitimate clients never hit it.
-	maxConcurrentStreams = 4096
+	// is math.MaxUint32). The TUN config uses the same exported value to ensure
+	// its connection pool has enough aggregate stream capacity.
+	MaxConcurrentStreams uint32 = 4096
 )
 
 var DefaultCurvePreferences = []tls.CurveID{
@@ -86,7 +87,7 @@ func payloadBufferPool() mem.BufferPool {
 // server. Forcing IPv4 here would break a v6-only server endpoint for an
 // operator who merely wanted IPv6 destinations blocked.
 func dialContext(ctx context.Context, addr string) (net.Conn, error) {
-	return (&net.Dialer{Timeout: GeneralTimeout}).DialContext(ctx, "tcp", addr)
+	return transport.NewOutboundDialer(GeneralTimeout).DialContext(ctx, "tcp", addr)
 }
 
 // clientKeepaliveParams and serverKeepaliveParams are separate functions purely
@@ -163,7 +164,7 @@ func ServerOptions() []grpc.ServerOption {
 		grpc.WriteBufferSize(connBufferSize),
 		grpc.MaxRecvMsgSize(MaxMessageSize),
 		grpc.MaxSendMsgSize(MaxMessageSize),
-		grpc.MaxConcurrentStreams(maxConcurrentStreams),
+		grpc.MaxConcurrentStreams(MaxConcurrentStreams),
 		// Reuse a fixed pool of goroutines for stream handling rather than
 		// spawning one per stream. GOMAXPROCS (container-aware since Go 1.25) is
 		// the value upstream benchmarks found most performant.

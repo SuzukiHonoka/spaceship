@@ -16,6 +16,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/forward"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
 	rpcClient "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/tun"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config/client"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config/server"
@@ -118,6 +119,59 @@ func (c *MixedConfig) Apply() error {
 		return fmt.Errorf("invalid role: %s", c.Role)
 	}
 
+	var normalizedDNSExchange *server.DNSExchange
+	if c.DNSExchange != nil {
+		if c.Role != RoleServer {
+			return errors.New("dns_exchange is only valid for the server role")
+		}
+		normalized, err := server.NormalizeDNSExchange(c.DNSExchange)
+		if err != nil {
+			return err
+		}
+		normalizedDNSExchange = &normalized
+	}
+
+	var normalizedProxySessions *server.ProxySessions
+	if c.ProxySessions != nil {
+		if c.Role != RoleServer {
+			return errors.New("proxy_sessions is only valid for the server role")
+		}
+		normalized, err := server.NormalizeProxySessions(c.ProxySessions)
+		if err != nil {
+			return err
+		}
+		normalizedProxySessions = &normalized
+	}
+
+	var tunConfig *tun.Config
+	effectiveMux := c.Mux
+	if c.TUN != nil {
+		if c.Role != RoleClient {
+			return errors.New("tun is only valid for the client role")
+		}
+		if !tun.Supported() {
+			return tun.ErrUnsupported
+		}
+		normalized, err := tun.FromClientConfig(c.TUN, c.BlockIPv6DNS)
+		if err != nil {
+			return err
+		}
+		tunConfig = &normalized
+		requiredMux, err := tun.RequiredRPCPoolSize(normalized, rpc.MaxConcurrentStreams)
+		if err != nil {
+			return err
+		}
+		if effectiveMux == 0 {
+			effectiveMux = requiredMux
+		} else if effectiveMux < requiredMux {
+			return fmt.Errorf(
+				"mux %d is too small for tun capacity; need at least %d",
+				effectiveMux,
+				requiredMux,
+			)
+		}
+	}
+
 	applyIdleTimeout := !c.decodedFromJSON || c.idleTimeoutSet
 	idleTimeoutSeconds := int64(c.IdleTimeout)
 	if applyIdleTimeout {
@@ -135,11 +189,33 @@ func (c *MixedConfig) Apply() error {
 	// log mode
 	c.LogMode.Set()
 
+	// Install the TUN bypass mark before resolver setup. A configured DNS
+	// server may itself be a hostname, and SetDefault resolves it immediately;
+	// doing that with an unmarked socket can recurse into an already-installed
+	// catch-all TUN policy before the TUN reader has started. Roll back this
+	// early global update if any later configuration step fails.
+	bypassMark := uint32(0)
+	if tunConfig != nil {
+		bypassMark = tunConfig.BypassMark
+	}
+	previousBypassMark := transport.BypassMark()
+	previousOutboundResolver := transport.OutboundResolver()
+	transport.SetBypassMark(bypassMark)
+	networkPolicyCommitted := false
+	defer func() {
+		if !networkPolicyCommitted {
+			transport.SetOutboundResolver(previousOutboundResolver)
+			transport.SetBypassMark(previousBypassMark)
+		}
+	}()
+
 	// dns
 	if c.DNS != nil {
 		if err := c.DNS.SetDefault(); err != nil {
 			return err
 		}
+	} else {
+		dns.SetSystemDefault(tunConfig != nil)
 	}
 
 	// custom buffer size
@@ -207,7 +283,10 @@ func (c *MixedConfig) Apply() error {
 	// setting does not retain a stale process-global dialer from the old config.
 	var forwardDialer proxy.Dialer
 	if c.Forward != "" {
-		d, err := utils.LoadProxy(c.Forward)
+		d, err := utils.LoadProxyWithDialer(
+			c.Forward,
+			transport.NewOutboundDialer(transport.GetDialTimeout()),
+		)
 		if err != nil {
 			return err
 		}
@@ -264,6 +343,14 @@ func (c *MixedConfig) Apply() error {
 		transport.SetIdleTimeout(time.Duration(idleTimeoutSeconds) * time.Second)
 	}
 
+	c.Mux = effectiveMux
+	if normalizedDNSExchange != nil {
+		c.DNSExchange = normalizedDNSExchange
+	}
+	if normalizedProxySessions != nil {
+		c.ProxySessions = normalizedProxySessions
+	}
+	networkPolicyCommitted = true
 	return nil
 }
 

@@ -3,6 +3,8 @@ package socks
 import (
 	"context"
 	"net"
+
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 )
 
 // NameResolver is used to implement custom name resolution
@@ -14,9 +16,12 @@ type NameResolver interface {
 type DNSResolver struct{}
 
 func (d DNSResolver) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
-	addr, err := net.ResolveIPAddr("ip", name)
+	addrs, err := transport.OutboundResolver().LookupIPAddr(ctx, name)
 	if err != nil {
 		return ctx, nil, err
 	}
-	return ctx, addr.IP, err
+	if len(addrs) == 0 {
+		return ctx, nil, &net.DNSError{Name: name, Err: "no addresses"}
+	}
+	return ctx, addrs[0].IP, nil
 }

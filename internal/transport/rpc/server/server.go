@@ -8,11 +8,10 @@ import (
 	"io"
 	"log"
 	"net"
+	"time"
 
-	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
 	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
-	rpcutils "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/utils"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	config "github.com/SuzukiHonoka/spaceship/v2/pkg/config/server"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/dns"
@@ -26,10 +25,13 @@ import (
 
 type Server struct {
 	proto.UnimplementedProxyServer
-	Ctx       context.Context
-	srv       *grpc.Server
-	dnsAddr   string
-	dnsClient *mdns.Client
+	Ctx                   context.Context
+	srv                   *grpc.Server
+	dnsAddr               string
+	dnsClient             *mdns.Client
+	dnsAdmission          *dnsAdmission
+	proxyAdmission        *admission
+	proxyHandshakeTimeout time.Duration
 }
 
 func buildTLSConfig(certFile, keyFile string) (*tls.Config, error) {
@@ -47,10 +49,37 @@ func buildTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 	return tlsConfig, nil
 }
 
-func NewServer(ctx context.Context, users config.Users, ssl *config.SSL, dnsConfig *dns.DNS) (*Server, error) {
+func NewServer(
+	ctx context.Context,
+	users config.Users,
+	ssl *config.SSL,
+	dnsConfig *dns.DNS,
+	options ...Option,
+) (*Server, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	// check users
 	if len(users) == 0 {
 		return nil, errors.New("users can not be empty")
+	}
+	seenUsers := make(map[string]struct{}, len(users))
+	for i, user := range users {
+		if user == nil {
+			return nil, fmt.Errorf("user %d is nil", i)
+		}
+		if user.UUID == "" {
+			return nil, fmt.Errorf("user %d uuid can not be empty", i)
+		}
+		if _, exists := seenUsers[user.UUID]; exists {
+			return nil, fmt.Errorf("duplicate user uuid %q", user.UUID)
+		}
+		seenUsers[user.UUID] = struct{}{}
+	}
+	serverOptions, err := normalizeServerOptions(options)
+	if err != nil {
+		return nil, err
 	}
 
 	// create server and register
@@ -82,10 +111,15 @@ func NewServer(ctx context.Context, users config.Users, ssl *config.SSL, dnsConf
 		grpc.StreamInterceptor(rpc.StreamServerAuthInterceptor(matchMap.Match)),
 	)...)
 	wrapper := &Server{
-		Ctx:       ctx,
-		srv:       s,
-		dnsAddr:   dnsAddr,
-		dnsClient: &mdns.Client{Timeout: DNSClientTimeout},
+		Ctx:            ctx,
+		srv:            s,
+		dnsAddr:        dnsAddr,
+		dnsClient:      &mdns.Client{Timeout: DNSClientTimeout},
+		dnsAdmission:   newDNSAdmission(serverOptions.dnsExchange, users),
+		proxyAdmission: newProxyAdmission(serverOptions.proxySessions, users),
+		proxyHandshakeTimeout: time.Duration(
+			serverOptions.proxySessions.HandshakeTimeoutSeconds,
+		) * time.Second,
 	}
 
 	// Use dynamic proxy server registration for configurable service names
@@ -146,13 +180,47 @@ func (s *Server) serve(listener net.Listener) error {
 }
 
 func (s *Server) Proxy(stream proto.Proxy_ProxyServer) error {
-	//log.Println("rpc server incomes")
-	// cancel forwarder
-	ctx, cancel := context.WithCancel(s.Ctx)
+	if stream == nil {
+		return status.Error(codes.InvalidArgument, "proxy: nil stream")
+	}
+
+	globalProxySessionCounters.requests.Add(1)
+	userID, _ := rpc.UserIDFromContext(stream.Context())
+	release, rejection := s.proxyAdmission.acquire(userID)
+	if rejection != admissionAllowed {
+		recordProxyAdmissionRejection(rejection)
+		return status.Error(codes.ResourceExhausted, "proxy: session capacity exhausted")
+	}
+	defer release()
+	globalProxySessionCounters.admitted.Add(1)
+	globalProxySessionCounters.active.Add(1)
+	defer globalProxySessionCounters.active.Add(-1)
+
+	serverCtx := s.Ctx
+	if serverCtx == nil {
+		serverCtx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(stream.Context())
+	stopServerCancel := context.AfterFunc(serverCtx, cancel)
+	defer stopServerCancel()
 	defer cancel()
+
+	handshakeTimeout := s.proxyHandshakeTimeout
+	if handshakeTimeout <= 0 {
+		handshakeTimeout = config.DefaultProxyHandshakeTimeout
+	}
+	firstMessage, err := receiveProxyFirstMessage(ctx, stream, handshakeTimeout)
+	if err != nil {
+		if errors.Is(err, errProxyFirstMessageTimeout) {
+			globalProxySessionCounters.handshakeTimeouts.Add(1)
+			return status.Error(codes.DeadlineExceeded, "proxy: first message timeout")
+		}
+		return err
+	}
 
 	// create forwarder
 	f := NewForwarder(ctx, stream)
+	f.firstMessage = firstMessage
 	defer utils.Close(f)
 
 	if err := f.Start(); err != nil && err != io.EOF && !errors.Is(err, context.Canceled) {
@@ -173,80 +241,4 @@ func (s *Server) Proxy(stream proto.Proxy_ProxyServer) error {
 	return stream.Send(&proto.ProxyDST{
 		Status: proto.ProxyStatus_EOF,
 	})
-}
-
-func (s *Server) DnsResolve(_ context.Context, request *proto.DnsRequest) (*proto.DnsResponse, error) {
-	// Auth is handled by the server interceptor.
-	// Validate request
-	if request == nil || len(request.Items) == 0 {
-		return nil, transport.ErrBadRequest
-	}
-
-	resp := new(proto.DnsResponse)
-
-	for _, item := range request.Items {
-		if item == nil {
-			resp.Result = append(resp.Result, &proto.DnsResult{Rcode: mdns.RcodeFormatError})
-			continue
-		}
-		log.Printf("dns: resolving for %s (type %d, blockIPv6: %t)", item.Fqdn, item.QType, item.BlockIpv6)
-		result := &proto.DnsResult{Fqdn: item.Fqdn}
-
-		// Safely convert QType from uint32 to uint16 to prevent integer overflow
-		qtype, ok := safeUint32ToUint16(item.QType)
-		if !ok {
-			log.Printf("dns: invalid QType value %d: exceeds uint16 range", item.QType)
-			result.Rcode = mdns.RcodeFormatError
-			resp.Result = append(resp.Result, result)
-			continue
-		}
-
-		// Skip IPv6 (AAAA) queries if blocking is enabled
-		if item.BlockIpv6 && qtype == mdns.TypeAAAA {
-			log.Printf("dns: blocking IPv6 query for %s (AAAA record)", item.Fqdn)
-			result.Rcode = mdns.RcodeSuccess
-			resp.Result = append(resp.Result, result)
-			continue
-		}
-
-		// Perform actual DNS resolution using configured DNS server
-		records, rcode := s.resolveDNSRecords(item.Fqdn, qtype)
-		encodedRcode, ok := safeIntToUint32(rcode)
-		if !ok {
-			log.Printf("dns: invalid response code %d", rcode)
-			encodedRcode = mdns.RcodeServerFailure
-		}
-		result.Rcode = encodedRcode
-
-		// Filter out IPv6 (AAAA) records if blocking is enabled
-		if item.BlockIpv6 {
-			filteredRecords := make([]mdns.RR, 0, len(records))
-			for _, record := range records {
-				if record.Header().Rrtype == mdns.TypeAAAA {
-					log.Printf("dns: filtered out IPv6 record for %s", item.Fqdn)
-					continue
-				}
-				filteredRecords = append(filteredRecords, record)
-			}
-			records = filteredRecords
-
-		}
-
-		if len(records) > 0 {
-			// Convert DNS RR records to protobuf format using wire serialization.
-			protoRecords, err := rpcutils.ConvertRRSliceToProto(records)
-			if err != nil {
-				log.Printf("dns: failed to convert DNS records for %s: %v", item.Fqdn, err)
-				result.Rcode = mdns.RcodeServerFailure
-			} else {
-				result.Records = protoRecords
-			}
-		} else {
-			log.Printf("dns: no records found for %s (type %d, rcode %d)", item.Fqdn, item.QType, rcode)
-		}
-
-		resp.Result = append(resp.Result, result)
-	}
-
-	return resp, nil
 }

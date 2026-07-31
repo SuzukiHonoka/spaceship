@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +26,54 @@ func TestNewServerEmptyUsers(t *testing.T) {
 	_, err := NewServer(context.Background(), nil, nil, nil)
 	if err == nil {
 		t.Fatal("NewServer accepted empty users")
+	}
+}
+
+func TestNewServerNormalizesNilContextAndAdmissionDefaults(t *testing.T) {
+	var nilContext context.Context
+	srv, err := NewServer(nilContext, config.Users{{UUID: "default-user"}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.Ctx == nil || srv.dnsAdmission == nil || srv.proxyAdmission == nil {
+		t.Fatalf(
+			"NewServer defaults: context=%t dns_admission=%t proxy_admission=%t",
+			srv.Ctx != nil,
+			srv.dnsAdmission != nil,
+			srv.proxyAdmission != nil,
+		)
+	}
+	if srv.proxyHandshakeTimeout != config.DefaultProxyHandshakeTimeout {
+		t.Fatalf(
+			"proxy handshake timeout = %s, want %s",
+			srv.proxyHandshakeTimeout,
+			config.DefaultProxyHandshakeTimeout,
+		)
+	}
+}
+
+func TestNewServerRejectsInvalidUsers(t *testing.T) {
+	tests := []struct {
+		name  string
+		users config.Users
+		want  string
+	}{
+		{name: "nil", users: config.Users{nil}, want: "is nil"},
+		{name: "empty UUID", users: config.Users{{}}, want: "uuid can not be empty"},
+		{
+			name:  "duplicate UUID",
+			users: config.Users{{UUID: "same"}, {UUID: "same"}},
+			want:  "duplicate user uuid",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewServer(context.Background(), tt.users, nil, nil)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("NewServer() error = %v, want containing %q", err, tt.want)
+			}
+		})
 	}
 }
 

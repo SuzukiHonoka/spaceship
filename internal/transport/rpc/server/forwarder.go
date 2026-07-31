@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -16,6 +17,7 @@ import (
 )
 
 const maxUDPPacketSize = 65535
+const maxProxyTargetLength = 512
 
 // resolveTarget determines the dial network and address from a proxy header.
 // It prefers the typed Network field; for backward compatibility with pre-2.1.5
@@ -56,15 +58,18 @@ type Forwarder struct {
 	Ctx    context.Context
 	Stream proto.Proxy_ProxyServer
 	Conn   net.Conn
+	route  transport.Transport
 	// target is the dial address from the client header (host:port). Set during
 	// handshake for readable server logs even when dial fails.
 	target string
 	// network is the dial network chosen during handshake ("tcp"/"udp"/…).
 	// Used to decide whether an empty payload ends the session (TCP) or is a
 	// valid zero-length datagram (UDP).
-	network   string
-	Ack       chan struct{}
-	closeOnce sync.Once
+	network      string
+	firstMessage *proto.ProxySRC
+	Ack          chan struct{}
+	closeOnce    sync.Once
+	closeErr     error
 }
 
 // Target returns the dial address from the last handshake, or empty if none.
@@ -81,13 +86,15 @@ func NewForwarder(ctx context.Context, stream proto.Proxy_ProxyServer) *Forwarde
 }
 
 func (f *Forwarder) Close() error {
-	var err error
 	f.closeOnce.Do(func() {
 		if f.Conn != nil {
-			err = f.Conn.Close()
+			f.closeErr = errors.Join(f.closeErr, f.Conn.Close())
+		}
+		if f.route != nil {
+			f.closeErr = errors.Join(f.closeErr, f.route.Close())
 		}
 	})
-	return err
+	return f.closeErr
 }
 
 func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
@@ -167,34 +174,54 @@ func (f *Forwarder) copyTargetToClient(buf []byte, dstData *proto.ProxyDST, payl
 }
 
 func (f *Forwarder) handshake() error {
-	req, err := f.Stream.Recv()
-	if err != nil {
-		return err
+	req := f.firstMessage
+	f.firstMessage = nil
+	if req == nil {
+		var err error
+		req, err = f.Stream.Recv()
+		if err != nil {
+			return err
+		}
 	}
 
 	v, ok := req.HeaderOrPayload.(*proto.ProxySRC_Header)
-	if !ok {
+	if !ok || v.Header == nil {
 		return transport.ErrInvalidMessage
 	}
 	header := v.Header
 
+	if header.GetNetwork() != proto.Network_TCP && header.GetNetwork() != proto.Network_UDP {
+		return fmt.Errorf("unsupported proxy network %d", header.GetNetwork())
+	}
+	rawTarget := header.GetAddr()
+	if len(rawTarget) == 0 || len(rawTarget) > maxProxyTargetLength || containsControlOrSpace(rawTarget) {
+		return errors.New("invalid proxy target")
+	}
 	network, addr := resolveTarget(header)
-	f.network = network
-	f.target = addr
 
 	// Auth is handled by the stream interceptor.
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return fmt.Errorf("invalid address %q: %w", addr, err)
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host == "" || port == "" {
+		if err == nil {
+			err = &net.AddrError{Err: "missing host or port", Addr: addr}
+		}
+		return fmt.Errorf("invalid proxy target: %w", err)
 	}
+	f.network = network
+	f.target = addr
 	route, err := router.GetRoute(host)
 	if err != nil {
 		return fmt.Errorf("route: %w", err)
 	}
+	f.route = route
 	log.Printf("rpc: proxy accepted [%s] %s -> %s", network, host, route)
 
 	// dial to target
-	f.Conn, err = route.Dial(network, addr)
+	if dialer, ok := route.(transport.ContextDialer); ok {
+		f.Conn, err = dialer.DialContext(f.Ctx, network, addr)
+	} else {
+		f.Conn, err = route.Dial(network, addr)
+	}
 	if err != nil {
 		_ = f.Stream.Send(&proto.ProxyDST{
 			Status: proto.ProxyStatus_Error,
@@ -203,6 +230,15 @@ func (f *Forwarder) handshake() error {
 		return fmt.Errorf("dial: %w", err)
 	}
 	return nil
+}
+
+func containsControlOrSpace(value string) bool {
+	for _, char := range value {
+		if char <= 0x20 || char == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *Forwarder) CopyClientToTarget(ctx context.Context) error {

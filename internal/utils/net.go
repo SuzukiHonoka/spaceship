@@ -28,11 +28,17 @@ func SplitHostPort(s string) (string, uint16, error) {
 }
 
 func LoadProxy(p string) (proxy.Dialer, error) {
+	return LoadProxyWithDialer(p, nil)
+}
+
+// LoadProxyWithDialer parses p and uses forward as the connection path to the
+// upstream proxy. Passing nil preserves x/net/proxy's direct-dial default.
+func LoadProxyWithDialer(p string, forward proxy.Dialer) (proxy.Dialer, error) {
 	u, err := url.Parse(p)
 	if err != nil {
 		return nil, err
 	}
-	return proxy.FromURL(u, nil)
+	return proxy.FromURL(u, forward)
 }
 
 // NormalizeHost lowercases a hostname and strips a trailing DNS root dot.

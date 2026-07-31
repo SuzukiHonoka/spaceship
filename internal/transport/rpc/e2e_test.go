@@ -23,8 +23,11 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/forward"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
+	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/server"
 	serverconfig "github.com/SuzukiHonoka/spaceship/v2/pkg/config/server"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const testUUID = "e2e-test-user"
@@ -48,11 +51,22 @@ func freeLoopbackAddr(t *testing.T) string {
 // startProxyServer runs a real gRPC proxy server and returns its address.
 func startProxyServer(t *testing.T) string {
 	t.Helper()
+	return startProxyServerWithOptions(t)
+}
+
+func startProxyServerWithOptions(t *testing.T, options ...server.Option) string {
+	t.Helper()
 
 	addr := freeLoopbackAddr(t)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	srv, err := server.NewServer(ctx, serverconfig.Users{{UUID: testUUID}}, nil, nil)
+	srv, err := server.NewServer(
+		ctx,
+		serverconfig.Users{{UUID: testUUID}},
+		nil,
+		nil,
+		options...,
+	)
 	if err != nil {
 		cancel()
 		t.Fatalf("NewServer() error = %v", err)
@@ -91,8 +105,13 @@ func waitForListener(t *testing.T, addr string) {
 // connectClient initializes the client connection pool against addr.
 func connectClient(t *testing.T, addr string) {
 	t.Helper()
+	connectClientWithMux(t, addr, 1)
+}
+
+func connectClientWithMux(t *testing.T, addr string, mux uint8) {
+	t.Helper()
 	client.SetUUID(testUUID)
-	if err := client.Init(addr, "", false, 1, nil); err != nil {
+	if err := client.Init(addr, "", false, mux, nil); err != nil {
 		t.Fatalf("client.Init() error = %v", err)
 	}
 	t.Cleanup(client.Destroy)
@@ -437,6 +456,109 @@ func TestEndToEnd_TCPRoundTripOverGRPC(t *testing.T) {
 	case <-time.After(20 * time.Second):
 		t.Error("Proxy() did not return after the source closed")
 	}
+}
+
+func TestEndToEnd_ProxySessionAdmissionUsesAuthenticatedUser(t *testing.T) {
+	routeAllDirect(t)
+	target, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = target.Close() }()
+	acceptedTarget := make(chan net.Conn, 1)
+	go func() {
+		conn, acceptErr := target.Accept()
+		if acceptErr == nil {
+			acceptedTarget <- conn
+		}
+	}()
+
+	addr := startProxyServerWithOptions(
+		t,
+		server.WithProxySessionLimits(&serverconfig.ProxySessions{
+			MaxConcurrent:           2,
+			MaxConcurrentPerUser:    1,
+			SessionsPerSecond:       100,
+			SessionsPerUser:         100,
+			Burst:                   10,
+			BurstPerUser:            10,
+			HandshakeTimeoutSeconds: 5,
+		}),
+	)
+	connectClient(t, addr)
+	firstClient, err := client.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = firstClient.Close() }()
+	secondClient, err := client.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = secondClient.Close() }()
+
+	before := server.ProxySessionStatistics()
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	defer cancelFirst()
+	firstStream, err := firstClient.ProxyClient.Proxy(firstCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := &proto.ProxySRC{
+		HeaderOrPayload: &proto.ProxySRC_Header{
+			Header: &proto.ProxySRC_ProxyHeader{Addr: target.Addr().String()},
+		},
+	}
+	if err := firstStream.Send(header); err != nil {
+		t.Fatal(err)
+	}
+	firstResponse, err := firstStream.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstResponse.Status != proto.ProxyStatus_Accepted {
+		t.Fatalf("first Proxy status = %s, want Accepted", firstResponse.Status)
+	}
+	var targetConn net.Conn
+	select {
+	case targetConn = <-acceptedTarget:
+		defer func() { _ = targetConn.Close() }()
+	case <-time.After(5 * time.Second):
+		t.Fatal("first proxy session did not reach target")
+	}
+
+	secondCtx, cancelSecond := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelSecond()
+	secondStream, err := secondClient.ProxyClient.Proxy(secondCtx)
+	if err == nil {
+		err = secondStream.Send(header)
+	}
+	if err == nil {
+		_, err = secondStream.Recv()
+	}
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("second authenticated Proxy error = %v, want ResourceExhausted", err)
+	}
+	after := server.ProxySessionStatistics()
+	if after.RequestsTotal-before.RequestsTotal != 2 ||
+		after.AdmittedTotal-before.AdmittedTotal != 1 ||
+		after.RejectedPerUserConcurrencyTotal-before.RejectedPerUserConcurrencyTotal != 1 {
+		t.Fatalf("authenticated proxy admission deltas: before=%+v after=%+v", before, after)
+	}
+
+	cancelFirst()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if server.ProxySessionStatistics().Active == before.Active {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf(
+		"active proxy sessions = %d after cancel, want %d",
+		server.ProxySessionStatistics().Active,
+		before.Active,
+	)
 }
 
 // TestEndToEnd_FailFastWhenServerUnreachable verifies an unreachable server

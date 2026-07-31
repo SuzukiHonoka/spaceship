@@ -3,14 +3,19 @@ package rpc_test
 import (
 	"context"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
+	rpcConfig "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
+	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/server"
 	serverconfig "github.com/SuzukiHonoka/spaceship/v2/pkg/config/server"
 	pkgdns "github.com/SuzukiHonoka/spaceship/v2/pkg/dns"
 	mdns "github.com/miekg/dns"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // startTestResolver runs a DNS server over a fixed zone so the tunnel's resolve
@@ -64,16 +69,67 @@ func startTestResolver(t *testing.T) string {
 	return pc.LocalAddr().String()
 }
 
+func startBlockingTestResolver(t *testing.T) (string, <-chan struct{}, func()) {
+	t.Helper()
+
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("blocking resolver listen: %v", err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	var releaseOnce sync.Once
+	unblock := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
+
+	srv := &mdns.Server{
+		PacketConn: pc,
+		Handler: mdns.HandlerFunc(func(w mdns.ResponseWriter, query *mdns.Msg) {
+			startedOnce.Do(func() { close(started) })
+			<-release
+			response := new(mdns.Msg)
+			response.SetReply(query)
+			_ = w.WriteMsg(response)
+		}),
+	}
+	serverStarted := make(chan struct{})
+	srv.NotifyStartedFunc = func() { close(serverStarted) }
+	go func() { _ = srv.ActivateAndServe() }()
+	t.Cleanup(func() {
+		unblock()
+		_ = srv.Shutdown()
+	})
+	select {
+	case <-serverStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("blocking resolver did not start")
+	}
+	return pc.LocalAddr().String(), started, unblock
+}
+
 // startProxyServerWithResolver runs a proxy server pointed at a specific
 // upstream resolver.
 func startProxyServerWithResolver(t *testing.T, resolver string) string {
+	t.Helper()
+	return startProxyServerWithResolverOptions(t, resolver)
+}
+
+func startProxyServerWithResolverOptions(
+	t *testing.T,
+	resolver string,
+	options ...server.Option,
+) string {
 	t.Helper()
 
 	addr := freeLoopbackAddr(t)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	srv, err := server.NewServer(ctx, serverconfig.Users{{UUID: testUUID}}, nil,
-		&pkgdns.DNS{Type: pkgdns.TypeCommon, Server: resolver})
+		&pkgdns.DNS{Type: pkgdns.TypeCommon, Server: resolver},
+		options...,
+	)
 	if err != nil {
 		cancel()
 		t.Fatalf("NewServer() error = %v", err)
@@ -102,6 +158,130 @@ func dnsClient(t *testing.T) *client.Client {
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	return c
+}
+
+// TestEndToEnd_DNSExchangeOverGRPC covers the authenticated raw-wire RPC used
+// by TUN DNS hijacking, including dynamic service registration and preservation
+// of response sections that the legacy record-only RPC cannot represent.
+func TestEndToEnd_DNSExchangeOverGRPC(t *testing.T) {
+	connectClient(t, startProxyServerWithResolver(t, startTestResolver(t)))
+	assertKnownDNSExchange(t, dnsClient(t))
+}
+
+func TestEndToEnd_DNSExchangeWithLegacyUnpooledClient(t *testing.T) {
+	connectClientWithMux(t, startProxyServerWithResolver(t, startTestResolver(t)), 0)
+	if total, active, load := client.GetConnectionSummary(); total != 0 ||
+		active != 0 || load != 0 {
+		t.Fatalf(
+			"unpooled connection summary = (%d, %d, %d), want (0, 0, 0)",
+			total,
+			active,
+			load,
+		)
+	}
+	assertKnownDNSExchange(t, dnsClient(t))
+}
+
+func TestEndToEnd_DNSExchangeEnforcesAuthenticatedUserConcurrency(t *testing.T) {
+	resolver, upstreamStarted, unblock := startBlockingTestResolver(t)
+	defer unblock()
+	addr := startProxyServerWithResolverOptions(
+		t,
+		resolver,
+		server.WithDNSExchangeLimits(&serverconfig.DNSExchange{
+			MaxConcurrent:        2,
+			MaxConcurrentPerUser: 1,
+			QueriesPerSecond:     100,
+			QueriesPerUser:       100,
+			Burst:                2,
+			BurstPerUser:         1,
+		}),
+	)
+	connectClient(t, addr)
+	c := dnsClient(t)
+
+	query := new(mdns.Msg)
+	query.SetQuestion("known.test.", mdns.TypeA)
+	wireQuery, err := query.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, exchangeErr := c.DnsExchange(ctx, wireQuery, proto.Network_UDP, false)
+		firstDone <- exchangeErr
+	}()
+	select {
+	case <-upstreamStarted:
+	case <-ctx.Done():
+		t.Fatalf("first DNS exchange did not reach the blocking resolver: %v", ctx.Err())
+	}
+	before := server.DNSExchangeStatistics()
+	wireResponse, err := c.DnsExchange(ctx, wireQuery, proto.Network_UDP, false)
+	if status.Code(err) != codes.ResourceExhausted || wireResponse != nil {
+		t.Fatalf(
+			"concurrency-limited DnsExchange() = (%v, %v), want nil ResourceExhausted",
+			wireResponse,
+			err,
+		)
+	}
+	after := server.DNSExchangeStatistics()
+	if after.RejectedPerUserConcurrencyTotal-before.RejectedPerUserConcurrencyTotal != 1 {
+		t.Fatalf("per-user concurrency counters: before=%+v after=%+v", before, after)
+	}
+
+	unblock()
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first DnsExchange() error = %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("first DNS exchange did not finish after resolver release: %v", ctx.Err())
+	}
+}
+
+func TestEndToEnd_DNSExchangeWithCustomServiceName(t *testing.T) {
+	rpcConfig.SetServiceName("spaceship.custom.Proxy")
+	t.Cleanup(func() {
+		rpcConfig.SetServiceName("")
+	})
+
+	connectClient(t, startProxyServerWithResolver(t, startTestResolver(t)))
+	assertKnownDNSExchange(t, dnsClient(t))
+}
+
+func assertKnownDNSExchange(t *testing.T, c *client.Client) {
+	t.Helper()
+	query := new(mdns.Msg)
+	query.SetQuestion("known.test.", mdns.TypeA)
+	query.SetEdns0(1232, true)
+	wireQuery, err := query.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	wireResponse, err := c.DnsExchange(ctx, wireQuery, proto.Network_UDP, false)
+	if err != nil {
+		t.Fatalf("DnsExchange() error = %v", err)
+	}
+	response := new(mdns.Msg)
+	if err := response.Unpack(wireResponse); err != nil {
+		t.Fatal(err)
+	}
+	if !response.Response || response.Rcode != mdns.RcodeSuccess ||
+		len(response.Answer) != 1 {
+		t.Fatalf("DnsExchange() response = %+v", response)
+	}
+	answer, ok := response.Answer[0].(*mdns.A)
+	if !ok || !answer.A.Equal(net.ParseIP("203.0.113.7")) {
+		t.Fatalf("DnsExchange() answer = %v", response.Answer)
+	}
 }
 
 // TestEndToEnd_DNSResolveOverGRPC covers the resolve RPC end to end: client

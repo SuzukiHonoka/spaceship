@@ -5,19 +5,24 @@ import (
 )
 
 type Client struct {
-	ServerAddr      string        `json:"server_addr"`
-	Host            string        `json:"host,omitempty"`
-	UUID            string        `json:"uuid"` // user id
-	ListenSocks     string        `json:"listen_socks,omitempty"`
-	ListenSocksUnix string        `json:"listen_socks_unix,omitempty"`
-	ListenHttp      string        `json:"listen_http,omitempty"`
-	ListenRedirect  string        `json:"listen_redirect,omitempty"` // Linux TCP transparent REDIRECT listener
-	Redirect        *Redirect     `json:"redirect,omitempty"`
-	ListenDns       string        `json:"listen_dns,omitempty"`
-	BasicAuth       []string      `json:"basic_auth,omitempty"` // user:password
-	Mux             uint8         `json:"mux"`                  // 0 -> disabled, n (>0) -> limited connection
-	EnableTLS       bool          `json:"tls"`
-	Routes          router.Routes `json:"route,omitempty"`
+	ServerAddr      string    `json:"server_addr"`
+	Host            string    `json:"host,omitempty"`
+	UUID            string    `json:"uuid"` // user id
+	ListenSocks     string    `json:"listen_socks,omitempty"`
+	ListenSocksUnix string    `json:"listen_socks_unix,omitempty"`
+	ListenHttp      string    `json:"listen_http,omitempty"`
+	ListenRedirect  string    `json:"listen_redirect,omitempty"` // Linux TCP transparent REDIRECT listener
+	Redirect        *Redirect `json:"redirect,omitempty"`
+	TUN             *TUN      `json:"tun,omitempty"`
+	ListenDns       string    `json:"listen_dns,omitempty"`
+	BasicAuth       []string  `json:"basic_auth,omitempty"` // user:password
+	// Mux controls the warm minimum of persistent gRPC connections. A non-zero
+	// pool grows on demand up to the uint8 ceiling when wrappers reach the native
+	// server stream limit. Zero keeps legacy unpooled behavior unless TUN is
+	// enabled, in which case Apply selects a safe persistent minimum.
+	Mux       uint8         `json:"mux"`
+	EnableTLS bool          `json:"tls"`
+	Routes    router.Routes `json:"route,omitempty"`
 	// IdleTimeout is gRPC connection idle timeout in seconds.
 	// For decoded JSON, omission keeps the transport default and explicit 0
 	// disables the timeout. The int type is retained for source compatibility.

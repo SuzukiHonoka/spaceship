@@ -12,7 +12,8 @@ import (
 type DynamicProxyClient struct {
 	conn            grpc.ClientConnInterface
 	client          proto.ProxyClient
-	dnsMethodName   string
+	dnsResolveName  string
+	dnsExchangeName string
 	proxyMethodName string
 }
 
@@ -25,7 +26,8 @@ func NewDynamicProxyClient(conn grpc.ClientConnInterface) *DynamicProxyClient {
 	return &DynamicProxyClient{
 		conn:            conn,
 		client:          proto.NewProxyClient(conn),
-		dnsMethodName:   rpc.GetDnsResolveMethodName(),
+		dnsResolveName:  rpc.GetDnsResolveMethodName(),
+		dnsExchangeName: rpc.GetDnsExchangeMethodName(),
 		proxyMethodName: rpc.GetProxyMethodName(),
 	}
 }
@@ -36,7 +38,19 @@ func (c *DynamicProxyClient) DnsResolve(ctx context.Context, in *proto.DnsReques
 	opts = append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 
 	out := new(proto.DnsResponse)
-	err := c.conn.Invoke(ctx, c.dnsMethodName, in, out, opts...)
+	err := c.conn.Invoke(ctx, c.dnsResolveName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// DnsExchange calls DnsExchange using the configured service name.
+func (c *DynamicProxyClient) DnsExchange(ctx context.Context, in *proto.DnsExchangeRequest, opts ...grpc.CallOption) (*proto.DnsExchangeResponse, error) {
+	opts = append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+
+	out := new(proto.DnsExchangeResponse)
+	err := c.conn.Invoke(ctx, c.dnsExchangeName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}

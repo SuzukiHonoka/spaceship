@@ -29,8 +29,9 @@ func (d *DynamicProxyService) GetServiceName() string {
 }
 
 // GetMethodNames returns the full method names with current service name
-func (d *DynamicProxyService) GetMethodNames() (dnsResolve, proxy string) {
+func (d *DynamicProxyService) GetMethodNames() (dnsResolve, dnsExchange, proxy string) {
 	return fmt.Sprintf("/%s/DnsResolve", d.serviceName),
+		fmt.Sprintf("/%s/DnsExchange", d.serviceName),
 		fmt.Sprintf("/%s/Proxy", d.serviceName)
 }
 
@@ -44,6 +45,10 @@ func (d *DynamicProxyService) RegisterWithServer(s *grpc.Server) {
 			{
 				MethodName: "DnsResolve",
 				Handler:    _Proxy_DnsResolve_Handler,
+			},
+			{
+				MethodName: "DnsExchange",
+				Handler:    _Proxy_DnsExchange_Handler,
 			},
 		},
 		Streams: []grpc.StreamDesc{
@@ -62,8 +67,9 @@ func (d *DynamicProxyService) RegisterWithServer(s *grpc.Server) {
 
 // ClientMethodNames provides method names for client calls
 type ClientMethodNames struct {
-	DnsResolve string
-	Proxy      string
+	DnsResolve  string
+	DnsExchange string
+	Proxy       string
 }
 
 // GetClientMethodNames returns method names for a given service name
@@ -72,7 +78,8 @@ func GetClientMethodNames(serviceName string) ClientMethodNames {
 		serviceName = "proxy.Proxy"
 	}
 	return ClientMethodNames{
-		DnsResolve: fmt.Sprintf("/%s/DnsResolve", serviceName),
-		Proxy:      fmt.Sprintf("/%s/Proxy", serviceName),
+		DnsResolve:  fmt.Sprintf("/%s/DnsResolve", serviceName),
+		DnsExchange: fmt.Sprintf("/%s/DnsExchange", serviceName),
+		Proxy:       fmt.Sprintf("/%s/Proxy", serviceName),
 	}
 }

@@ -746,12 +746,24 @@ func TestSystem_StatsAccounting(t *testing.T) {
 		t.Fatalf("reading the echo: %v", err)
 	}
 
-	afterTx, afterRx := transport.GlobalStats.Total()
-	if afterTx <= beforeTx {
-		t.Errorf("tx counter did not advance: %d -> %d", beforeTx, afterTx)
-	}
-	if afterRx <= beforeRx {
-		t.Errorf("rx counter did not advance: %d -> %d", beforeRx, afterRx)
+	// The receive-side counter is updated after the proxy's socket Write
+	// returns. The peer may finish reading the payload while that Write is
+	// still returning on another goroutine, especially under the race
+	// detector, so wait for the accounting operation instead of assuming the
+	// socket read is a synchronization barrier.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		afterTx, afterRx := transport.GlobalStats.Total()
+		if afterTx > beforeTx && afterRx > beforeRx {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf(
+				"traffic counters did not advance before the deadline: tx %d -> %d, rx %d -> %d",
+				beforeTx, afterTx, beforeRx, afterRx,
+			)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

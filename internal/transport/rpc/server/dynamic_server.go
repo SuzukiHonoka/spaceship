@@ -31,6 +31,10 @@ func (s *DynamicProxyServer) RegisterWithGRPC(grpcServer *grpc.Server) {
 				MethodName: "DnsResolve",
 				Handler:    s.createDnsResolveHandler(),
 			},
+			{
+				MethodName: "DnsExchange",
+				Handler:    s.createDnsExchangeHandler(),
+			},
 		},
 		Streams: []grpc.StreamDesc{
 			{
@@ -44,6 +48,27 @@ func (s *DynamicProxyServer) RegisterWithGRPC(grpcServer *grpc.Server) {
 	}
 
 	grpcServer.RegisterService(customDesc, s.impl)
+}
+
+// createDnsExchangeHandler creates a handler for DnsExchange.
+func (s *DynamicProxyServer) createDnsExchangeHandler() grpc.MethodHandler {
+	return func(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+		in := new(proto.DnsExchangeRequest)
+		if err := dec(in); err != nil {
+			return nil, err
+		}
+		if interceptor == nil {
+			return srv.(proto.ProxyServer).DnsExchange(ctx, in)
+		}
+		info := &grpc.UnaryServerInfo{
+			Server:     srv,
+			FullMethod: rpc.GetDnsExchangeMethodName(),
+		}
+		handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+			return srv.(proto.ProxyServer).DnsExchange(ctx, req.(*proto.DnsExchangeRequest))
+		}
+		return interceptor(ctx, in, info, handler)
+	}
 }
 
 // createDnsResolveHandler creates a handler for DnsResolve method

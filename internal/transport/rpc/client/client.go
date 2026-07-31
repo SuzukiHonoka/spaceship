@@ -326,30 +326,36 @@ func decodeDNSResponse(resp *proto.DnsResponse) ([]dns.RR, int, error) {
 	results := make([]dns.RR, 0, len(resp.Result))
 	rcode := dns.RcodeSuccess
 
-	for _, item := range resp.Result {
+	for index, item := range resp.Result {
 		if item == nil {
 			continue
 		}
 		// This proxy transports the base DNS header but not an EDNS OPT record,
 		// so only the header's four-bit RCODE can be represented safely.
 		if item.Rcode > 0xF {
-			return nil, dns.RcodeServerFailure, fmt.Errorf("dns: invalid response code %d for %s", item.Rcode, item.Fqdn)
+			return nil, dns.RcodeServerFailure, fmt.Errorf(
+				"dns: invalid response code %d at result %d",
+				item.Rcode,
+				index,
+			)
 		}
 		if rcode == dns.RcodeSuccess && item.Rcode != dns.RcodeSuccess {
 			rcode = int(item.Rcode)
 		}
 		// Convert protobuf records back to DNS RR records using the new format
 		if len(item.Records) == 0 {
-			log.Printf("dns: no records found for %s", item.Fqdn)
 			continue
 		}
 
 		// Use new complete record format
 		records, err := rpcutils.ConvertProtoToRRSlice(item.Records)
 		if err != nil {
-			return nil, dns.RcodeServerFailure, fmt.Errorf("dns: convert records for %s: %w", item.Fqdn, err)
+			return nil, dns.RcodeServerFailure, fmt.Errorf(
+				"dns: convert records at result %d: %w",
+				index,
+				err,
+			)
 		}
-		log.Printf("dns: resolved %s with %d records", item.Fqdn, len(records))
 
 		results = append(results, records...)
 	}

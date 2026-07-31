@@ -169,13 +169,11 @@ func (s *Server) acceptLoop(listener net.Listener) error {
 		conn, err := listener.Accept()
 		if err != nil {
 			s.releaseSlot()
-			var netErr net.Error
 			// net/http.Server uses the same bounded-backoff policy for
 			// transient Accept failures. Temporary is deprecated for general
 			// network operations but remains the only portable classification
 			// exposed by net.Listener implementations.
-			if errors.As(err, &netErr) &&
-				(netErr.Timeout() || netErr.Temporary()) { //nolint:staticcheck
+			if isTemporaryAcceptError(err) {
 				if delay == 0 {
 					delay = 5 * time.Millisecond
 				} else {
@@ -215,6 +213,15 @@ func (s *Server) acceptLoop(listener net.Listener) error {
 			}
 		}()
 	}
+}
+
+func isTemporaryAcceptError(err error) bool {
+	var netErr net.Error
+	if !errors.As(err, &netErr) {
+		return false
+	}
+	//lint:ignore SA1019 net.Listener still has no portable replacement for transient Accept errors.
+	return netErr.Timeout() || netErr.Temporary() //nolint:staticcheck // Matches net/http.Server's Accept retry policy.
 }
 
 func (s *Server) acquireSlot() error {

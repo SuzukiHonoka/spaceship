@@ -2,8 +2,11 @@ name: Build
 
 on:
   push:
+    branches:
+      - "**"
     tags:
       - "v*"
+  pull_request:
 
 permissions:
   contents: read
@@ -26,6 +29,7 @@ jobs:
           go mod verify
 
       - name: Verify release tag matches the binary version
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
@@ -58,10 +62,21 @@ jobs:
             -test.count=1 \
             -test.v
 
+      - name: Kernel TUN integration
+        run: |
+          go test -c -race -o "$RUNNER_TEMP/tun-integration.test" ./internal/tun
+          sudo env \
+            SPACESHIP_TUN_INTEGRATION=1 \
+            "$RUNNER_TEMP/tun-integration.test" \
+            -test.run='^TestKernelTUNIntegration$' \
+            -test.count=1 \
+            -test.v
+
       - name: Build
         run: ./build.sh cmd/spaceship
 
       - name: Upload
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v7
         with:
           name: release
@@ -69,6 +84,7 @@ jobs:
           if-no-files-found: error
 
   release:
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: verify-and-build
     runs-on: ubuntu-latest
     permissions:

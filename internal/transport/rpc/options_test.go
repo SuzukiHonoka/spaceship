@@ -80,6 +80,9 @@ func TestKeepaliveNegotiation(t *testing.T) {
 
 // TestMessageSizeInvariants guards the relationship config validation relies on.
 func TestMessageSizeInvariants(t *testing.T) {
+	if MaxConcurrentStreams == 0 {
+		t.Error("MaxConcurrentStreams must be positive")
+	}
 	if MaxTransportBufferSize >= MaxMessageSize {
 		t.Errorf("MaxTransportBufferSize %d must leave room under MaxMessageSize %d "+
 			"for the protobuf envelope around a payload chunk",

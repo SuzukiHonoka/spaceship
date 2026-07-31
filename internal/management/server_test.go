@@ -104,6 +104,16 @@ func TestHandleStats_OK(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("response is not valid StatsResponse JSON: %v", err)
 	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &fields); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := fields["dns_exchange"]; !ok {
+		t.Fatal("stats response omitted DNS exchange admission counters")
+	}
+	if _, ok := fields["proxy_sessions"]; !ok {
+		t.Fatal("stats response omitted proxy session admission counters")
+	}
 }
 
 func TestHandleStats_MethodNotAllowed(t *testing.T) {

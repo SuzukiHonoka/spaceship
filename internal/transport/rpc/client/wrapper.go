@@ -3,6 +3,8 @@ package client
 import (
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"strings"
 	"sync/atomic"
 
@@ -26,7 +28,14 @@ type ConnWrapper struct {
 }
 
 func NewConnWrapper(p *Params) (*ConnWrapper, error) {
-	conn, err := grpc.NewClient(p.Addr, p.Opts...)
+	if p == nil {
+		return nil, fmt.Errorf("rpc client: nil connection parameters")
+	}
+	target, err := controlTarget(p.Addr)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := grpc.NewClient(target, p.Opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -37,18 +46,51 @@ func NewConnWrapper(p *Params) (*ConnWrapper, error) {
 	return wrapper, nil
 }
 
+// controlTarget forces grpc-go to pass the configured host:port unchanged to
+// our context dialer. Using grpc-go's default DNS resolver would resolve the
+// control-plane hostname through net.DefaultResolver before dialContext runs,
+// bypassing both the configured resolver and Linux SO_MARK policy.
+func controlTarget(address string) (string, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return "", fmt.Errorf("rpc client: invalid server address %q: %w", address, err)
+	}
+	if host == "" {
+		return "", fmt.Errorf("rpc client: invalid server address %q: empty host", address)
+	}
+	if port == "" {
+		return "", fmt.Errorf("rpc client: invalid server address %q: empty port", address)
+	}
+
+	return (&url.URL{Scheme: "passthrough", Path: "/" + address}).String(), nil
+}
+
 func (w *ConnWrapper) Use() {
 	w.InUse.Add(1)
 }
 
 func (w *ConnWrapper) Done() error {
-	w.InUse.Add(^uint32(0))
-	return nil
+	for {
+		current := w.InUse.Load()
+		if current == 0 {
+			return fmt.Errorf("rpc connection %d has no reserved usage", w.ID)
+		}
+		if w.InUse.CompareAndSwap(current, current-1) {
+			return nil
+		}
+	}
 }
 
 // GetCurrentLoad returns the current number of external connections using this gRPC connection
 func (w *ConnWrapper) GetCurrentLoad() uint32 {
 	return w.InUse.Load()
+}
+
+func (w *ConnWrapper) getState() connectivity.State {
+	if w == nil || w.ClientConn == nil {
+		return connectivity.Shutdown
+	}
+	return w.ClientConn.GetState()
 }
 
 func (w *ConnWrapper) Close() error {
@@ -65,28 +107,51 @@ func (w ConnWrappers) PickLeastLoaded() *ConnWrapper {
 		return nil
 	}
 
-	var conn *ConnWrapper
-	var minUsage uint32
+	var (
+		conn             *ConnWrapper
+		minUsage         uint32
+		degraded         *ConnWrapper
+		minDegradedUsage uint32
+	)
 
 	for _, c := range w {
 		// Skip permanently dead connections so they are never chosen.
 		// replaceConn() will swap them out asynchronously.
-		if c.GetState() == connectivity.Shutdown {
+		if c == nil {
+			continue
+		}
+		state := c.getState()
+		if state == connectivity.Shutdown {
 			continue
 		}
 		load := c.InUse.Load()
+		// A fail-fast RPC sent through TransientFailure fails immediately. Keep
+		// such a wrapper only as a fallback when every live connection is
+		// degraded; otherwise one broken, idle wrapper can mask healthy peers.
+		if state == connectivity.TransientFailure {
+			if degraded == nil || load < minDegradedUsage {
+				minDegradedUsage = load
+				degraded = c
+			}
+			continue
+		}
 		if conn == nil || load < minUsage {
 			minUsage = load
 			conn = c
 		}
 	}
+	if conn == nil {
+		return degraded
+	}
 	return conn
 }
 
 func (w ConnWrappers) LogStatus() {
-	inuse := make([]uint32, len(w))
-	for i, wrapper := range w {
-		inuse[i] = wrapper.InUse.Load()
+	inuse := make([]uint32, 0, len(w))
+	for _, wrapper := range w {
+		if wrapper != nil {
+			inuse = append(inuse, wrapper.InUse.Load())
+		}
 	}
 	log.Printf("Inuse status: %v", inuse)
 }
@@ -99,20 +164,31 @@ func (w ConnWrappers) GetDetailedStatus() string {
 
 	var sb strings.Builder
 	sb.Grow(len(w) * 10) // estimate ~10 chars per connection
-	for i, wrapper := range w {
-		if i > 0 {
+	written := 0
+	for _, wrapper := range w {
+		if wrapper == nil {
+			continue
+		}
+		if written > 0 {
 			sb.WriteByte(' ')
 		}
 		currentLoad := wrapper.GetCurrentLoad()
 		_, _ = fmt.Fprintf(&sb, "%d(%d)", wrapper.ID, currentLoad)
+		written++
+	}
+	if written == 0 {
+		return "No connections"
 	}
 	return sb.String()
 }
 
 // GetSummaryStats returns pool summary statistics
 func (w ConnWrappers) GetSummaryStats() (total int, active int, totalLoad uint32) {
-	total = len(w)
 	for _, wrapper := range w {
+		if wrapper == nil {
+			continue
+		}
+		total++
 		currentLoad := wrapper.GetCurrentLoad()
 		if currentLoad > 0 {
 			active++
@@ -124,8 +200,11 @@ func (w ConnWrappers) GetSummaryStats() (total int, active int, totalLoad uint32
 
 // GetConnectionDetails returns individual connection information for web display
 func (w ConnWrappers) GetConnectionDetails() []ConnectionDetail {
-	details := make([]ConnectionDetail, len(w))
-	for i, wrapper := range w {
+	details := make([]ConnectionDetail, 0, len(w))
+	for _, wrapper := range w {
+		if wrapper == nil {
+			continue
+		}
 		load := wrapper.GetCurrentLoad()
 
 		// Activity status based on load
@@ -135,19 +214,19 @@ func (w ConnWrappers) GetConnectionDetails() []ConnectionDetail {
 		}
 
 		// Get real gRPC connectivity state
-		grpcState := wrapper.GetState()
+		grpcState := wrapper.getState()
 		connectivityState := grpcStateToString(grpcState)
 
 		// Derive health status from gRPC state and load
 		healthStatus := deriveHealthStatus(grpcState, load)
 
-		details[i] = ConnectionDetail{
+		details = append(details, ConnectionDetail{
 			ID:                wrapper.ID,
 			Load:              load,
 			Status:            status,
 			ConnectivityState: connectivityState,
 			HealthStatus:      healthStatus,
-		}
+		})
 	}
 	return details
 }

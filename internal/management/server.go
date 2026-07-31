@@ -15,6 +15,7 @@ import (
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	rpcClient "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
+	rpcServer "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/server"
 )
 
 // Server timeouts guard against slow-client (Slowloris) resource exhaustion.
@@ -28,14 +29,16 @@ const (
 
 // StatsResponse is the JSON payload returned by GET /api/stats.
 type StatsResponse struct {
-	TxTotalBytes uint64                       `json:"tx_total_bytes"`
-	RxTotalBytes uint64                       `json:"rx_total_bytes"`
-	TxSpeedBps   float64                      `json:"tx_speed_bps"`
-	RxSpeedBps   float64                      `json:"rx_speed_bps"`
-	PoolTotal    int                          `json:"pool_total"`
-	PoolActive   int                          `json:"pool_active"`
-	PoolLoad     uint32                       `json:"pool_load"`
-	Connections  []rpcClient.ConnectionDetail `json:"connections"`
+	TxTotalBytes  uint64                       `json:"tx_total_bytes"`
+	RxTotalBytes  uint64                       `json:"rx_total_bytes"`
+	TxSpeedBps    float64                      `json:"tx_speed_bps"`
+	RxSpeedBps    float64                      `json:"rx_speed_bps"`
+	PoolTotal     int                          `json:"pool_total"`
+	PoolActive    int                          `json:"pool_active"`
+	PoolLoad      uint32                       `json:"pool_load"`
+	Connections   []rpcClient.ConnectionDetail `json:"connections"`
+	DNSExchange   rpcServer.DNSExchangeStats   `json:"dns_exchange"`
+	ProxySessions rpcServer.ProxySessionStats  `json:"proxy_sessions"`
 }
 
 // ipIsLoopback reports whether a "host:port" (or bare "host") string refers to a
@@ -146,14 +149,16 @@ func handleStats(w http.ResponseWriter, r *http.Request) {
 	details := rpcClient.GetConnectionDetails()
 
 	resp := StatsResponse{
-		TxTotalBytes: tx,
-		RxTotalBytes: rx,
-		TxSpeedBps:   txSpeed,
-		RxSpeedBps:   rxSpeed,
-		PoolTotal:    total,
-		PoolActive:   active,
-		PoolLoad:     load,
-		Connections:  details,
+		TxTotalBytes:  tx,
+		RxTotalBytes:  rx,
+		TxSpeedBps:    txSpeed,
+		RxSpeedBps:    rxSpeed,
+		PoolTotal:     total,
+		PoolActive:    active,
+		PoolLoad:      load,
+		Connections:   details,
+		DNSExchange:   rpcServer.DNSExchangeStatistics(),
+		ProxySessions: rpcServer.ProxySessionStatistics(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

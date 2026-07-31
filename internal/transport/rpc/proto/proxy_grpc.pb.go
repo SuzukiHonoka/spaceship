@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Proxy_DnsResolve_FullMethodName = "/proxy.Proxy/DnsResolve"
-	Proxy_Proxy_FullMethodName      = "/proxy.Proxy/Proxy"
+	Proxy_DnsResolve_FullMethodName  = "/proxy.Proxy/DnsResolve"
+	Proxy_DnsExchange_FullMethodName = "/proxy.Proxy/DnsExchange"
+	Proxy_Proxy_FullMethodName       = "/proxy.Proxy/Proxy"
 )
 
 // ProxyClient is the client API for Proxy service.
@@ -28,6 +29,12 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ProxyClient interface {
 	DnsResolve(ctx context.Context, in *DnsRequest, opts ...grpc.CallOption) (*DnsResponse, error)
+	// DnsExchange carries one complete DNS wire query to the Spaceship server
+	// and returns the complete wire response produced by its configured
+	// resolver. It is intentionally separate from DnsResolve so existing
+	// clients remain wire compatible while TUN DNS hijacking can preserve EDNS,
+	// DNSSEC, authority/additional sections, flags, and truncation.
+	DnsExchange(ctx context.Context, in *DnsExchangeRequest, opts ...grpc.CallOption) (*DnsExchangeResponse, error)
 	Proxy(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ProxySRC, ProxyDST], error)
 }
 
@@ -43,6 +50,16 @@ func (c *proxyClient) DnsResolve(ctx context.Context, in *DnsRequest, opts ...gr
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DnsResponse)
 	err := c.cc.Invoke(ctx, Proxy_DnsResolve_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *proxyClient) DnsExchange(ctx context.Context, in *DnsExchangeRequest, opts ...grpc.CallOption) (*DnsExchangeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DnsExchangeResponse)
+	err := c.cc.Invoke(ctx, Proxy_DnsExchange_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -67,6 +84,12 @@ type Proxy_ProxyClient = grpc.BidiStreamingClient[ProxySRC, ProxyDST]
 // for forward compatibility.
 type ProxyServer interface {
 	DnsResolve(context.Context, *DnsRequest) (*DnsResponse, error)
+	// DnsExchange carries one complete DNS wire query to the Spaceship server
+	// and returns the complete wire response produced by its configured
+	// resolver. It is intentionally separate from DnsResolve so existing
+	// clients remain wire compatible while TUN DNS hijacking can preserve EDNS,
+	// DNSSEC, authority/additional sections, flags, and truncation.
+	DnsExchange(context.Context, *DnsExchangeRequest) (*DnsExchangeResponse, error)
 	Proxy(grpc.BidiStreamingServer[ProxySRC, ProxyDST]) error
 	mustEmbedUnimplementedProxyServer()
 }
@@ -80,6 +103,9 @@ type UnimplementedProxyServer struct{}
 
 func (UnimplementedProxyServer) DnsResolve(context.Context, *DnsRequest) (*DnsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DnsResolve not implemented")
+}
+func (UnimplementedProxyServer) DnsExchange(context.Context, *DnsExchangeRequest) (*DnsExchangeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DnsExchange not implemented")
 }
 func (UnimplementedProxyServer) Proxy(grpc.BidiStreamingServer[ProxySRC, ProxyDST]) error {
 	return status.Error(codes.Unimplemented, "method Proxy not implemented")
@@ -123,6 +149,24 @@ func _Proxy_DnsResolve_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Proxy_DnsExchange_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DnsExchangeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProxyServer).DnsExchange(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Proxy_DnsExchange_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProxyServer).DnsExchange(ctx, req.(*DnsExchangeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Proxy_Proxy_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(ProxyServer).Proxy(&grpc.GenericServerStream[ProxySRC, ProxyDST]{ServerStream: stream})
 }
@@ -140,6 +184,10 @@ var Proxy_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DnsResolve",
 			Handler:    _Proxy_DnsResolve_Handler,
+		},
+		{
+			MethodName: "DnsExchange",
+			Handler:    _Proxy_DnsExchange_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

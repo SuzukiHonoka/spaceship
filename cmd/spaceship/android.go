@@ -15,5 +15,5 @@ func init() {
 		Type:   dns.TypeCommon,
 		Server: defaultDnsServer,
 	}
-	d.SetDefault()
+	_ = d.SetPlatformDefault()
 }

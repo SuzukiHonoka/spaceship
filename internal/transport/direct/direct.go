@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -38,7 +40,7 @@ func (d *Direct) Dial(network, addr string) (net.Conn, error) {
 }
 
 func (d *Direct) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	dialer := net.Dialer{Timeout: transport.GetDialTimeout()}
+	dialer := transport.NewOutboundDialer(transport.GetDialTimeout())
 	return dialer.DialContext(ctx, transport.DialNetwork(network), addr)
 }
 
@@ -88,31 +90,51 @@ func (d *Direct) DialPacket(network, addr string) (net.PacketConn, error) {
 // the exact address that must be used with that socket.
 func (d *Direct) DialPacketTarget(network, addr string) (net.PacketConn, net.Addr, error) {
 	network = transport.DialNetwork(network)
-	raddr, err := net.ResolveUDPAddr(network, addr)
+	if network != "udp" && network != "udp4" && network != "udp6" {
+		return nil, nil, fmt.Errorf("direct: unsupported packet network %s", network)
+	}
+	host, rawPort, err := net.SplitHostPort(addr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("direct: resolve packet addr %s: %w", addr, err)
+		return nil, nil, fmt.Errorf("direct: invalid packet target %s: %w", addr, err)
+	}
+	port, err := strconv.Atoi(rawPort)
+	if err != nil || host == "" || port < 1 || port > 65535 {
+		return nil, nil, fmt.Errorf("direct: invalid packet target %s", addr)
+	}
+	if literal, err := netip.ParseAddr(host); err == nil && literal.IsUnspecified() {
+		return nil, nil, fmt.Errorf("direct: invalid packet target %s", addr)
+	}
+
+	dialer := transport.NewOutboundDialer(transport.GetDialTimeout())
+	conn, err := dialer.DialContext(context.Background(), network, addr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("direct: dial packet %s to %s: %w", network, addr, err)
+	}
+	udpConn, ok := conn.(*net.UDPConn)
+	if !ok {
+		_ = conn.Close()
+		return nil, nil, fmt.Errorf("direct: packet dial returned %T", conn)
+	}
+	raddr, ok := udpConn.RemoteAddr().(*net.UDPAddr)
+	if !ok {
+		_ = udpConn.Close()
+		return nil, nil, fmt.Errorf("direct: packet peer has address type %T", udpConn.RemoteAddr())
 	}
 
 	// A connected socket needs a real peer. Rejecting these here turns an opaque
 	// "can't assign requested address" from the OS into an actionable error, and
 	// they can only arise from a malformed target anyway.
 	if raddr.IP == nil || raddr.IP.IsUnspecified() || raddr.Port == 0 {
+		_ = udpConn.Close()
 		return nil, nil, fmt.Errorf("direct: invalid packet target %s", addr)
 	}
 
-	dialNetwork := "udp6"
-	if network == "udp4" || raddr.IP.To4() != nil {
-		dialNetwork = "udp4"
-	}
-	if dialNetwork == "udp6" && transport.PreferIPv4() {
+	if raddr.IP.To4() == nil && transport.PreferIPv4() {
+		_ = udpConn.Close()
 		return nil, nil, fmt.Errorf("direct: IPv6 disabled, cannot dial packet target %s", addr)
 	}
 
-	conn, err := net.DialUDP(dialNetwork, nil, raddr)
-	if err != nil {
-		return nil, nil, fmt.Errorf("direct: dial packet %s to %s: %w", dialNetwork, addr, err)
-	}
-	return &connectedPacketConn{UDPConn: conn, remote: raddr}, raddr, nil
+	return &connectedPacketConn{UDPConn: udpConn, remote: raddr}, raddr, nil
 }
 
 func (d *Direct) Close() error {

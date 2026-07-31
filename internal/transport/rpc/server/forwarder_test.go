@@ -3,19 +3,25 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	"google.golang.org/grpc/metadata"
 )
 
 type mockProxyServer struct {
-	ctx      context.Context
-	sent     chan *proto.ProxyDST
-	received chan *proto.ProxySRC
+	ctx           context.Context
+	sent          chan *proto.ProxyDST
+	received      chan *proto.ProxySRC
+	recvStarted   chan struct{}
+	recvStartOnce sync.Once
 }
 
 func (m *mockProxyServer) Send(dst *proto.ProxyDST) error {
@@ -24,7 +30,24 @@ func (m *mockProxyServer) Send(dst *proto.ProxyDST) error {
 }
 
 func (m *mockProxyServer) Recv() (*proto.ProxySRC, error) {
-	return <-m.received, nil
+	m.recvStartOnce.Do(func() {
+		if m.recvStarted != nil {
+			close(m.recvStarted)
+		}
+	})
+	ctx := m.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case message, ok := <-m.received:
+		if !ok {
+			return nil, io.EOF
+		}
+		return message, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (m *mockProxyServer) SetHeader(metadata.MD) error  { return nil }
@@ -33,6 +56,36 @@ func (m *mockProxyServer) SetTrailer(metadata.MD)       {}
 func (m *mockProxyServer) Context() context.Context     { return m.ctx }
 func (m *mockProxyServer) SendMsg(interface{}) error    { return nil }
 func (m *mockProxyServer) RecvMsg(interface{}) error    { return nil }
+
+type closeTrackingRoute struct {
+	closeCount int
+	closeErr   error
+}
+
+func (*closeTrackingRoute) String() string {
+	return "close-tracking"
+}
+
+func (*closeTrackingRoute) Dial(string, string) (net.Conn, error) {
+	return nil, errors.New("not used")
+}
+
+func (r *closeTrackingRoute) Close() error {
+	r.closeCount++
+	return r.closeErr
+}
+
+func (*closeTrackingRoute) Proxy(
+	context.Context,
+	string,
+	chan<- string,
+	io.Writer,
+	io.Reader,
+) error {
+	return errors.New("not used")
+}
+
+var _ transport.Transport = (*closeTrackingRoute)(nil)
 
 func TestForwarder_New(t *testing.T) {
 	ctx := context.Background()
@@ -57,6 +110,22 @@ func TestForwarder_Close(t *testing.T) {
 	f.Conn = c1
 	if err := f.Close(); err != nil {
 		t.Errorf("Close conn error: %v", err)
+	}
+}
+
+func TestForwarderCloseReleasesRouteOnceAndCachesError(t *testing.T) {
+	sentinel := errors.New("route close failure")
+	route := &closeTrackingRoute{closeErr: sentinel}
+	f := &Forwarder{route: route}
+
+	if err := f.Close(); !errors.Is(err, sentinel) {
+		t.Fatalf("first Close() error = %v, want route failure", err)
+	}
+	if err := f.Close(); !errors.Is(err, sentinel) {
+		t.Fatalf("second Close() error = %v, want cached route failure", err)
+	}
+	if route.closeCount != 1 {
+		t.Fatalf("route close count = %d, want 1", route.closeCount)
 	}
 }
 
@@ -108,6 +177,160 @@ func TestForwarder_CopyTargetToClientCancellationClosesTarget(t *testing.T) {
 	}
 	if err := target.SetDeadline(time.Now()); err == nil {
 		t.Fatal("target connection remained open after cancellation")
+	}
+}
+
+func TestForwarderHandshakeUsesPrefetchedHeaderAndContextDialer(t *testing.T) {
+	if err := router.SetRoutes(router.Routes{
+		{MatchType: router.TypeDefault, Destination: router.EgressDirect},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	f := NewForwarder(ctx, &mockProxyServer{ctx: ctx})
+	f.firstMessage = &proto.ProxySRC{
+		HeaderOrPayload: &proto.ProxySRC_Header{
+			Header: &proto.ProxySRC_ProxyHeader{Addr: listener.Addr().String()},
+		},
+	}
+	defer func() { _ = f.Close() }()
+
+	if err := f.handshake(); err != nil {
+		t.Fatal(err)
+	}
+	if f.Target() != listener.Addr().String() || !strings.HasPrefix(f.network, "tcp") {
+		t.Fatalf("handshake target=%q network=%q", f.Target(), f.network)
+	}
+}
+
+func TestForwarderHandshakeRejectsInvalidFirstMessage(t *testing.T) {
+	tests := []struct {
+		name    string
+		message *proto.ProxySRC
+	}{
+		{
+			name: "payload",
+			message: &proto.ProxySRC{
+				HeaderOrPayload: &proto.ProxySRC_Payload{Payload: []byte("not a header")},
+			},
+		},
+		{
+			name: "nil header",
+			message: &proto.ProxySRC{
+				HeaderOrPayload: &proto.ProxySRC_Header{},
+			},
+		},
+		{
+			name: "invalid address",
+			message: &proto.ProxySRC{
+				HeaderOrPayload: &proto.ProxySRC_Header{
+					Header: &proto.ProxySRC_ProxyHeader{Addr: "missing-port"},
+				},
+			},
+		},
+		{
+			name: "empty host",
+			message: &proto.ProxySRC{
+				HeaderOrPayload: &proto.ProxySRC_Header{
+					Header: &proto.ProxySRC_ProxyHeader{Addr: ":443"},
+				},
+			},
+		},
+		{
+			name: "empty port",
+			message: &proto.ProxySRC{
+				HeaderOrPayload: &proto.ProxySRC_Header{
+					Header: &proto.ProxySRC_ProxyHeader{Addr: "example.com:"},
+				},
+			},
+		},
+		{
+			name: "unknown network",
+			message: &proto.ProxySRC{
+				HeaderOrPayload: &proto.ProxySRC_Header{
+					Header: &proto.ProxySRC_ProxyHeader{
+						Addr:    "example.com:443",
+						Network: proto.Network(99),
+					},
+				},
+			},
+		},
+		{
+			name: "oversized target",
+			message: &proto.ProxySRC{
+				HeaderOrPayload: &proto.ProxySRC_Header{
+					Header: &proto.ProxySRC_ProxyHeader{
+						Addr: strings.Repeat("a", maxProxyTargetLength+1),
+					},
+				},
+			},
+		},
+		{
+			name: "log control character",
+			message: &proto.ProxySRC{
+				HeaderOrPayload: &proto.ProxySRC_Header{
+					Header: &proto.ProxySRC_ProxyHeader{
+						Addr: "example.com\ninjected:443",
+					},
+				},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			received := make(chan *proto.ProxySRC, 1)
+			received <- test.message
+			f := NewForwarder(context.Background(), &mockProxyServer{
+				ctx:      context.Background(),
+				received: received,
+			})
+			if err := f.handshake(); err == nil {
+				t.Fatal("handshake accepted an invalid first message")
+			}
+			if f.Target() != "" {
+				t.Fatalf("invalid target was retained for logging: %q", f.Target())
+			}
+		})
+	}
+}
+
+func TestContainsControlOrSpace(t *testing.T) {
+	for _, invalid := range []string{"host name:443", "host\tname:443", "host\nname:443", "host\x7fname:443"} {
+		if !containsControlOrSpace(invalid) {
+			t.Fatalf("containsControlOrSpace(%q) = false", invalid)
+		}
+	}
+	if containsControlOrSpace("[2001:db8::1]:443") {
+		t.Fatal("containsControlOrSpace rejected a valid IPv6 target")
+	}
+}
+
+func TestForwarderHandshakeDialHonorsCanceledContext(t *testing.T) {
+	if err := router.SetRoutes(router.Routes{
+		{MatchType: router.TypeDefault, Destination: router.EgressDirect},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	f := NewForwarder(ctx, &mockProxyServer{
+		ctx:  ctx,
+		sent: make(chan *proto.ProxyDST, 1),
+	})
+	f.firstMessage = &proto.ProxySRC{
+		HeaderOrPayload: &proto.ProxySRC_Header{
+			Header: &proto.ProxySRC_ProxyHeader{Addr: "192.0.2.1:443"},
+		},
+	}
+	if err := f.handshake(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("handshake error = %v, want context.Canceled", err)
 	}
 }
 

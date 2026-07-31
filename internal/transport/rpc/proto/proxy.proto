@@ -6,6 +6,12 @@ option go_package = "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc
 
 service Proxy{
   rpc DnsResolve(DnsRequest) returns (DnsResponse) {};
+  // DnsExchange carries one complete DNS wire query to the Spaceship server
+  // and returns the complete wire response produced by its configured
+  // resolver. It is intentionally separate from DnsResolve so existing
+  // clients remain wire compatible while TUN DNS hijacking can preserve EDNS,
+  // DNSSEC, authority/additional sections, flags, and truncation.
+  rpc DnsExchange(DnsExchangeRequest) returns (DnsExchangeResponse) {};
   rpc Proxy(stream ProxySRC) returns (stream ProxyDST) {};
 }
 
@@ -87,4 +93,20 @@ message DnsResult {
 message DnsResponse{
   // fqdn resolved result
   repeated DnsResult result = 1;
+}
+
+message DnsExchangeRequest {
+  // A complete DNS query in RFC 1035 wire format. DNS-over-TCP's two-byte
+  // length prefix is transport framing and is not included here.
+  bytes wire_query = 1;
+  // The transport on which the intercepted query arrived. The server uses the
+  // same transport for its upstream exchange so UDP truncation and TCP
+  // semantics remain visible to the original client.
+  Network network = 2;
+  bool block_ipv6 = 3;
+}
+
+message DnsExchangeResponse {
+  // A complete DNS response in RFC 1035 wire format, without TCP framing.
+  bytes wire_response = 1;
 }

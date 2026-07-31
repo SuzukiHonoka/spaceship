@@ -5,7 +5,8 @@ import (
 	"log"
 	"time"
 
-	rpcClient "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/dnswire"
+	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"github.com/miekg/dns"
 )
@@ -15,11 +16,13 @@ var DefaultShutdownTimeout = 3 * time.Second
 type Server struct {
 	srv          *dns.Server
 	blockIPv6DNS bool
+	exchanger    WireExchanger
 }
 
 func NewServer(addr string, blockIPv6DNS bool) (*Server, error) {
 	srv := &Server{
 		blockIPv6DNS: blockIPv6DNS,
+		exchanger:    NewRPCExchanger(),
 	}
 	dnsSrv := &dns.Server{
 		Addr:    addr,
@@ -31,54 +34,36 @@ func NewServer(addr string, blockIPv6DNS bool) (*Server, error) {
 }
 
 func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
-	m := new(dns.Msg)
-	m.SetReply(r)
-	m.Authoritative = true
-
-	// Acquire a client from the pool for this request and release it immediately
-	// after the RPC completes. This avoids permanently holding one pool slot for
-	// the lifetime of the DNS server (which starves other connections).
-	client, err := rpcClient.New()
+	wireQuery, err := r.Pack()
 	if err != nil {
-		log.Printf("dns: acquire client failed: %v", err)
-		m.SetRcode(r, dns.RcodeServerFailure)
-		if writeErr := w.WriteMsg(m); writeErr != nil {
-			log.Printf("dns: write response failed: %v", writeErr)
-		}
+		s.writeErrorResponse(w, r, dns.RcodeFormatError, err)
 		return
 	}
-	defer utils.Close(client)
-
-	// Pre-allocate with exact capacity
-	questionCount := len(r.Question)
-	dnsReqList := make([]*rpcClient.DnsRequest, 0, questionCount)
-	for i := range r.Question {
-		dnsReqList = append(dnsReqList, &rpcClient.DnsRequest{
-			Fqdn:      r.Question[i].Name,
-			QType:     r.Question[i].Qtype,
-			BlockIPv6: s.blockIPv6DNS,
-		})
+	if _, err := dnswire.ParseQuery(wireQuery); err != nil {
+		s.writeErrorResponse(w, r, dnswire.QueryErrorRcode(err), nil)
+		return
 	}
 
 	// Perform DNS resolution via RPC client with a bounded timeout to prevent
 	// indefinitely-hanging ServeDNS goroutines when the upstream is slow.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	results, rcode, err := client.DnsResolve(ctx, dnsReqList)
+	wireResponse, err := s.exchanger.Exchange(ctx, wireQuery, proto.Network_UDP, s.blockIPv6DNS)
 	if err != nil {
-		log.Printf("dns: resolve via rpc failed: %v", err)
-		m.SetRcode(r, dns.RcodeServerFailure)
-		if err = w.WriteMsg(m); err != nil {
-			log.Printf("dns: write response failed: %v", err)
-		}
+		s.writeErrorResponse(w, r, dns.RcodeServerFailure, err)
 		return
 	}
 
-	// Convert RPC results back to DNS format
-	m.Answer = results
-	m.Rcode = rcode
+	if _, err = w.Write(wireResponse); err != nil {
+		log.Printf("dns: write response failed: %v", err)
+	}
+}
 
-	if err = w.WriteMsg(m); err != nil {
+func (s *Server) writeErrorResponse(w dns.ResponseWriter, query *dns.Msg, rcode int, cause error) {
+	if cause != nil {
+		log.Printf("dns: exchange via rpc failed: %v", cause)
+	}
+	if err := w.WriteMsg(dnswire.ErrorResponse(query, rcode)); err != nil {
 		log.Printf("dns: write response failed: %v", err)
 	}
 }

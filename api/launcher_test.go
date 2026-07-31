@@ -11,6 +11,7 @@ import (
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/redirect"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/tun"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config/client"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config/server"
@@ -188,6 +189,31 @@ func TestLaunchRejectsRedirectOnUnsupportedPlatform(t *testing.T) {
 	err := launcher.Launch(cfg)
 	if !errors.Is(err, redirect.ErrUnsupported) {
 		t.Fatalf("Launch() error = %v, want ErrUnsupported", err)
+	}
+}
+
+func TestLaunchRejectsTUNOnUnsupportedPlatform(t *testing.T) {
+	if tun.Supported() {
+		t.Skip("platform supports TUN")
+	}
+	t.Cleanup(transport.EnableIPv6)
+
+	launcher := NewLauncher()
+	launcher.SkipInternalLogging()
+	cfg := &config.MixedConfig{
+		Role: config.RoleClient,
+		Client: &client.Client{
+			ServerAddr: "127.0.0.1:1",
+			UUID:       testUserUUID,
+			Mux:        1,
+			TUN:        &client.TUN{},
+		},
+		Server: &server.Server{},
+	}
+
+	err := launcher.Launch(cfg)
+	if !errors.Is(err, tun.ErrUnsupported) {
+		t.Fatalf("Launch() error = %v, want TUN ErrUnsupported", err)
 	}
 }
 

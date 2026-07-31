@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/forward"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/tun"
 	configClient "github.com/SuzukiHonoka/spaceship/v2/pkg/config/client"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config/server"
 )
@@ -532,6 +534,311 @@ func TestApply_UDPSettings(t *testing.T) {
 	}
 	if err := cfg.Apply(); err == nil {
 		t.Error("Apply() error = nil for negative udp.max_associations")
+	}
+}
+
+func TestApply_TUNValidationAndBypassMarkLifecycle(t *testing.T) {
+	oldMark := transport.BypassMark()
+	oldResolver := transport.OutboundResolver()
+	t.Cleanup(func() {
+		transport.SetOutboundResolver(oldResolver)
+		transport.SetBypassMark(oldMark)
+		transport.EnableIPv6()
+	})
+
+	serverConfig, err := NewFromString(`{
+		"role":"server",
+		"log":"skip",
+		"tun":{"name":"spaceship0"}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := serverConfig.Apply(); err == nil ||
+		!strings.Contains(err.Error(), "client role") {
+		t.Fatalf("server Apply() with TUN error = %v", err)
+	}
+
+	cfg, err := NewFromString(`{
+		"role":"client",
+		"log":"skip",
+		"uuid":"tun-config-user",
+		"ipv6":true,
+		"tun":{
+			"name":"spaceship0",
+			"mtu":1400,
+			"route_mode":"manual",
+			"bypass_mark":4660,
+			"max_connections":32,
+			"max_pending_connections":8,
+			"dns_hijack":{
+				"enabled":true,
+				"query_timeout_seconds":2,
+				"tcp_idle_timeout_seconds":5,
+				"max_in_flight":4
+			}
+		}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tun.Supported() {
+		if err := cfg.Apply(); !errors.Is(err, tun.ErrUnsupported) {
+			t.Fatalf("Apply() error = %v, want ErrUnsupported", err)
+		}
+		return
+	}
+
+	if err := cfg.Apply(); err != nil {
+		t.Fatalf("Apply() with TUN error = %v", err)
+	}
+	if got := transport.BypassMark(); got != 4660 {
+		t.Fatalf("BypassMark() = %#x, want %#x", got, uint32(4660))
+	}
+
+	withoutTUN, err := NewFromString(`{
+		"role":"client",
+		"log":"skip",
+		"uuid":"tun-config-user",
+		"ipv6":true
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := withoutTUN.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if got := transport.BypassMark(); got != 0 {
+		t.Fatalf("BypassMark() after TUN removal = %#x, want 0", got)
+	}
+}
+
+func TestApply_TUNSelectsAndValidatesRPCPoolCapacity(t *testing.T) {
+	if !tun.Supported() {
+		t.Skip("TUN config is Linux-only")
+	}
+	oldMark := transport.BypassMark()
+	oldResolver := transport.OutboundResolver()
+	t.Cleanup(func() {
+		transport.SetOutboundResolver(oldResolver)
+		transport.SetBypassMark(oldMark)
+		transport.EnableIPv6()
+	})
+
+	automatic, err := NewFromString(`{
+		"role":"client",
+		"log":"skip",
+		"uuid":"tun-auto-mux-user",
+		"ipv6":true,
+		"tun":{"dns_hijack":{"enabled":true}}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if automatic.Mux != 0 {
+		t.Fatalf("Mux before Apply = %d, want decoded zero", automatic.Mux)
+	}
+	if err := automatic.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if automatic.Mux != 2 {
+		t.Fatalf("Mux after Apply = %d, want capacity-aware default 2", automatic.Mux)
+	}
+
+	undersized, err := NewFromString(`{
+		"role":"client",
+		"log":"skip",
+		"uuid":"tun-small-mux-user",
+		"ipv6":true,
+		"mux":1,
+		"tun":{"dns_hijack":{"enabled":true}}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := undersized.Apply(); err == nil ||
+		!strings.Contains(err.Error(), "need at least 2") {
+		t.Fatalf("Apply() with undersized mux error = %v", err)
+	}
+	if undersized.Mux != 1 {
+		t.Fatalf("failed Apply mutated Mux to %d, want 1", undersized.Mux)
+	}
+}
+
+func TestApply_NormalizesServerDNSExchangeLimits(t *testing.T) {
+	t.Cleanup(transport.EnableIPv6)
+	cfg, err := NewFromString(`{
+		"role":"server",
+		"log":"skip",
+		"ipv6":true,
+		"users":[{"uuid":"dns-limit-user"}],
+		"dns_exchange":{
+			"max_concurrent":8,
+			"max_concurrent_per_user":2,
+			"queries_per_second":20,
+			"queries_per_second_per_user":5,
+			"burst":8,
+			"burst_per_user":2
+		}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DNSExchange == nil ||
+		cfg.DNSExchange.MaxConcurrent != 8 ||
+		cfg.DNSExchange.MaxConcurrentPerUser != 2 ||
+		cfg.DNSExchange.QueriesPerSecond != 20 ||
+		cfg.DNSExchange.QueriesPerUser != 5 {
+		t.Fatalf("normalized DNS exchange config = %+v", cfg.DNSExchange)
+	}
+}
+
+func TestApply_RejectsInvalidOrMisplacedDNSExchangeLimits(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "client role",
+			raw: `{
+				"role":"client",
+				"log":"skip",
+				"uuid":"client",
+				"dns_exchange":{"max_concurrent":1}
+			}`,
+			want: "only valid for the server role",
+		},
+		{
+			name: "negative limit",
+			raw: `{
+				"role":"server",
+				"log":"skip",
+				"users":[{"uuid":"server"}],
+				"dns_exchange":{"max_concurrent":-1}
+			}`,
+			want: "max_concurrent",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := NewFromString(tt.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := cfg.Apply(); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Apply() error = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestApply_NormalizesServerProxySessionLimits(t *testing.T) {
+	t.Cleanup(transport.EnableIPv6)
+	cfg, err := NewFromString(`{
+		"role":"server",
+		"log":"skip",
+		"ipv6":true,
+		"users":[{"uuid":"proxy-limit-user"}],
+		"proxy_sessions":{
+			"max_concurrent":16,
+			"max_concurrent_per_user":4,
+			"new_sessions_per_second":40,
+			"new_sessions_per_second_per_user":10,
+			"burst":16,
+			"burst_per_user":4,
+			"handshake_timeout_seconds":3
+		}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProxySessions == nil ||
+		cfg.ProxySessions.MaxConcurrent != 16 ||
+		cfg.ProxySessions.MaxConcurrentPerUser != 4 ||
+		cfg.ProxySessions.SessionsPerSecond != 40 ||
+		cfg.ProxySessions.SessionsPerUser != 10 ||
+		cfg.ProxySessions.HandshakeTimeoutSeconds != 3 {
+		t.Fatalf("normalized proxy session config = %+v", cfg.ProxySessions)
+	}
+}
+
+func TestApply_RejectsInvalidOrMisplacedProxySessionLimits(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "client role",
+			raw: `{
+				"role":"client",
+				"log":"skip",
+				"uuid":"client",
+				"proxy_sessions":{"max_concurrent":1}
+			}`,
+			want: "only valid for the server role",
+		},
+		{
+			name: "negative limit",
+			raw: `{
+				"role":"server",
+				"log":"skip",
+				"users":[{"uuid":"server"}],
+				"proxy_sessions":{"handshake_timeout_seconds":-1}
+			}`,
+			want: "handshake_timeout_seconds",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := NewFromString(tt.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := cfg.Apply(); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Apply() error = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestApply_RestoresBypassMarkAfterLaterValidationFailure(t *testing.T) {
+	oldMark := transport.BypassMark()
+	oldResolver := transport.OutboundResolver()
+	sentinelResolver := &net.Resolver{PreferGo: true}
+	transport.SetBypassMark(0x1234)
+	transport.SetOutboundResolver(sentinelResolver)
+	t.Cleanup(func() {
+		transport.SetOutboundResolver(oldResolver)
+		transport.SetBypassMark(oldMark)
+	})
+
+	cfg, err := NewFromString(`{
+		"role":"client",
+		"log":"skip",
+		"uuid":"mark-rollback-user",
+		"buffer":65535
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Apply(); err == nil || !strings.Contains(err.Error(), "buffer too large") {
+		t.Fatalf("Apply() error = %v, want buffer validation failure", err)
+	}
+	if got := transport.BypassMark(); got != 0x1234 {
+		t.Fatalf("BypassMark() after failed Apply = %#x, want %#x", got, uint32(0x1234))
+	}
+	if got := transport.OutboundResolver(); got != sentinelResolver {
+		t.Fatalf("OutboundResolver() after failed Apply = %p, want %p", got, sentinelResolver)
 	}
 }
 
