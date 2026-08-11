@@ -75,12 +75,13 @@ Without an exemption the listener captures its own egress, routes it, captures
 the result, and repeats: a single connection exhausts `max_connections` in
 well under a second and the frontend stops accepting traffic.
 
-Set `redirect.bypass_mark` and exempt that mark. Spaceship applies it with
-`SO_MARK` to its gRPC control connection, direct TCP/UDP egress, forward-proxy
-connection, and pure-Go resolver sockets. Prefer it over `-m owner`, which
-silently fails to match when Spaceship runs as root. Keep the owner rule too,
-as defense in depth, along with the tunnel server address and local
-control-plane networks:
+Spaceship marks its own egress for you: enabling `listen_redirect` applies
+`redirect.bypass_mark` — decimal `21328` (`0x5350`) by default — with `SO_MARK`
+to its gRPC control connection, direct TCP/UDP egress, forward-proxy
+connection, and pure-Go resolver sockets. Exempt that mark. Prefer it over
+`-m owner`, which silently fails to match when Spaceship runs as root. Keep the
+owner rule too, as defense in depth, along with the tunnel server address and
+local control-plane networks:
 
 ```shell
 iptables -t nat -N SPACESHIP_LOCAL
@@ -93,14 +94,16 @@ iptables -t nat -A SPACESHIP_LOCAL -p tcp -j REDIRECT --to-ports 12345
 iptables -t nat -A OUTPUT -p tcp -j SPACESHIP_LOCAL
 ```
 
-`bypass_mark` is opt-in and defaults to no marking, because `SO_MARK` needs
-network-administration capability (normally `CAP_NET_ADMIN`) that a LAN-only
-`PREROUTING` deployment does not otherwise require. Spaceship logs a warning
-at startup when `listen_redirect` is set without it, and fails at startup with
-one clear error if the mark is configured but the process lacks the capability.
-`21328` (`0x5350`) is the suggested value. When TUN is also enabled its
-`bypass_mark` is inherited automatically; setting a different value here is
-rejected, because a process has exactly one outbound socket mark.
+`SO_MARK` needs network-administration capability (normally `CAP_NET_ADMIN`),
+which a LAN-only `PREROUTING` deployment does not otherwise require — nothing
+there captures locally-originated traffic. So when the mark is only the default
+and the process cannot apply it, Spaceship warns at startup and continues
+unmarked rather than refusing to run. Setting `bypass_mark` explicitly makes it
+a requirement instead: startup then fails with one clear error if it cannot be
+applied. Set it to `0` to disable marking deliberately and silence the warning.
+When TUN is also enabled its `bypass_mark` is inherited automatically; setting a
+different value here is rejected, because a process has exactly one outbound
+socket mark.
 
 Replace `192.0.2.10` with every IP used by `server_addr`; do not use the
 documentation address literally. Add explicit exclusions for management and
@@ -245,10 +248,16 @@ Zero sets the per-connection ceiling to roughly three quarters of
 `max_in_flight` — 192 of the default 256, far more headroom than a stub
 resolver pipelines — and leaves pools of four or fewer unrestricted, where
 capping would cost more pipelining than it buys. It may not exceed
-`max_in_flight`. This is a per-connection ceiling rather than a reservation:
-it stops any one connection monopolising the pool, but several busy
-connections can still fill it between them, which is what the global bound is
-for.
+`max_in_flight`.
+
+The ceiling is an upper bound, not the whole story: Spaceship also divides the
+pool by the number of DNS-over-TCP connections currently using it, so each is
+held to whichever is smaller. Two connections get half the pool each, four get
+a quarter each, and no connection is squeezed to nothing while there are no
+more connections than slots. Sharing bounds what a connection may acquire
+rather than revoking what it holds, so a connection that arrives while the pool
+is busy gains its share as in-flight queries drain — bounded by
+`query_timeout_seconds` — instead of instantly.
 
 Reaching the per-connection ceiling applies backpressure instead of failing.
 Spaceship stops reading that socket until one of the connection's own queries

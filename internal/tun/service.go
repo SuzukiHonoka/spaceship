@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	spaceshipDNS "github.com/SuzukiHonoka/spaceship/v2/internal/dns"
@@ -55,6 +56,9 @@ type Service struct {
 	flowSlots chan struct{}
 	dnsSlots  chan struct{}
 	udpSlots  chan struct{}
+	// dnsConnections counts live DNS-over-TCP connections so the DNS pool can
+	// be shared fairly between them. See fairDNSShare.
+	dnsConnections atomic.Int64
 
 	closeOnce sync.Once
 	closeDone chan struct{}
@@ -369,6 +373,25 @@ func tryAcquireSlot(slots chan struct{}) bool {
 // releaseSlot returns one unit reserved by tryAcquireSlot.
 func releaseSlot(slots chan struct{}) {
 	<-slots
+}
+
+// fairDNSShare returns how many concurrent DNS RPCs one DNS-over-TCP
+// connection may hold right now, given ceiling as its static upper bound.
+//
+// A static ceiling alone bounds any single connection but reserves nothing: a
+// few busy connections can still fill the pool between them and leave a new
+// connection with no capacity. Dividing the pool by the number of active
+// connections gives every one of them at least one slot while there are no
+// more connections than slots, so none is starved. A connection already
+// holding more than its current share simply stops acquiring; its in-flight
+// queries drain within QueryTimeout, so the pool converges without revocation.
+func (s *Service) fairDNSShare(ceiling int) int {
+	active := s.dnsConnections.Load()
+	if active < 1 {
+		active = 1
+	}
+	share := int64(cap(s.dnsSlots)) / active
+	return max(1, min(ceiling, int(share)))
 }
 
 func (s *Service) acquireDNS() bool {

@@ -1334,6 +1334,146 @@ func TestServeTCPDNSBackpressureUnblocksOnShutdown(t *testing.T) {
 	close(blocked)
 }
 
+// fairDNSShare divides the pool between the connections contending for it, so
+// no connection can claim capacity that would leave another with none.
+func TestFairDNSShare(t *testing.T) {
+	s := &Service{dnsSlots: make(chan struct{}, 8)}
+	for _, tc := range []struct {
+		name    string
+		active  int64
+		ceiling int
+		want    int
+	}{
+		{"idleCountsAsOne", 0, 8, 8},
+		{"soleConnectionGetsCeiling", 1, 4, 4},
+		{"soleConnectionCappedByPool", 1, 16, 8},
+		{"twoConnectionsSplitPool", 2, 8, 4},
+		{"fourConnectionsSplitPool", 4, 8, 2},
+		{"neverBelowOne", 100, 8, 1},
+		{"ceilingStillApplies", 2, 3, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s.dnsConnections.Store(tc.active)
+			if got := s.fairDNSShare(tc.ceiling); got != tc.want {
+				t.Fatalf("fairDNSShare(%d) with %d active = %d, want %d",
+					tc.ceiling, tc.active, got, tc.want)
+			}
+		})
+	}
+}
+
+// A static ceiling bounds one connection but reserves nothing: two connections
+// permitted the full pool each could leave a third with none. With fair
+// sharing, connections contending from the start are each held to their share,
+// so capacity remains for the others.
+//
+// Sharing bounds what a connection may acquire; it does not revoke slots
+// already held, so a connection that arrives later gains capacity as in-flight
+// queries drain rather than instantly. That is bounded by QueryTimeout and is
+// why this test synchronises the start instead of racing a late arrival.
+func TestServeTCPDNSFairShareBoundsConcurrentConnections(t *testing.T) {
+	const (
+		globalSlots = 8
+		connections = 2
+		fairShare   = globalSlots / connections
+	)
+	cfg, err := NormalizeConfig(Config{DNS: DNSConfig{
+		Enabled:        true,
+		QueryTimeout:   5 * time.Second,
+		TCPIdleTimeout: 5 * time.Second,
+		MaxInFlight:    globalSlots,
+		// Permissive on purpose: fair sharing, not this ceiling, must be what
+		// keeps capacity available to the other connection.
+		MaxInFlightPerConnection: globalSlots,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var inFlight atomic.Int64
+	held := map[string]*atomic.Int64{"a.": new(atomic.Int64), "b.": new(atomic.Int64)}
+	release := make(chan struct{})
+	service := &Service{
+		ctx:      ctx,
+		cfg:      cfg,
+		dnsSlots: make(chan struct{}, cfg.DNS.MaxInFlight),
+		exchanger: &testDNSExchanger{exchange: func(
+			exchangeCtx context.Context, wire []byte, _ proto.Network, _ bool,
+		) ([]byte, error) {
+			msg := new(dns.Msg)
+			if err := msg.Unpack(wire); err != nil {
+				return nil, err
+			}
+			owner := msg.Question[0].Name[:2]
+			counter, ok := held[owner]
+			if !ok {
+				return nil, fmt.Errorf("unexpected query owner %q", owner)
+			}
+			counter.Add(1)
+			inFlight.Add(1)
+			defer inFlight.Add(-1)
+			select {
+			case <-release:
+			case <-exchangeCtx.Done():
+				return nil, exchangeCtx.Err()
+			}
+			msg.Response = true
+			return msg.Pack()
+		}},
+	}
+
+	// Both connections must be registered before any query flows, otherwise the
+	// first to start would legitimately claim the whole pool as the sole peer.
+	clients := make([]net.Conn, 0, connections)
+	for range connections {
+		serverConn, clientConn := net.Pipe()
+		clients = append(clients, clientConn)
+		go service.serveTCPDNS(serverConn)
+	}
+	defer func() {
+		for _, c := range clients {
+			_ = c.Close()
+		}
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	for service.dnsConnections.Load() < connections && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := service.dnsConnections.Load(); got != connections {
+		t.Fatalf("only %d of %d connections registered", got, connections)
+	}
+
+	for i, prefix := range []string{"a.", "b."} {
+		go func() {
+			for j := 0; j < globalSlots; j++ {
+				_ = clients[i].SetWriteDeadline(time.Now().Add(3 * time.Second))
+				if err := writeDNSFrame(clients[i], dnsQueryWire(t, prefix+"greedy.test.", uint16(j+1))); err != nil {
+					return
+				}
+			}
+		}()
+	}
+
+	// Let both readers push as far as they are allowed.
+	deadline = time.Now().Add(3 * time.Second)
+	for inFlight.Load() < globalSlots && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	first, second := held["a."].Load(), held["b."].Load()
+	if first > fairShare || second > fairShare {
+		t.Fatalf("a connection exceeded its fair share: a=%d b=%d, share %d of %d slots",
+			first, second, fairShare, globalSlots)
+	}
+	if first == 0 || second == 0 {
+		t.Fatalf("a connection obtained no capacity: a=%d b=%d", first, second)
+	}
+	close(release)
+}
+
 // writeDNSFrame writes one length-prefixed DNS-over-TCP message.
 func writeDNSFrame(w net.Conn, wire []byte) error {
 	frame := make([]byte, 2+len(wire))

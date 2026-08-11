@@ -44,12 +44,17 @@ type Redirect struct {
 	// root. Without it, an unexempted OUTPUT rule makes the listener
 	// recursively capture its own egress.
 	//
-	// Zero means no marking. It is opt-in rather than defaulted because
-	// SO_MARK needs network-administration capability, which a LAN-only
-	// PREROUTING deployment does not otherwise require. When TUN is also
-	// enabled its mark is inherited; setting a different value here is
-	// rejected because a process has exactly one outbound mark.
-	BypassMark uint32 `json:"bypass_mark,omitempty"`
+	// Omitting the field enables the default mark, because that recursion is
+	// the most damaging way to misconfigure this listener. Setting it to 0
+	// disables marking explicitly, which a LAN-only PREROUTING deployment may
+	// prefer since nothing there captures locally-originated traffic. When the
+	// mark is only defaulted and the process lacks the capability to apply it,
+	// startup warns and continues unmarked rather than failing; an explicit
+	// value is treated as a requirement and fails instead.
+	//
+	// When TUN is also enabled its mark is inherited; setting a different value
+	// here is rejected because a process has exactly one outbound mark.
+	BypassMark *uint32 `json:"bypass_mark,omitempty"`
 }
 
 // UDP configures the SOCKS5 UDP ASSOCIATE relay. Every numeric field is
