@@ -12,6 +12,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/http"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/redirect"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/socks"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/server"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/tun"
@@ -84,6 +85,13 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 	}
 	if cfg.TUN != nil && !tun.Supported() {
 		return tun.ErrUnsupported
+	}
+	// Apply installed the bypass mark; confirm this process can actually set it
+	// before any frontend starts. Checking here rather than in Apply keeps
+	// config validation privilege-free while still turning a missing
+	// CAP_NET_ADMIN into one startup error instead of an EPERM on every dial.
+	if err := transport.VerifyBypassMark(); err != nil {
+		return fmt.Errorf("apply outbound socket mark %#x: %w", transport.BypassMark(), err)
 	}
 
 	// destroy any left connections

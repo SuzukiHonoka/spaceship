@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+// DefaultBypassMark is the policy-routing mark Spaceship applies to its own
+// outbound sockets when a frontend needs that egress exempted from a catch-all
+// capture rule. The TUN and transparent REDIRECT frontends share it because a
+// process has exactly one outbound mark.
+const DefaultBypassMark uint32 = 0x5350
+
 var (
 	bypassMark       atomic.Uint32
 	outboundResolver atomic.Pointer[net.Resolver]
@@ -25,6 +31,18 @@ func SetBypassMark(mark uint32) {
 // BypassMark returns the currently configured outbound socket mark.
 func BypassMark() uint32 {
 	return bypassMark.Load()
+}
+
+// VerifyBypassMark reports whether the currently configured mark can actually
+// be applied to a socket. Setting SO_MARK needs network-administration
+// capability, so configuration calls this to fail startup with one actionable
+// error instead of letting every later dial fail with EPERM.
+func VerifyBypassMark() error {
+	mark := bypassMark.Load()
+	if mark == 0 {
+		return nil
+	}
+	return verifyBypassMark(mark)
 }
 
 // NewOutboundDialer returns a dialer used for application egress. Both the

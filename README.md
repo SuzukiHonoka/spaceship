@@ -34,7 +34,8 @@ target in the `iptables` or `ip6tables` `nat` table. Enable the listener with
   "uuid": "00000000-0000-0000-0000-000000000001",
   "listen_redirect": "0.0.0.0:12345",
   "redirect": {
-    "max_connections": 1024
+    "max_connections": 1024,
+    "bypass_mark": 21328
   }
 }
 ```
@@ -47,10 +48,13 @@ IP, and `default` routes are useful here; domain routes cannot match unless a
 separate future traffic-sniffing feature recovers a hostname.
 
 `redirect.max_connections` bounds accepted sessions and their proxy goroutines.
-Omit it or set it to `0` to use the default of 1024. When the limit is reached,
-new connections remain in the kernel listen backlog until capacity is
-available; size the limit together with the service file-descriptor limit and
-expected tunnel capacity.
+Omit it or set it to `0` to use the default of 1024; the accepted maximum is
+65536, because each admitted session owns a socket, a goroutine, and an egress
+stream. When the limit is reached, new connections remain in the kernel listen
+backlog until capacity is available; size the limit together with the service
+file-descriptor limit and expected tunnel capacity. The `redirect` section
+configures that listener, so it is rejected without `listen_redirect` rather
+than silently ignored.
 
 For traffic forwarded from a LAN, put rules in a dedicated chain and scope the
 jump to the intended ingress interface. Adapt the interface, exclusions, and
@@ -64,14 +68,23 @@ iptables -t nat -A SPACESHIP_REDIRECT -p tcp -j REDIRECT --to-ports 12345
 iptables -t nat -A PREROUTING -i lan0 -p tcp -j SPACESHIP_REDIRECT
 ```
 
-For traffic originating on the Spaceship host, a dedicated OS account and the
-owner exemption below are mandatory. The listener cannot distinguish a newly
-redirected application flow from Spaceship's own outbound gRPC or direct
-egress by destination alone. Also exempt the tunnel server address and local
-control-plane networks as defense in depth:
+For traffic originating on the Spaceship host, exempting Spaceship's own egress
+is mandatory. The listener cannot distinguish a newly redirected application
+flow from Spaceship's own outbound gRPC or direct egress by destination alone.
+Without an exemption the listener captures its own egress, routes it, captures
+the result, and repeats: a single connection exhausts `max_connections` in
+well under a second and the frontend stops accepting traffic.
+
+Set `redirect.bypass_mark` and exempt that mark. Spaceship applies it with
+`SO_MARK` to its gRPC control connection, direct TCP/UDP egress, forward-proxy
+connection, and pure-Go resolver sockets. Prefer it over `-m owner`, which
+silently fails to match when Spaceship runs as root. Keep the owner rule too,
+as defense in depth, along with the tunnel server address and local
+control-plane networks:
 
 ```shell
 iptables -t nat -N SPACESHIP_LOCAL
+iptables -t nat -A SPACESHIP_LOCAL -m mark --mark 0x5350/0xffffffff -j RETURN
 iptables -t nat -A SPACESHIP_LOCAL -m owner --uid-owner spaceship -j RETURN
 iptables -t nat -A SPACESHIP_LOCAL -d 127.0.0.0/8 -j RETURN
 iptables -t nat -A SPACESHIP_LOCAL -m addrtype --dst-type LOCAL -j RETURN
@@ -79,6 +92,15 @@ iptables -t nat -A SPACESHIP_LOCAL -d 192.0.2.10/32 -j RETURN
 iptables -t nat -A SPACESHIP_LOCAL -p tcp -j REDIRECT --to-ports 12345
 iptables -t nat -A OUTPUT -p tcp -j SPACESHIP_LOCAL
 ```
+
+`bypass_mark` is opt-in and defaults to no marking, because `SO_MARK` needs
+network-administration capability (normally `CAP_NET_ADMIN`) that a LAN-only
+`PREROUTING` deployment does not otherwise require. Spaceship logs a warning
+at startup when `listen_redirect` is set without it, and fails at startup with
+one clear error if the mark is configured but the process lacks the capability.
+`21328` (`0x5350`) is the suggested value. When TUN is also enabled its
+`bypass_mark` is inherited automatically; setting a different value here is
+rejected, because a process has exactly one outbound socket mark.
 
 Replace `192.0.2.10` with every IP used by `server_addr`; do not use the
 documentation address literally. Add explicit exclusions for management and
@@ -136,7 +158,8 @@ without enabling a general UDP tunnel.
       "enabled": true,
       "query_timeout_seconds": 5,
       "tcp_idle_timeout_seconds": 10,
-      "max_in_flight": 256
+      "max_in_flight": 256,
+      "max_in_flight_per_connection": 192
     }
   }
 }
@@ -212,6 +235,29 @@ DNS `SERVFAIL`; the client never falls back to the original destination or a
 local resolver. DNS-over-TCP length framing, multiple queries per connection,
 and bounded pipelining are supported.
 
+Pipelining is bounded twice. `dns_hijack.max_in_flight` caps concurrent DNS
+RPCs across all clients, and `max_in_flight_per_connection` caps those held by
+any single DNS-over-TCP connection. Without the second bound, one client that
+pipelines aggressively holds every slot and every other client behind the TUN
+receives `SERVFAIL` until its queries drain.
+
+Zero sets the per-connection ceiling to roughly three quarters of
+`max_in_flight` — 192 of the default 256, far more headroom than a stub
+resolver pipelines — and leaves pools of four or fewer unrestricted, where
+capping would cost more pipelining than it buys. It may not exceed
+`max_in_flight`. This is a per-connection ceiling rather than a reservation:
+it stops any one connection monopolising the pool, but several busy
+connections can still fill it between them, which is what the global bound is
+for.
+
+Reaching the per-connection ceiling applies backpressure instead of failing.
+Spaceship stops reading that socket until one of the connection's own queries
+completes, letting TCP flow control slow the client, so a deep pipeline is
+delayed rather than answered `SERVFAIL` while the shared pool still has room.
+Exhausting the global bound still returns `SERVFAIL`, because waiting there
+would stall one client on another's work. UDP needs no equivalent: each UDP
+flow answers one query at a time.
+
 The server applies non-blocking global and per-user concurrency and token-bucket
 rate limits before starting an upstream exchange. The following shows the
 built-in defaults explicitly:
@@ -260,7 +306,13 @@ For a rolling upgrade, deploy servers with the wire DNS RPC before enabling
 gRPC `Unimplemented`, returns DNS `SERVFAIL`, and deliberately does not bypass
 the tunnel through a local or destination resolver.
 
-All non-DNS UDP traffic remains unsupported and is rejected by the netstack.
+All non-DNS UDP traffic remains unsupported and is rejected by the netstack with
+an ICMP unreachable, so a QUIC client falls back to TCP immediately instead of
+stalling. Note that this applies to DNS too when `dns_hijack` is disabled: the
+netstack then registers no UDP protocol at all, and DNS sent through the TUN
+fails. Either enable `dns_hijack` or exempt port 53 from the capture rule so
+those queries never enter the TUN. Spaceship logs a warning at startup when TUN
+is enabled without DNS hijacking.
 Because TUN destinations are IP literals, Spaceship route matching has the same
 constraint as transparent REDIRECT: CIDR, exact-IP, and default rules apply,
 while domain rules cannot infer a hostname.

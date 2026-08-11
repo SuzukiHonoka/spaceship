@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1047,6 +1048,299 @@ func TestServeTCPDNSSupportsPipelining(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("serveTCPDNS did not stop after connection close")
 	}
+}
+
+// One pipelining DNS-over-TCP connection must not be able to hold every global
+// slot: doing so answers every other client behind the TUN with SERVFAIL until
+// its RPCs drain. The per-connection bound must both cap the greedy connection
+// and leave a neighbour able to make progress while it is saturated.
+func TestServeTCPDNSPerConnectionLimitPreventsStarvation(t *testing.T) {
+	const (
+		globalSlots  = 8
+		perConnSlots = 3
+	)
+	cfg, err := NormalizeConfig(Config{DNS: DNSConfig{
+		Enabled:                  true,
+		QueryTimeout:             5 * time.Second,
+		TCPIdleTimeout:           5 * time.Second,
+		MaxInFlight:              globalSlots,
+		MaxInFlightPerConnection: perConnSlots,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var inFlight, peak atomic.Int64
+	release := make(chan struct{})
+	service := &Service{
+		ctx:      ctx,
+		cfg:      cfg,
+		dnsSlots: make(chan struct{}, cfg.DNS.MaxInFlight),
+		exchanger: &testDNSExchanger{exchange: func(
+			exchangeCtx context.Context,
+			wire []byte,
+			_ proto.Network,
+			_ bool,
+		) ([]byte, error) {
+			current := inFlight.Add(1)
+			for {
+				observed := peak.Load()
+				if current <= observed || peak.CompareAndSwap(observed, current) {
+					break
+				}
+			}
+			defer inFlight.Add(-1)
+			select {
+			case <-release:
+			case <-exchangeCtx.Done():
+				return nil, exchangeCtx.Err()
+			}
+			response := new(dns.Msg)
+			if err := response.Unpack(wire); err != nil {
+				return nil, err
+			}
+			response.Response = true
+			return response.Pack()
+		}},
+	}
+
+	// A greedy connection pipelines far more queries than its own bound allows.
+	greedyServer, greedyClient := net.Pipe()
+	go service.serveTCPDNS(greedyServer)
+	go func() {
+		for i := 0; i < globalSlots*2; i++ {
+			_ = greedyClient.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			if err := writeDNSFrame(greedyClient, dnsQueryWire(t, "greedy.test.", uint16(i+1))); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Wait for it to reach its ceiling and stay there.
+	deadline := time.Now().Add(3 * time.Second)
+	for peak.Load() < perConnSlots && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	if got := peak.Load(); got > perConnSlots {
+		t.Fatalf("greedy connection reached %d concurrent exchanges, limit is %d", got, perConnSlots)
+	}
+	if got := peak.Load(); got < perConnSlots {
+		t.Fatalf("test is vacuous: greedy connection only reached %d of %d", got, perConnSlots)
+	}
+
+	// A neighbour must still get through while the greedy connection is pinned.
+	neighbourServer, neighbourClient := net.Pipe()
+	go service.serveTCPDNS(neighbourServer)
+	if err := writeDNSFrame(neighbourClient, dnsQueryWire(t, "neighbour.test.", 4242)); err != nil {
+		t.Fatal(err)
+	}
+	admitted := make(chan struct{})
+	go func() {
+		for {
+			if inFlight.Load() > peak.Load()-1 && inFlight.Load() >= perConnSlots+1 {
+				close(admitted)
+				return
+			}
+			select {
+			case <-time.After(5 * time.Millisecond):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	select {
+	case <-admitted:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("neighbour was starved: in-flight stuck at %d with per-connection limit %d",
+			inFlight.Load(), perConnSlots)
+	}
+
+	close(release)
+	_ = greedyClient.Close()
+	_ = neighbourClient.Close()
+}
+
+// Reaching the per-connection ceiling must slow a client down, not fail it:
+// hard-failing while the shared pool still has room would punish a legitimate
+// resolver for pipelining. Every query must ultimately be answered.
+func TestServeTCPDNSPerConnectionLimitBackpressuresRatherThanFails(t *testing.T) {
+	const (
+		globalSlots  = 64
+		perConnSlots = 4
+		queries      = 12
+	)
+	cfg, err := NormalizeConfig(Config{DNS: DNSConfig{
+		Enabled:                  true,
+		QueryTimeout:             5 * time.Second,
+		TCPIdleTimeout:           5 * time.Second,
+		MaxInFlight:              globalSlots,
+		MaxInFlightPerConnection: perConnSlots,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var inFlight, peak atomic.Int64
+	service := &Service{
+		ctx:      ctx,
+		cfg:      cfg,
+		dnsSlots: make(chan struct{}, cfg.DNS.MaxInFlight),
+		exchanger: &testDNSExchanger{exchange: func(
+			_ context.Context, wire []byte, _ proto.Network, _ bool,
+		) ([]byte, error) {
+			current := inFlight.Add(1)
+			for {
+				observed := peak.Load()
+				if current <= observed || peak.CompareAndSwap(observed, current) {
+					break
+				}
+			}
+			defer inFlight.Add(-1)
+			// Slow enough that a pipeline deeper than the ceiling must wait.
+			time.Sleep(20 * time.Millisecond)
+			response := new(dns.Msg)
+			if err := response.Unpack(wire); err != nil {
+				return nil, err
+			}
+			response.Response = true
+			return response.Pack()
+		}},
+	}
+
+	serverConn, clientConn := net.Pipe()
+	go service.serveTCPDNS(serverConn)
+	go func() {
+		for i := 0; i < queries; i++ {
+			_ = clientConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			if err := writeDNSFrame(clientConn, dnsQueryWire(t, "deep.test.", uint16(i+1))); err != nil {
+				return
+			}
+		}
+	}()
+
+	answered, servfails := 0, 0
+	for i := 0; i < queries; i++ {
+		_ = clientConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		var size [2]byte
+		if _, err := io.ReadFull(clientConn, size[:]); err != nil {
+			t.Fatalf("read response %d: %v", i, err)
+		}
+		body := make([]byte, binary.BigEndian.Uint16(size[:]))
+		if _, err := io.ReadFull(clientConn, body); err != nil {
+			t.Fatalf("read response body %d: %v", i, err)
+		}
+		msg := new(dns.Msg)
+		if err := msg.Unpack(body); err != nil {
+			t.Fatalf("unpack response %d: %v", i, err)
+		}
+		if msg.Rcode == dns.RcodeServerFailure {
+			servfails++
+			continue
+		}
+		answered++
+	}
+	_ = clientConn.Close()
+
+	if servfails != 0 {
+		t.Fatalf("%d of %d pipelined queries were failed while the shared pool had room", servfails, queries)
+	}
+	if answered != queries {
+		t.Fatalf("answered %d of %d pipelined queries", answered, queries)
+	}
+	if got := peak.Load(); got > perConnSlots {
+		t.Fatalf("peak in-flight %d exceeded the per-connection ceiling %d", got, perConnSlots)
+	}
+	if got := peak.Load(); got < 2 {
+		t.Fatalf("test is vacuous: peak in-flight only reached %d", got)
+	}
+}
+
+// The backpressure wait parks the reader inside serveTCPDNS, so shutdown must
+// still unblock it. Otherwise Service.Close would hang on pending.Wait.
+func TestServeTCPDNSBackpressureUnblocksOnShutdown(t *testing.T) {
+	cfg, err := NormalizeConfig(Config{DNS: DNSConfig{
+		Enabled:                  true,
+		QueryTimeout:             2 * time.Second,
+		TCPIdleTimeout:           30 * time.Second,
+		MaxInFlight:              8,
+		MaxInFlightPerConnection: 1,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+
+	blocked := make(chan struct{})
+	var entered sync.Once
+	reached := make(chan struct{})
+	service := &Service{
+		ctx:      ctx,
+		cfg:      cfg,
+		dnsSlots: make(chan struct{}, cfg.DNS.MaxInFlight),
+		exchanger: &testDNSExchanger{exchange: func(
+			exchangeCtx context.Context, _ []byte, _ proto.Network, _ bool,
+		) ([]byte, error) {
+			entered.Do(func() { close(reached) })
+			select {
+			case <-blocked:
+			case <-exchangeCtx.Done():
+			}
+			return nil, errors.New("aborted")
+		}},
+	}
+
+	serverConn, clientConn := net.Pipe()
+	defer func() { _ = clientConn.Close() }()
+	done := make(chan struct{})
+	go func() { defer close(done); service.serveTCPDNS(serverConn) }()
+
+	// Two queries: the first occupies the sole slot, the second parks the reader.
+	go func() {
+		for i := 0; i < 2; i++ {
+			_ = clientConn.SetWriteDeadline(time.Now().Add(3 * time.Second))
+			if err := writeDNSFrame(clientConn, dnsQueryWire(t, "park.test.", uint16(i+1))); err != nil {
+				return
+			}
+		}
+	}()
+	select {
+	case <-reached:
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Fatal("exchanger was never reached")
+	}
+	time.Sleep(150 * time.Millisecond) // let the reader park on the ceiling
+
+	// Only cancellation can free the parked reader: its sole slot is held by the
+	// blocked exchanger, which itself only returns on cancellation. Closing the
+	// client mirrors what real shutdown does by aborting the netstack endpoint,
+	// so the pending response write fails instead of waiting out its deadline
+	// against an unbuffered pipe that nothing is draining.
+	cancel()
+	_ = clientConn.Close()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		buf := make([]byte, 1<<16)
+		n := runtime.Stack(buf, true)
+		t.Fatalf("serveTCPDNS did not return after shutdown; reader stuck\n%s", buf[:n])
+	}
+	close(blocked)
+}
+
+// writeDNSFrame writes one length-prefixed DNS-over-TCP message.
+func writeDNSFrame(w net.Conn, wire []byte) error {
+	frame := make([]byte, 2+len(wire))
+	binary.BigEndian.PutUint16(frame[:2], uint16(len(wire)))
+	copy(frame[2:], wire)
+	_, err := w.Write(frame)
+	return err
 }
 
 func TestServeTCPDNSRejectsUnsupportedAndBusyQueries(t *testing.T) {

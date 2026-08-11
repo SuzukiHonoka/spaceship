@@ -192,6 +192,44 @@ func TestLaunchRejectsRedirectOnUnsupportedPlatform(t *testing.T) {
 	}
 }
 
+// A configured bypass mark that this process cannot set must stop the launch
+// with one clear error, before any listener binds or the RPC pool dials.
+// Otherwise the mark surfaces only as an EPERM on every outbound connection.
+func TestLaunchRejectsUnusableBypassMark(t *testing.T) {
+	if !redirect.Supported() {
+		t.Skip("platform does not support transparent redirect")
+	}
+	oldMark := transport.BypassMark()
+	t.Cleanup(func() {
+		transport.SetBypassMark(oldMark)
+		transport.EnableIPv6()
+	})
+	transport.SetBypassMark(transport.DefaultBypassMark)
+	if transport.VerifyBypassMark() == nil {
+		t.Skip("this process can set SO_MARK, so the failure path is unreachable")
+	}
+	transport.SetBypassMark(0)
+
+	launcher := NewLauncher()
+	launcher.SkipInternalLogging()
+	cfg := &config.MixedConfig{
+		Role: config.RoleClient,
+		Client: &client.Client{
+			ServerAddr:     "127.0.0.1:1",
+			UUID:           testUserUUID,
+			ListenRedirect: "127.0.0.1:12345",
+			Redirect:       &client.Redirect{BypassMark: transport.DefaultBypassMark},
+			Mux:            1,
+		},
+		Server: &server.Server{},
+	}
+
+	err := launcher.Launch(cfg)
+	if err == nil || !strings.Contains(err.Error(), "outbound socket mark") {
+		t.Fatalf("Launch() error = %v, want an outbound socket mark failure", err)
+	}
+}
+
 func TestLaunchRejectsTUNOnUnsupportedPlatform(t *testing.T) {
 	if tun.Supported() {
 		t.Skip("platform supports TUN")

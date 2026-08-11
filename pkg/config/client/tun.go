@@ -29,6 +29,14 @@ type TUN struct {
 }
 
 type DNSHijack struct {
+	// Enabled intercepts DNS on TCP and UDP destination port 53.
+	//
+	// It does not enable a general UDP tunnel. The TUN frontend terminates TCP
+	// only, so non-DNS UDP is refused with an ICMP unreachable whether this is
+	// set or not. What it changes is port 53: with it disabled, DNS entering
+	// the TUN is refused like any other UDP, leaving the interface without name
+	// resolution unless the capture rule keeps port 53 out of the TUN. Config
+	// application logs a warning for that combination.
 	Enabled bool `json:"enabled,omitempty"`
 	// QueryTimeoutSeconds bounds each authenticated DNS exchange RPC.
 	QueryTimeoutSeconds int `json:"query_timeout_seconds,omitempty"`
@@ -40,4 +48,11 @@ type DNSHijack struct {
 	// accepted maximum is 1024 because each active UDP session owns a buffer of
 	// up to 64 KiB.
 	MaxInFlight int `json:"max_in_flight,omitempty"`
+	// MaxInFlightPerConnection bounds concurrent DNS RPCs owned by one
+	// DNS-over-TCP connection, so a pipelining client cannot hold every slot in
+	// MaxInFlight and leave every other client behind the TUN with SERVFAIL.
+	// Zero reserves a quarter of MaxInFlight for other connections, which is
+	// far more headroom than a stub resolver pipelines. It may not exceed
+	// MaxInFlight. UDP is unaffected: each UDP flow answers one query at a time.
+	MaxInFlightPerConnection int `json:"max_in_flight_per_connection,omitempty"`
 }

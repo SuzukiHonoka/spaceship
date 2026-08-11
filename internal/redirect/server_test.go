@@ -617,6 +617,33 @@ func TestNewValidatesAndDefaultsMaxConnections(t *testing.T) {
 	if _, err := New(context.Background(), &Config{MaxConnections: -1}); !errors.Is(err, ErrInvalidMaxConnections) {
 		t.Fatalf("New() error = %v, want ErrInvalidMaxConnections", err)
 	}
+	// An unbounded limit would defeat the resource bound it configures.
+	if _, err := New(context.Background(), &Config{
+		MaxConnections: MaxConnectionsLimit + 1,
+	}); !errors.Is(err, ErrInvalidMaxConnections) {
+		t.Fatalf("New() above the limit error = %v, want ErrInvalidMaxConnections", err)
+	}
+	atLimit := newTestServer(t, context.Background(), &Config{MaxConnections: MaxConnectionsLimit})
+	if got := atLimit.maxConnections; got != MaxConnectionsLimit {
+		t.Fatalf("max connections at the limit = %d, want %d", got, MaxConnectionsLimit)
+	}
+}
+
+// ValidateMaxConnections is shared with configuration parsing, so it must agree
+// with New for every value rather than drifting into a second policy.
+func TestValidateMaxConnectionsMatchesNew(t *testing.T) {
+	for _, limit := range []int{
+		-1, 0, 1, DefaultMaxConnections, MaxConnectionsLimit, MaxConnectionsLimit + 1,
+	} {
+		validateErr := ValidateMaxConnections(limit)
+		_, newErr := New(context.Background(), &Config{MaxConnections: limit})
+		if (validateErr == nil) != (newErr == nil) {
+			t.Fatalf(
+				"limit %d: ValidateMaxConnections() = %v but New() = %v",
+				limit, validateErr, newErr,
+			)
+		}
+	}
 }
 
 func TestListenAndServeUnsupportedPlatform(t *testing.T) {

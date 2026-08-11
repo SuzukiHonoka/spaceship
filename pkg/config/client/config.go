@@ -38,6 +38,18 @@ type Client struct {
 type Redirect struct {
 	// MaxConnections bounds accepted TCP sessions and proxy goroutines.
 	MaxConnections int `json:"max_connections,omitempty"`
+	// BypassMark is applied with SO_MARK to Spaceship's own outbound sockets so
+	// an OUTPUT-chain REDIRECT rule can exempt them with `-m mark`. Unlike
+	// `-m owner --uid-owner`, that exemption still works when Spaceship runs as
+	// root. Without it, an unexempted OUTPUT rule makes the listener
+	// recursively capture its own egress.
+	//
+	// Zero means no marking. It is opt-in rather than defaulted because
+	// SO_MARK needs network-administration capability, which a LAN-only
+	// PREROUTING deployment does not otherwise require. When TUN is also
+	// enabled its mark is inherited; setting a different value here is
+	// rejected because a process has exactly one outbound mark.
+	BypassMark uint32 `json:"bypass_mark,omitempty"`
 }
 
 // UDP configures the SOCKS5 UDP ASSOCIATE relay. Every numeric field is

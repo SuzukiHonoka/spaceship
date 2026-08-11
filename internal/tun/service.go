@@ -356,28 +356,33 @@ func (s *Service) endFlow() {
 	s.flows.Done()
 }
 
-func (s *Service) acquireDNS() bool {
+// tryAcquireSlot reserves one unit of a counting channel without blocking.
+func tryAcquireSlot(slots chan struct{}) bool {
 	select {
-	case s.dnsSlots <- struct{}{}:
+	case slots <- struct{}{}:
 		return true
 	default:
 		return false
 	}
+}
+
+// releaseSlot returns one unit reserved by tryAcquireSlot.
+func releaseSlot(slots chan struct{}) {
+	<-slots
+}
+
+func (s *Service) acquireDNS() bool {
+	return tryAcquireSlot(s.dnsSlots)
 }
 
 func (s *Service) releaseDNS() {
-	<-s.dnsSlots
+	releaseSlot(s.dnsSlots)
 }
 
 func (s *Service) acquireUDPFlow() bool {
-	select {
-	case s.udpSlots <- struct{}{}:
-		return true
-	default:
-		return false
-	}
+	return tryAcquireSlot(s.udpSlots)
 }
 
 func (s *Service) releaseUDPFlow() {
-	<-s.udpSlots
+	releaseSlot(s.udpSlots)
 }

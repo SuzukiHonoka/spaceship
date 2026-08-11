@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -48,6 +49,44 @@ func TestBypassMarkLifecycle(t *testing.T) {
 	SetBypassMark(0)
 	if got := BypassMark(); got != 0 {
 		t.Fatalf("BypassMark() after reset = %#x", got)
+	}
+}
+
+func TestVerifyBypassMarkAllowsDisabledMarking(t *testing.T) {
+	original := BypassMark()
+	t.Cleanup(func() { SetBypassMark(original) })
+
+	SetBypassMark(0)
+	if err := VerifyBypassMark(); err != nil {
+		t.Fatalf("VerifyBypassMark() with marking disabled = %v, want nil", err)
+	}
+}
+
+// VerifyBypassMark reports a real capability, so its result differs by platform
+// and privilege. Both outcomes are valid; what must hold is that a successful
+// verification means outbound dials can also apply the mark.
+func TestVerifyBypassMarkAgreesWithOutboundDialer(t *testing.T) {
+	original := BypassMark()
+	t.Cleanup(func() { SetBypassMark(original) })
+
+	SetBypassMark(DefaultBypassMark)
+	verifyErr := VerifyBypassMark()
+
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("loopback listener unavailable: %v", err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	conn, dialErr := NewOutboundDialer(3*time.Second).Dial("tcp4", listener.Addr().String())
+	if dialErr == nil {
+		_ = conn.Close()
+	}
+	if verifyErr == nil && dialErr != nil {
+		t.Fatalf("VerifyBypassMark() passed but marked dial failed: %v", dialErr)
+	}
+	if verifyErr != nil && dialErr == nil {
+		t.Fatalf("VerifyBypassMark() = %v but marked dial succeeded", verifyErr)
 	}
 }
 

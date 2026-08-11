@@ -30,11 +30,19 @@ var (
 	ErrRedirectLoop = errors.New("original destination is the redirect listener")
 
 	// ErrInvalidMaxConnections means the configured redirect session limit is
-	// negative. Zero selects DefaultMaxConnections.
-	ErrInvalidMaxConnections = errors.New("redirect max connections must be non-negative")
+	// outside 0..MaxConnectionsLimit. Zero selects DefaultMaxConnections.
+	ErrInvalidMaxConnections = errors.New("redirect max connections is out of range")
 )
 
-const DefaultMaxConnections = 1024
+const (
+	DefaultMaxConnections = 1024
+
+	// MaxConnectionsLimit caps the accepted session limit. Every admitted
+	// session owns a socket, a proxy goroutine, and an egress stream, so an
+	// unbounded value would defeat the limit it configures. It matches the
+	// equivalent ceiling used by the TUN frontend.
+	MaxConnectionsLimit = 1 << 16
+)
 
 type destinationResolver func(net.Conn) (*net.TCPAddr, error)
 type routeResolver func(string) (transport.Transport, error)
@@ -44,6 +52,16 @@ type Config struct {
 	// MaxConnections bounds accepted sessions and their proxy goroutines.
 	// Zero selects DefaultMaxConnections.
 	MaxConnections int
+}
+
+// ValidateMaxConnections reports whether limit is an acceptable session bound.
+// Configuration parsing shares it with New so a rejected value is reported
+// before any listener is created rather than at frontend startup.
+func ValidateMaxConnections(limit int) error {
+	if limit < 0 || limit > MaxConnectionsLimit {
+		return fmt.Errorf("%w: must be between 0 and %d: %d", ErrInvalidMaxConnections, MaxConnectionsLimit, limit)
+	}
+	return nil
 }
 
 // Server accepts TCP connections redirected by Linux netfilter and proxies
@@ -77,8 +95,8 @@ func New(ctx context.Context, cfg *Config) (*Server, error) {
 	}
 	maxConnections := DefaultMaxConnections
 	if cfg != nil {
-		if cfg.MaxConnections < 0 {
-			return nil, fmt.Errorf("%w: %d", ErrInvalidMaxConnections, cfg.MaxConnections)
+		if err := ValidateMaxConnections(cfg.MaxConnections); err != nil {
+			return nil, err
 		}
 		if cfg.MaxConnections > 0 {
 			maxConnections = cfg.MaxConnections

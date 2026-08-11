@@ -89,6 +89,70 @@ func TestNormalizeConfigAcceptsDNSLimitCeiling(t *testing.T) {
 	}
 }
 
+func TestNormalizeConfigDNSPerConnectionLimit(t *testing.T) {
+	// The default reserves a share of the pool for other connections, but only
+	// once the pool is large enough for that reservation to be worth more than
+	// the pipelining it costs.
+	for _, tc := range []struct {
+		name        string
+		maxInFlight int
+		want        int
+	}{
+		{"defaultPool", DefaultDNSMaxInFlight, 192},
+		{"largePoolReservesQuarter", 1024, 768},
+		{"mediumPoolReserves", 8, 6},
+		{"smallPoolUnrestricted", 4, 4},
+		{"tinyPoolUnrestricted", 2, 2},
+		{"singleSlotPool", 1, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := NormalizeConfig(Config{
+				DNS: DNSConfig{MaxInFlight: tc.maxInFlight},
+			})
+			if err != nil {
+				t.Fatalf("NormalizeConfig() error = %v", err)
+			}
+			if got := cfg.DNS.MaxInFlightPerConnection; got != tc.want {
+				t.Fatalf("MaxInFlightPerConnection = %d, want %d", got, tc.want)
+			}
+			if cfg.DNS.MaxInFlightPerConnection > cfg.DNS.MaxInFlight {
+				t.Fatalf("per-connection limit %d exceeds global %d",
+					cfg.DNS.MaxInFlightPerConnection, cfg.DNS.MaxInFlight)
+			}
+		})
+	}
+
+	// An explicit value is honoured as-is.
+	cfg, err := NormalizeConfig(Config{
+		DNS: DNSConfig{MaxInFlight: 64, MaxInFlightPerConnection: 5},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeConfig() error = %v", err)
+	}
+	if cfg.DNS.MaxInFlightPerConnection != 5 {
+		t.Fatalf("explicit MaxInFlightPerConnection = %d, want 5", cfg.DNS.MaxInFlightPerConnection)
+	}
+}
+
+func TestNormalizeConfigRejectsInvalidDNSPerConnectionLimit(t *testing.T) {
+	// A per-connection bound above the global bound cannot be honoured.
+	if _, err := NormalizeConfig(Config{
+		DNS: DNSConfig{MaxInFlight: 8, MaxInFlightPerConnection: 9},
+	}); err == nil {
+		t.Fatal("NormalizeConfig() accepted a per-connection limit above the global limit")
+	}
+	if _, err := NormalizeConfig(Config{
+		DNS: DNSConfig{MaxInFlightPerConnection: maxDNSInFlightLimit + 1},
+	}); err == nil {
+		t.Fatal("NormalizeConfig() accepted a per-connection limit above the hard ceiling")
+	}
+	if _, err := NormalizeConfig(Config{
+		DNS: DNSConfig{MaxInFlightPerConnection: -1},
+	}); err == nil {
+		t.Fatal("NormalizeConfig() accepted a negative per-connection limit")
+	}
+}
+
 func TestFromClientConfig(t *testing.T) {
 	fd := 7
 	cfg, err := FromClientConfig(&clientConfig.TUN{
