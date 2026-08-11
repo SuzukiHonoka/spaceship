@@ -86,6 +86,44 @@ func (s *Service) serveTCPDNS(conn net.Conn) {
 		abortOnce sync.Once
 		readSize  [2]byte
 	)
+	// Pipelining lets one connection hold every global slot, which answers all
+	// other clients behind the TUN with SERVFAIL until its RPCs drain. This
+	// second bound limits how much of the shared pool any one connection can
+	// hold at once. It is a per-connection ceiling, not a reservation: several
+	// busy connections can still fill the pool between them, which is what the
+	// global bound is for.
+	perConnection := s.cfg.DNS.MaxInFlightPerConnection
+	if perConnection <= 0 || perConnection > cap(s.dnsSlots) {
+		// NormalizeConfig guarantees a usable value; fall back for a Service
+		// assembled directly, so an unset field cannot mean "serve no DNS".
+		// The global bound still applies either way.
+		perConnection = max(1, cap(s.dnsSlots))
+	}
+	connectionSlots := make(chan struct{}, perConnection)
+	// acquireExchange reserves both bounds. Reaching the per-connection ceiling
+	// applies backpressure rather than failing: the reader waits for one of this
+	// connection's own queries to finish, which stops it consuming the socket
+	// and lets TCP flow control slow the client down. That wait is self-limiting
+	// because those queries are bounded by QueryTimeout, and it avoids failing a
+	// client while the shared pool still has room. The global bound never waits
+	// — that would stall this reader on other connections' work — so a genuinely
+	// exhausted pool still answers SERVFAIL.
+	acquireExchange := func() (acquired, aborted bool) {
+		select {
+		case connectionSlots <- struct{}{}:
+		case <-connectionCtx.Done():
+			return false, true
+		}
+		if !s.acquireDNS() {
+			releaseSlot(connectionSlots)
+			return false, false
+		}
+		return true, false
+	}
+	releaseExchange := func() {
+		s.releaseDNS()
+		releaseSlot(connectionSlots)
+	}
 	abort := func() {
 		abortOnce.Do(func() {
 			cancel()
@@ -139,7 +177,11 @@ func (s *Service) serveTCPDNS(conn net.Conn) {
 			}
 			continue
 		}
-		if !s.acquireDNS() {
+		acquired, aborted := acquireExchange()
+		if aborted {
+			break
+		}
+		if !acquired {
 			if err := writeResponse(packDNSFailure(wireQuery, query, dns.RcodeServerFailure)); err != nil {
 				abort()
 				break
@@ -148,12 +190,12 @@ func (s *Service) serveTCPDNS(conn net.Conn) {
 		}
 
 		// DNS-over-TCP permits pipelining and out-of-order responses. Each RPC is
-		// bounded globally by dnsSlots, while writeMu keeps each length-prefixed
-		// response atomic on the byte stream.
+		// bounded both globally and per connection, while writeMu keeps each
+		// length-prefixed response atomic on the byte stream.
 		pending.Add(1)
 		go func(wire []byte, parsed *dns.Msg) {
 			defer pending.Done()
-			defer s.releaseDNS()
+			defer releaseExchange()
 
 			response := s.exchangeDNSContext(connectionCtx, wire, parsed, proto.Network_TCP)
 			if err := writeResponse(response); err != nil {

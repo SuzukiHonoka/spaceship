@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/SuzukiHonoka/spaceship/v2/internal/redirect"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/socks"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
@@ -145,6 +146,7 @@ func (c *MixedConfig) Apply() error {
 
 	var tunConfig *tun.Config
 	effectiveMux := c.Mux
+	tunDNSHijackDisabled := false
 	if c.TUN != nil {
 		if c.Role != RoleClient {
 			return errors.New("tun is only valid for the client role")
@@ -157,6 +159,7 @@ func (c *MixedConfig) Apply() error {
 			return err
 		}
 		tunConfig = &normalized
+		tunDNSHijackDisabled = !normalized.DNS.Enabled
 		requiredMux, err := tun.RequiredRPCPoolSize(normalized, rpc.MaxConcurrentStreams)
 		if err != nil {
 			return err
@@ -182,21 +185,74 @@ func (c *MixedConfig) Apply() error {
 			return fmt.Errorf("idle_timeout exceeds maximum duration: %d", c.IdleTimeout)
 		}
 	}
-	if c.Redirect != nil && c.Redirect.MaxConnections < 0 {
-		return fmt.Errorf("redirect.max_connections must be non-negative: %d", c.Redirect.MaxConnections)
+	// Role-check the redirect listener for the same reason as tun above: its
+	// bypass mark is process-global, so a server config that merely carries the
+	// setting would otherwise mark all server egress for a listener that
+	// launchServer never starts.
+	if c.ListenRedirect != "" && c.Role != RoleClient {
+		return errors.New("listen_redirect is only valid for the client role")
+	}
+	var redirectBypassMark uint32
+	if c.Redirect != nil {
+		// Settings that silently do nothing are a configuration trap: reject the
+		// section outright rather than let bypass_mark or max_connections look
+		// applied while no listener exists to use them.
+		if c.ListenRedirect == "" {
+			return errors.New("redirect requires listen_redirect")
+		}
+		if err := redirect.ValidateMaxConnections(c.Redirect.MaxConnections); err != nil {
+			return err
+		}
+		redirectBypassMark = c.Redirect.BypassMark
 	}
 
 	// log mode
 	c.LogMode.Set()
 
-	// Install the TUN bypass mark before resolver setup. A configured DNS
-	// server may itself be a hostname, and SetDefault resolves it immediately;
-	// doing that with an unmarked socket can recurse into an already-installed
-	// catch-all TUN policy before the TUN reader has started. Roll back this
-	// early global update if any later configuration step fails.
+	// Warn about the two capture-rule configurations whose failure mode is a
+	// silent black hole rather than a startup error. Both are legitimate when
+	// the operator has arranged the matching exclusion, so neither is rejected.
+	if tunDNSHijackDisabled {
+		// Scope this to DNS. Non-DNS UDP is refused either way because the TUN
+		// frontend is TCP-only, so claiming the flag disables UDP would imply
+		// enabling it delivers a general UDP tunnel.
+		log.Println(
+			"tun: WARNING dns_hijack is disabled, so port 53 is not served and DNS sent " +
+				"through the TUN fails immediately. Enable tun.dns_hijack, or keep port 53 " +
+				"out of the capture rule so queries never enter the TUN",
+		)
+	}
+	if c.ListenRedirect != "" && tunConfig == nil && redirectBypassMark == 0 {
+		log.Println(
+			"redirect: WARNING listen_redirect is enabled without redirect.bypass_mark; " +
+				"an OUTPUT-chain REDIRECT rule that does not exempt Spaceship's own egress " +
+				"will recursively capture it and exhaust redirect.max_connections",
+		)
+	}
+
+	// Install the bypass mark before resolver setup. A configured DNS server may
+	// itself be a hostname, and SetDefault resolves it immediately; doing that
+	// with an unmarked socket can recurse into an already-installed catch-all
+	// capture rule before the frontend has started. Roll back this early global
+	// update if any later configuration step fails.
+	//
+	// TUN and REDIRECT share one process-wide mark. TUN's is authoritative
+	// because TUN cannot work without it; a REDIRECT listener alongside TUN
+	// inherits it and only has to agree.
 	bypassMark := uint32(0)
 	if tunConfig != nil {
 		bypassMark = tunConfig.BypassMark
+	}
+	if redirectBypassMark != 0 {
+		if bypassMark != 0 && bypassMark != redirectBypassMark {
+			return fmt.Errorf(
+				"redirect.bypass_mark %#x conflicts with tun.bypass_mark %#x: "+
+					"a process has exactly one outbound socket mark",
+				redirectBypassMark,
+				bypassMark,
+			)
+		}
+		bypassMark = redirectBypassMark
 	}
 	previousBypassMark := transport.BypassMark()
 	previousOutboundResolver := transport.OutboundResolver()
@@ -212,6 +268,13 @@ func (c *MixedConfig) Apply() error {
 	// dns
 	if c.DNS != nil {
 		if err := c.DNS.SetDefault(); err != nil {
+			// SetDefault resolves a hostname resolver address using an already
+			// marked socket. A missing network-administration capability shows
+			// up here as an opaque lookup failure, so attribute it precisely
+			// instead of blaming the resolver.
+			if markErr := transport.VerifyBypassMark(); markErr != nil {
+				return fmt.Errorf("apply outbound socket mark %#x: %w", bypassMark, markErr)
+			}
 			return err
 		}
 	} else {

@@ -7,13 +7,14 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	clientConfig "github.com/SuzukiHonoka/spaceship/v2/pkg/config/client"
 )
 
 const (
 	DefaultName                     = "spaceship0"
 	DefaultMTU                      = 1500
-	DefaultBypassMark        uint32 = 0x5350
+	DefaultBypassMark        uint32 = transport.DefaultBypassMark
 	DefaultMaxConnections           = 4096
 	DefaultMaxPending               = 1024
 	DefaultDNSMaxInFlight           = 256
@@ -35,11 +36,42 @@ var ErrUnsupported = errors.New("TUN is only supported on Linux")
 // 53. It intentionally has no resolver address: every accepted query goes
 // through the authenticated Spaceship DNS RPC.
 type DNSConfig struct {
+	// Enabled controls whether port 53 is served. It does not make the TUN a
+	// general UDP tunnel: non-DNS UDP is refused either way, because the
+	// frontend terminates TCP only.
+	//
+	// It does change how that refusal is produced. When enabled, New registers
+	// the UDP protocol and the forwarder rejects every port but 53, so callers
+	// see ICMP port-unreachable. When disabled, no UDP protocol is registered
+	// at all and the stack answers ICMP protocol-unreachable, port 53
+	// included. Either way the client fails immediately rather than stalling,
+	// but a disabled hijack leaves the interface with no name resolution
+	// unless port 53 is kept out of the TUN.
 	Enabled        bool
 	BlockIPv6      bool
 	QueryTimeout   time.Duration
 	TCPIdleTimeout time.Duration
 	MaxInFlight    int
+	// MaxInFlightPerConnection bounds concurrent DNS RPCs owned by a single
+	// DNS-over-TCP connection. RFC 7766 pipelining lets one client hold every
+	// slot in MaxInFlight, which answers every other client behind the TUN with
+	// SERVFAIL until those RPCs drain. Zero reserves a share of the pool for
+	// other connections; see defaultDNSMaxInFlightPerConnection.
+	MaxInFlightPerConnection int
+}
+
+// defaultDNSMaxInFlightPerConnection reserves roughly a quarter of the DNS pool
+// for connections other than the busiest one. The busiest still keeps far more
+// headroom than a stub resolver pipelines, so the common single-resolver
+// deployment is not throttled, while a pipelining client can no longer starve
+// its neighbours.
+//
+// Pools too small for that reservation to mean anything are left unrestricted:
+// a quarter of four slots is one, which would disable pipelining outright in
+// exchange for a slot of protection.
+func defaultDNSMaxInFlightPerConnection(maxInFlight int) int {
+	const pipeliningFloor = 4
+	return max(1, min(maxInFlight, max(maxInFlight*3/4, pipeliningFloor)))
 }
 
 // Config controls the Linux TUN frontend. RouteMode is deliberately limited to
@@ -125,6 +157,21 @@ func NormalizeConfig(cfg Config) (Config, error) {
 	); err != nil {
 		return Config{}, err
 	}
+	if cfg.DNS.MaxInFlightPerConnection, err = normalizeLimit(
+		"dns.max_in_flight_per_connection",
+		cfg.DNS.MaxInFlightPerConnection,
+		defaultDNSMaxInFlightPerConnection(cfg.DNS.MaxInFlight),
+		maxDNSInFlightLimit,
+	); err != nil {
+		return Config{}, err
+	}
+	if cfg.DNS.MaxInFlightPerConnection > cfg.DNS.MaxInFlight {
+		return Config{}, fmt.Errorf(
+			"tun: dns.max_in_flight_per_connection must not exceed dns.max_in_flight: %d > %d",
+			cfg.DNS.MaxInFlightPerConnection,
+			cfg.DNS.MaxInFlight,
+		)
+	}
 
 	return cfg, nil
 }
@@ -162,11 +209,12 @@ func FromClientConfig(raw *clientConfig.TUN, blockIPv6 bool) (Config, error) {
 			return Config{}, err
 		}
 		cfg.DNS = DNSConfig{
-			Enabled:        raw.DNSHijack.Enabled,
-			BlockIPv6:      blockIPv6,
-			QueryTimeout:   queryTimeout,
-			TCPIdleTimeout: tcpIdleTimeout,
-			MaxInFlight:    raw.DNSHijack.MaxInFlight,
+			Enabled:                  raw.DNSHijack.Enabled,
+			BlockIPv6:                blockIPv6,
+			QueryTimeout:             queryTimeout,
+			TCPIdleTimeout:           tcpIdleTimeout,
+			MaxInFlight:              raw.DNSHijack.MaxInFlight,
+			MaxInFlightPerConnection: raw.DNSHijack.MaxInFlightPerConnection,
 		}
 	}
 	return NormalizeConfig(cfg)

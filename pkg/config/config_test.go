@@ -1,9 +1,11 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"strconv"
@@ -11,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SuzukiHonoka/spaceship/v2/internal/redirect"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/socks"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
@@ -59,20 +62,343 @@ func TestNewFromStringParsesRedirectListener(t *testing.T) {
 	}
 }
 
-func TestApplyRejectsNegativeRedirectLimit(t *testing.T) {
+func TestApplyRejectsOutOfRangeRedirectLimit(t *testing.T) {
+	t.Cleanup(transport.EnableIPv6)
+
+	// Every admitted session owns a socket, goroutine, and egress stream, so
+	// both ends of the range must be rejected rather than silently accepted.
+	for _, tc := range []struct {
+		name  string
+		limit int
+	}{
+		{"negative", -1},
+		{"aboveLimit", redirect.MaxConnectionsLimit + 1},
+	} {
+		name, limit := tc.name, tc.limit
+		t.Run(name, func(t *testing.T) {
+			cfg, err := NewFromString(fmt.Sprintf(`{
+				"role":"client",
+				"log":"skip",
+				"uuid":"00000000-0000-0000-0000-000000000001",
+				"ipv6":true,
+				"listen_redirect":"0.0.0.0:12345",
+				"redirect":{"max_connections":%d}
+			}`, limit))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := cfg.Apply(); !errors.Is(err, redirect.ErrInvalidMaxConnections) {
+				t.Fatalf("Apply() with max_connections %d error = %v", limit, err)
+			}
+		})
+	}
+
+	// The boundary itself stays valid.
+	cfg, err := NewFromString(fmt.Sprintf(`{
+		"role":"client",
+		"log":"skip",
+		"uuid":"00000000-0000-0000-0000-000000000001",
+		"ipv6":true,
+		"listen_redirect":"0.0.0.0:12345",
+		"redirect":{"max_connections":%d}
+	}`, redirect.MaxConnectionsLimit))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Apply(); err != nil {
+		t.Fatalf("Apply() rejected the documented maximum: %v", err)
+	}
+}
+
+// SetDefault resolves a hostname resolver address over an already-marked
+// socket, so a missing capability surfaces there as a lookup failure. Apply
+// must attribute that to the mark instead of blaming the resolver.
+func TestApply_AttributesResolverFailureToUnusableBypassMark(t *testing.T) {
+	oldMark := transport.BypassMark()
+	oldResolver := transport.OutboundResolver()
+	t.Cleanup(func() {
+		transport.SetOutboundResolver(oldResolver)
+		transport.SetBypassMark(oldMark)
+		transport.EnableIPv6()
+	})
+
+	transport.SetBypassMark(transport.DefaultBypassMark)
+	if transport.VerifyBypassMark() == nil {
+		t.Skip("this process can set SO_MARK, so the attribution path is unreachable")
+	}
+	transport.SetBypassMark(0)
+
+	cfg, err := NewFromString(`{
+		"role":"client",
+		"log":"skip",
+		"uuid":"00000000-0000-0000-0000-000000000001",
+		"ipv6":true,
+		"listen_redirect":"0.0.0.0:12345",
+		"redirect":{"bypass_mark":21328},
+		"dns":{"type":"common","server":"resolver.invalid"}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyErr := cfg.Apply()
+	if applyErr == nil {
+		t.Fatal("Apply() accepted a config whose mark cannot be applied")
+	}
+	if !strings.Contains(applyErr.Error(), "outbound socket mark") {
+		t.Fatalf("Apply() blamed the resolver instead of the mark: %v", applyErr)
+	}
+	if got := transport.BypassMark(); got != 0 {
+		t.Fatalf("rejected Apply() left the mark installed: %#x", got)
+	}
+}
+
+// A redirect section without a listener configures nothing. Accepting it would
+// let bypass_mark and max_connections look applied while no listener exists.
+func TestApplyRejectsRedirectSectionWithoutListener(t *testing.T) {
 	t.Cleanup(transport.EnableIPv6)
 	cfg, err := NewFromString(`{
 		"role":"client",
 		"log":"skip",
 		"uuid":"00000000-0000-0000-0000-000000000001",
 		"ipv6":true,
-		"redirect":{"max_connections":-1}
+		"redirect":{"bypass_mark":21328}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Apply(); err == nil ||
+		!strings.Contains(err.Error(), "requires listen_redirect") {
+		t.Fatalf("Apply() with an inert redirect section error = %v", err)
+	}
+	if got := transport.BypassMark(); got != 0 {
+		t.Fatalf("inert redirect section still marked egress: BypassMark() = %#x", got)
+	}
+}
+
+func TestApply_RedirectBypassMarkLifecycle(t *testing.T) {
+	oldMark := transport.BypassMark()
+	oldResolver := transport.OutboundResolver()
+	t.Cleanup(func() {
+		transport.SetOutboundResolver(oldResolver)
+		transport.SetBypassMark(oldMark)
+		transport.EnableIPv6()
+	})
+
+	cfg, err := NewFromString(`{
+		"role":"client",
+		"log":"skip",
+		"uuid":"00000000-0000-0000-0000-000000000001",
+		"ipv6":true,
+		"listen_redirect":"0.0.0.0:12345",
+		"redirect":{"max_connections":16,"bypass_mark":21328}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Apply(); err != nil {
+		t.Fatalf("Apply() with redirect bypass mark error = %v", err)
+	}
+	if got := transport.BypassMark(); got != 21328 {
+		t.Fatalf("BypassMark() = %#x, want %#x", got, uint32(21328))
+	}
+
+	// A listener without an explicit mark must not retain the previous one.
+	unmarked, err := NewFromString(`{
+		"role":"client",
+		"log":"skip",
+		"uuid":"00000000-0000-0000-0000-000000000001",
+		"ipv6":true,
+		"listen_redirect":"0.0.0.0:12345"
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := unmarked.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if got := transport.BypassMark(); got != 0 {
+		t.Fatalf("BypassMark() without redirect.bypass_mark = %#x, want 0", got)
+	}
+}
+
+// The bypass mark is process-global, so a server config carrying a redirect
+// listener must not be able to mark server egress for a listener that never
+// starts. launchServer ignores listen_redirect entirely, so reject it outright.
+func TestApply_RejectsRedirectListenerOnServerRole(t *testing.T) {
+	oldMark := transport.BypassMark()
+	t.Cleanup(func() {
+		transport.SetBypassMark(oldMark)
+		transport.EnableIPv6()
+	})
+	transport.SetBypassMark(0)
+
+	cfg, err := NewFromString(`{
+		"role":"server",
+		"log":"skip",
+		"listen":"0.0.0.0:443",
+		"users":[{"uuid":"00000000-0000-0000-0000-000000000001"}],
+		"listen_redirect":"0.0.0.0:12345",
+		"redirect":{"bypass_mark":21328}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Apply(); err == nil ||
+		!strings.Contains(err.Error(), "client role") {
+		t.Fatalf("Apply() with server-role listen_redirect error = %v", err)
+	}
+	if got := transport.BypassMark(); got != 0 {
+		t.Fatalf("rejected server config still marked egress: BypassMark() = %#x", got)
+	}
+}
+
+// A rejected reload must leave the live outbound mark untouched, exactly as it
+// does for the TUN path.
+func TestApply_RestoresRedirectBypassMarkAfterLaterFailure(t *testing.T) {
+	oldMark := transport.BypassMark()
+	oldResolver := transport.OutboundResolver()
+	t.Cleanup(func() {
+		transport.SetOutboundResolver(oldResolver)
+		transport.SetBypassMark(oldMark)
+		transport.EnableIPv6()
+	})
+	transport.SetBypassMark(0)
+
+	cfg, err := NewFromString(`{
+		"role":"client",
+		"log":"skip",
+		"uuid":"00000000-0000-0000-0000-000000000001",
+		"ipv6":true,
+		"listen_redirect":"0.0.0.0:12345",
+		"redirect":{"bypass_mark":21328},
+		"route":[{"egress":"proxy","rules":["cidr:not-a-cidr"]}]
 	}`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := cfg.Apply(); err == nil {
-		t.Fatal("Apply() accepted a negative redirect.max_connections")
+		t.Fatal("Apply() accepted an invalid route")
+	}
+	if got := transport.BypassMark(); got != 0 {
+		t.Fatalf("BypassMark() after rejected Apply = %#x, want 0", got)
+	}
+}
+
+// The mark is process-wide, so a REDIRECT listener running alongside TUN may
+// only inherit TUN's mark or restate it — never contradict it.
+func TestApply_RedirectBypassMarkAgreesWithTUN(t *testing.T) {
+	if !tun.Supported() {
+		t.Skipf("TUN is unsupported on this platform")
+	}
+	oldMark := transport.BypassMark()
+	oldResolver := transport.OutboundResolver()
+	t.Cleanup(func() {
+		transport.SetOutboundResolver(oldResolver)
+		transport.SetBypassMark(oldMark)
+		transport.EnableIPv6()
+	})
+
+	conflicting, err := NewFromString(`{
+		"role":"client",
+		"log":"skip",
+		"uuid":"00000000-0000-0000-0000-000000000001",
+		"ipv6":true,
+		"listen_redirect":"0.0.0.0:12345",
+		"redirect":{"bypass_mark":4660},
+		"tun":{"name":"spaceship0","bypass_mark":21328,"dns_hijack":{"enabled":true}}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conflicting.Apply(); err == nil ||
+		!strings.Contains(err.Error(), "conflicts with tun.bypass_mark") {
+		t.Fatalf("Apply() with conflicting marks error = %v", err)
+	}
+
+	inherited, err := NewFromString(`{
+		"role":"client",
+		"log":"skip",
+		"uuid":"00000000-0000-0000-0000-000000000001",
+		"ipv6":true,
+		"listen_redirect":"0.0.0.0:12345",
+		"tun":{"name":"spaceship0","bypass_mark":21328,"dns_hijack":{"enabled":true}}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inherited.Apply(); err != nil {
+		t.Fatalf("Apply() with inherited mark error = %v", err)
+	}
+	if got := transport.BypassMark(); got != 21328 {
+		t.Fatalf("inherited BypassMark() = %#x, want %#x", got, uint32(21328))
+	}
+}
+
+// Disabling dns_hijack leaves the netstack with no UDP protocol at all, so DNS
+// through the TUN silently stops working. The combination stays legal — an
+// operator may exempt port 53 from the capture rule — but it must be loud.
+func TestApply_WarnsWhenTUNDisablesDNSHijack(t *testing.T) {
+	if !tun.Supported() {
+		t.Skipf("TUN is unsupported on this platform")
+	}
+	oldMark := transport.BypassMark()
+	oldResolver := transport.OutboundResolver()
+	t.Cleanup(func() {
+		transport.SetOutboundResolver(oldResolver)
+		transport.SetBypassMark(oldMark)
+		transport.EnableIPv6()
+	})
+
+	capture := func(t *testing.T, cfgJSON string) string {
+		t.Helper()
+		cfg, err := NewFromString(cfgJSON)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var buf bytes.Buffer
+		oldWriter, oldFlags := log.Writer(), log.Flags()
+		log.SetOutput(&buf)
+		log.SetFlags(0)
+		defer func() {
+			log.SetOutput(oldWriter)
+			log.SetFlags(oldFlags)
+		}()
+		if err := cfg.Apply(); err != nil {
+			t.Fatalf("Apply() error = %v", err)
+		}
+		return buf.String()
+	}
+
+	disabled := capture(t, `{
+		"role":"client",
+		"log":"skip",
+		"uuid":"00000000-0000-0000-0000-000000000001",
+		"ipv6":true,
+		"tun":{"name":"spaceship0","max_connections":32}
+	}`)
+	if !strings.Contains(disabled, "dns_hijack is disabled") {
+		t.Fatalf("Apply() without dns_hijack did not warn, log was:\n%s", disabled)
+	}
+	// The consequence is that port 53 stops being served. Non-DNS UDP is
+	// refused either way, so the warning must not claim the flag disables UDP.
+	if !strings.Contains(disabled, "port 53") {
+		t.Fatalf("warning does not name the actual consequence, log was:\n%s", disabled)
+	}
+	for _, overclaim := range []string{"every UDP", "all UDP", "drops"} {
+		if strings.Contains(disabled, overclaim) {
+			t.Fatalf("warning overstates the effect with %q, log was:\n%s", overclaim, disabled)
+		}
+	}
+
+	enabled := capture(t, `{
+		"role":"client",
+		"log":"skip",
+		"uuid":"00000000-0000-0000-0000-000000000001",
+		"ipv6":true,
+		"tun":{"name":"spaceship0","max_connections":32,"dns_hijack":{"enabled":true}}
+	}`)
+	if strings.Contains(enabled, "dns_hijack is disabled") {
+		t.Fatalf("Apply() with dns_hijack enabled warned anyway, log was:\n%s", enabled)
 	}
 }
 
