@@ -212,7 +212,10 @@ func (c *MixedConfig) Apply() error {
 	// on unless the operator disables it explicitly with bypass_mark 0.
 	var redirectBypassMark uint32
 	redirectMarkRequired := false
-	if c.ListenRedirect != "" {
+	if c.ListenRedirect != "" && redirect.Supported() {
+		// Default the mark only where the listener can actually run. Installing
+		// one that this platform cannot apply would break every outbound dial in
+		// the process, for a listener that startup rejects anyway.
 		redirectBypassMark = transport.DefaultBypassMark
 	}
 	if c.Redirect != nil {
@@ -284,6 +287,24 @@ func (c *MixedConfig) Apply() error {
 	previousBypassMark := transport.BypassMark()
 	previousOutboundResolver := transport.OutboundResolver()
 	transport.SetBypassMark(bypassMark)
+	// Decide a defaulted mark's fate before anything dials. Resolver setup below
+	// uses a marked socket, so leaving an unusable mark installed would fail a
+	// deployment that never asked for one — and startup would have dropped it
+	// anyway. An explicitly configured mark, or TUN's, stays installed so
+	// startup can fail with one clear error.
+	if bypassMark != 0 && !redirectMarkRequired && tunConfig == nil {
+		if err := transport.VerifyBypassMark(); err != nil {
+			log.Printf(
+				"redirect: WARNING cannot apply the default outbound socket mark %#x (%v); "+
+					"continuing unmarked. An OUTPUT-chain REDIRECT rule must exempt "+
+					"Spaceship's own egress by another means, such as -m owner --uid-owner. "+
+					"Set redirect.bypass_mark explicitly to require it, or to 0 to silence this",
+				bypassMark, err,
+			)
+			bypassMark = 0
+			transport.SetBypassMark(0)
+		}
+	}
 	networkPolicyCommitted := false
 	defer func() {
 		if !networkPolicyCommitted {

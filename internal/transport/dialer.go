@@ -38,7 +38,13 @@ func BypassMark() uint32 {
 // capability, so configuration calls this to fail startup with one actionable
 // error instead of letting every later dial fail with EPERM.
 func VerifyBypassMark() error {
-	mark := bypassMark.Load()
+	return VerifyBypassMarkValue(bypassMark.Load())
+}
+
+// VerifyBypassMarkValue reports whether mark could be applied to a socket,
+// without installing it. Callers use this to decide whether a mark is usable
+// before committing to it.
+func VerifyBypassMarkValue(mark uint32) error {
 	if mark == 0 {
 		return nil
 	}

@@ -212,10 +212,27 @@ func TestApply_RedirectBypassMarkLifecycle(t *testing.T) {
 	}
 
 	// Recursive self-capture is the most damaging misconfiguration of this
-	// listener, so protection is on unless explicitly disabled.
+	// listener, so protection is on unless explicitly disabled. A defaulted mark
+	// is never left installed when it cannot be used, whatever the reason:
+	// resolver setup dials over a marked socket, so an unusable one would fail a
+	// deployment that never asked for it.
 	defaulted := apply(t, ``)
-	if got := transport.BypassMark(); got != transport.DefaultBypassMark {
-		t.Fatalf("defaulted BypassMark() = %#x, want %#x", got, transport.DefaultBypassMark)
+	if err := transport.VerifyBypassMark(); err != nil {
+		t.Fatalf("Apply() left an unusable defaulted mark %#x installed: %v",
+			transport.BypassMark(), err)
+	}
+	switch got := transport.BypassMark(); {
+	case got == transport.DefaultBypassMark:
+		if !redirect.Supported() {
+			t.Fatalf("marked egress for a listener this platform cannot run")
+		}
+	case got == 0:
+		// Either the platform cannot run the listener, or it cannot set SO_MARK.
+		if redirect.Supported() && transport.VerifyBypassMarkValue(transport.DefaultBypassMark) == nil {
+			t.Fatal("dropped a usable default mark on a supported platform")
+		}
+	default:
+		t.Fatalf("defaulted BypassMark() = %#x, want the default or none", got)
 	}
 	if defaulted.BypassMarkRequired() {
 		t.Fatal("a defaulted mark must not be treated as a hard requirement")
