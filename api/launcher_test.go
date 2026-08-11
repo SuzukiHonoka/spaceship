@@ -210,6 +210,9 @@ func TestLaunchRejectsUnusableBypassMark(t *testing.T) {
 	}
 	transport.SetBypassMark(0)
 
+	// An explicitly configured mark is a stated requirement, so an unusable one
+	// must stop the launch rather than degrade to unmarked egress.
+	requiredMark := transport.DefaultBypassMark
 	launcher := NewLauncher()
 	launcher.SkipInternalLogging()
 	cfg := &config.MixedConfig{
@@ -218,7 +221,7 @@ func TestLaunchRejectsUnusableBypassMark(t *testing.T) {
 			ServerAddr:     "127.0.0.1:1",
 			UUID:           testUserUUID,
 			ListenRedirect: "127.0.0.1:12345",
-			Redirect:       &client.Redirect{BypassMark: transport.DefaultBypassMark},
+			Redirect:       &client.Redirect{BypassMark: &requiredMark},
 			Mux:            1,
 		},
 		Server: &server.Server{},

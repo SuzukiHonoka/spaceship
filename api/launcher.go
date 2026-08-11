@@ -91,7 +91,22 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 	// config validation privilege-free while still turning a missing
 	// CAP_NET_ADMIN into one startup error instead of an EPERM on every dial.
 	if err := transport.VerifyBypassMark(); err != nil {
-		return fmt.Errorf("apply outbound socket mark %#x: %w", transport.BypassMark(), err)
+		mark := transport.BypassMark()
+		if cfg.BypassMarkRequired() {
+			return fmt.Errorf("apply outbound socket mark %#x: %w", mark, err)
+		}
+		// The mark was only defaulted. Refusing to start would break an
+		// unprivileged LAN-only deployment that never needed it, so drop it and
+		// say so: PREROUTING captures no locally-originated traffic, but an
+		// OUTPUT rule now needs another exemption.
+		log.Printf(
+			"redirect: WARNING cannot apply the default outbound socket mark %#x (%v); "+
+				"continuing unmarked. An OUTPUT-chain REDIRECT rule must exempt Spaceship's "+
+				"own egress by another means, such as -m owner --uid-owner. Set "+
+				"redirect.bypass_mark explicitly to require the mark, or to 0 to silence this",
+			mark, err,
+		)
+		transport.SetBypassMark(0)
 	}
 
 	// destroy any left connections

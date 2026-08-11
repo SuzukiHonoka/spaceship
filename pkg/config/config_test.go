@@ -63,7 +63,11 @@ func TestNewFromStringParsesRedirectListener(t *testing.T) {
 }
 
 func TestApplyRejectsOutOfRangeRedirectLimit(t *testing.T) {
-	t.Cleanup(transport.EnableIPv6)
+	oldMark := transport.BypassMark()
+	t.Cleanup(func() {
+		transport.SetBypassMark(oldMark)
+		transport.EnableIPv6()
+	})
 
 	// Every admitted session owns a socket, goroutine, and egress stream, so
 	// both ends of the range must be rejected rather than silently accepted.
@@ -155,7 +159,12 @@ func TestApply_AttributesResolverFailureToUnusableBypassMark(t *testing.T) {
 // A redirect section without a listener configures nothing. Accepting it would
 // let bypass_mark and max_connections look applied while no listener exists.
 func TestApplyRejectsRedirectSectionWithoutListener(t *testing.T) {
-	t.Cleanup(transport.EnableIPv6)
+	oldMark := transport.BypassMark()
+	t.Cleanup(func() {
+		transport.SetBypassMark(oldMark)
+		transport.EnableIPv6()
+	})
+	transport.SetBypassMark(0)
 	cfg, err := NewFromString(`{
 		"role":"client",
 		"log":"skip",
@@ -184,40 +193,67 @@ func TestApply_RedirectBypassMarkLifecycle(t *testing.T) {
 		transport.EnableIPv6()
 	})
 
-	cfg, err := NewFromString(`{
-		"role":"client",
-		"log":"skip",
-		"uuid":"00000000-0000-0000-0000-000000000001",
-		"ipv6":true,
-		"listen_redirect":"0.0.0.0:12345",
-		"redirect":{"max_connections":16,"bypass_mark":21328}
-	}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.Apply(); err != nil {
-		t.Fatalf("Apply() with redirect bypass mark error = %v", err)
-	}
-	if got := transport.BypassMark(); got != 21328 {
-		t.Fatalf("BypassMark() = %#x, want %#x", got, uint32(21328))
+	apply := func(t *testing.T, redirectSection string) *MixedConfig {
+		t.Helper()
+		transport.SetBypassMark(0)
+		cfg, err := NewFromString(`{
+			"role":"client",
+			"log":"skip",
+			"uuid":"00000000-0000-0000-0000-000000000001",
+			"ipv6":true,
+			"listen_redirect":"0.0.0.0:12345"` + redirectSection + `}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cfg.Apply(); err != nil {
+			t.Fatalf("Apply() error = %v", err)
+		}
+		return cfg
 	}
 
-	// A listener without an explicit mark must not retain the previous one.
-	unmarked, err := NewFromString(`{
+	// Recursive self-capture is the most damaging misconfiguration of this
+	// listener, so protection is on unless explicitly disabled.
+	defaulted := apply(t, ``)
+	if got := transport.BypassMark(); got != transport.DefaultBypassMark {
+		t.Fatalf("defaulted BypassMark() = %#x, want %#x", got, transport.DefaultBypassMark)
+	}
+	if defaulted.BypassMarkRequired() {
+		t.Fatal("a defaulted mark must not be treated as a hard requirement")
+	}
+
+	explicit := apply(t, `,"redirect":{"max_connections":16,"bypass_mark":21328}`)
+	if got := transport.BypassMark(); got != 21328 {
+		t.Fatalf("explicit BypassMark() = %#x, want %#x", got, uint32(21328))
+	}
+	if !explicit.BypassMarkRequired() {
+		t.Fatal("an explicitly configured mark must be treated as a requirement")
+	}
+
+	// Zero is the documented opt-out for deployments that cannot set SO_MARK.
+	disabled := apply(t, `,"redirect":{"bypass_mark":0}`)
+	if got := transport.BypassMark(); got != 0 {
+		t.Fatalf("disabled BypassMark() = %#x, want 0", got)
+	}
+	if disabled.BypassMarkRequired() {
+		t.Fatal("an explicitly disabled mark must not be treated as a requirement")
+	}
+
+	// A reload that drops the listener must drop the mark with it.
+	transport.SetBypassMark(0)
+	withoutRedirect, err := NewFromString(`{
 		"role":"client",
 		"log":"skip",
 		"uuid":"00000000-0000-0000-0000-000000000001",
-		"ipv6":true,
-		"listen_redirect":"0.0.0.0:12345"
+		"ipv6":true
 	}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := unmarked.Apply(); err != nil {
+	if err := withoutRedirect.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if got := transport.BypassMark(); got != 0 {
-		t.Fatalf("BypassMark() without redirect.bypass_mark = %#x, want 0", got)
+		t.Fatalf("BypassMark() without a redirect listener = %#x, want 0", got)
 	}
 }
 

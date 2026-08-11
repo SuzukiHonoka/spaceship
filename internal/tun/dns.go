@@ -80,6 +80,11 @@ func (s *Service) serveTCPDNS(conn net.Conn) {
 	connectionCtx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 
+	// Counted for the whole session so the DNS pool is divided between the
+	// connections actually contending for it.
+	s.dnsConnections.Add(1)
+	defer s.dnsConnections.Add(-1)
+
 	var (
 		pending   sync.WaitGroup
 		writeMu   sync.Mutex
@@ -109,10 +114,21 @@ func (s *Service) serveTCPDNS(conn net.Conn) {
 	// — that would stall this reader on other connections' work — so a genuinely
 	// exhausted pool still answers SERVFAIL.
 	acquireExchange := func() (acquired, aborted bool) {
-		select {
-		case connectionSlots <- struct{}{}:
-		case <-connectionCtx.Done():
-			return false, true
+		// The ceiling moves as connections come and go, and rises when one
+		// leaves, so the wait re-evaluates it rather than parking on the channel.
+		// The poll interval is irrelevant beside a network round trip and only
+		// applies while this connection is already at its ceiling.
+		const reevaluate = 5 * time.Millisecond
+		for {
+			if len(connectionSlots) < s.fairDNSShare(perConnection) &&
+				tryAcquireSlot(connectionSlots) {
+				break
+			}
+			select {
+			case <-connectionCtx.Done():
+				return false, true
+			case <-time.After(reevaluate):
+			}
 		}
 		if !s.acquireDNS() {
 			releaseSlot(connectionSlots)

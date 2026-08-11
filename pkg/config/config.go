@@ -43,6 +43,21 @@ type MixedConfig struct {
 
 	decodedFromJSON bool
 	idleTimeoutSet  bool
+	// redirectMarkRequired records that the outbound mark was configured
+	// explicitly rather than defaulted, so startup treats an unusable mark as a
+	// failure instead of degrading to unmarked egress.
+	redirectMarkRequired bool
+}
+
+// BypassMarkRequired reports whether the applied configuration treats the
+// outbound socket mark as a hard requirement. TUN cannot work without it, and
+// an explicitly configured redirect mark is a stated requirement; a mark that
+// was merely defaulted may be dropped with a warning instead.
+func (c *MixedConfig) BypassMarkRequired() bool {
+	if c == nil {
+		return false
+	}
+	return c.redirectMarkRequired || (c.Client != nil && c.TUN != nil)
 }
 
 const maxIdleTimeoutSeconds = int64(1<<63-1) / int64(time.Second)
@@ -192,7 +207,14 @@ func (c *MixedConfig) Apply() error {
 	if c.ListenRedirect != "" && c.Role != RoleClient {
 		return errors.New("listen_redirect is only valid for the client role")
 	}
+	// A REDIRECT listener defaults to marking Spaceship's own egress: recursive
+	// self-capture is the most damaging way to misconfigure it, so protection is
+	// on unless the operator disables it explicitly with bypass_mark 0.
 	var redirectBypassMark uint32
+	redirectMarkRequired := false
+	if c.ListenRedirect != "" {
+		redirectBypassMark = transport.DefaultBypassMark
+	}
 	if c.Redirect != nil {
 		// Settings that silently do nothing are a configuration trap: reject the
 		// section outright rather than let bypass_mark or max_connections look
@@ -203,8 +225,12 @@ func (c *MixedConfig) Apply() error {
 		if err := redirect.ValidateMaxConnections(c.Redirect.MaxConnections); err != nil {
 			return err
 		}
-		redirectBypassMark = c.Redirect.BypassMark
+		if c.Redirect.BypassMark != nil {
+			redirectBypassMark = *c.Redirect.BypassMark
+			redirectMarkRequired = redirectBypassMark != 0
+		}
 	}
+	c.redirectMarkRequired = redirectMarkRequired
 
 	// log mode
 	c.LogMode.Set()
@@ -224,9 +250,10 @@ func (c *MixedConfig) Apply() error {
 	}
 	if c.ListenRedirect != "" && tunConfig == nil && redirectBypassMark == 0 {
 		log.Println(
-			"redirect: WARNING listen_redirect is enabled without redirect.bypass_mark; " +
-				"an OUTPUT-chain REDIRECT rule that does not exempt Spaceship's own egress " +
-				"will recursively capture it and exhaust redirect.max_connections",
+			"redirect: WARNING redirect.bypass_mark is disabled; an OUTPUT-chain REDIRECT " +
+				"rule must exempt Spaceship's own egress by another means, such as " +
+				"-m owner --uid-owner, or the listener will recursively capture it and " +
+				"exhaust redirect.max_connections",
 		)
 	}
 
