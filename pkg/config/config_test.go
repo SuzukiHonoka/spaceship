@@ -339,51 +339,94 @@ func TestApply_RestoresRedirectBypassMarkAfterLaterFailure(t *testing.T) {
 
 // The mark is process-wide, so a REDIRECT listener running alongside TUN may
 // only inherit TUN's mark or restate it — never contradict it.
+//
+// Every case below gives TUN a mark deliberately different from
+// transport.DefaultBypassMark. An earlier version of this test used the default
+// value itself as TUN's "custom" mark, which made the inheritance cases pass
+// whether or not inheritance worked: the mark a redirect listener defaults to
+// happened to equal the one it was supposed to inherit.
 func TestApply_RedirectBypassMarkAgreesWithTUN(t *testing.T) {
 	if !tun.Supported() {
 		t.Skipf("TUN is unsupported on this platform")
 	}
-	oldMark := transport.BypassMark()
-	oldResolver := transport.OutboundResolver()
-	t.Cleanup(func() {
-		transport.SetOutboundResolver(oldResolver)
-		transport.SetBypassMark(oldMark)
-		transport.EnableIPv6()
-	})
-
-	conflicting, err := NewFromString(`{
-		"role":"client",
-		"log":"skip",
-		"uuid":"00000000-0000-0000-0000-000000000001",
-		"ipv6":true,
-		"listen_redirect":"0.0.0.0:12345",
-		"redirect":{"bypass_mark":4660},
-		"tun":{"name":"spaceship0","bypass_mark":21328,"dns_hijack":{"enabled":true}}
-	}`)
-	if err != nil {
-		t.Fatal(err)
+	tunMark := transport.DefaultBypassMark ^ 0x1111
+	if tunMark == transport.DefaultBypassMark || tunMark == 0 {
+		t.Fatalf("tun mark %#x must be a non-zero non-default value", tunMark)
 	}
-	if err := conflicting.Apply(); err == nil ||
-		!strings.Contains(err.Error(), "conflicts with tun.bypass_mark") {
-		t.Fatalf("Apply() with conflicting marks error = %v", err)
+	otherMark := transport.DefaultBypassMark ^ 0x2222
+
+	configure := func(redirectSection string) string {
+		return fmt.Sprintf(`{
+			"role":"client",
+			"log":"skip",
+			"uuid":"00000000-0000-0000-0000-000000000001",
+			"ipv6":true,
+			"listen_redirect":"0.0.0.0:12345",
+			%s"tun":{"name":"spaceship0","bypass_mark":%d,"dns_hijack":{"enabled":true}}
+		}`, redirectSection, tunMark)
 	}
 
-	inherited, err := NewFromString(`{
-		"role":"client",
-		"log":"skip",
-		"uuid":"00000000-0000-0000-0000-000000000001",
-		"ipv6":true,
-		"listen_redirect":"0.0.0.0:12345",
-		"tun":{"name":"spaceship0","bypass_mark":21328,"dns_hijack":{"enabled":true}}
-	}`)
-	if err != nil {
-		t.Fatal(err)
+	// An explicitly stated redirect mark that disagrees with TUN is a real
+	// contradiction and must be reported, including when the operator states the
+	// very value a listener would otherwise have defaulted to: explicit is
+	// explicit, and silently overriding it would mark egress they did not ask for.
+	for name, section := range map[string]string{
+		"distinctValue": fmt.Sprintf(`"redirect":{"bypass_mark":%d},`, otherMark),
+		"defaultValue":  fmt.Sprintf(`"redirect":{"bypass_mark":%d},`, transport.DefaultBypassMark),
+	} {
+		t.Run("conflicting/"+name, func(t *testing.T) {
+			oldMark := transport.BypassMark()
+			oldResolver := transport.OutboundResolver()
+			t.Cleanup(func() {
+				transport.SetOutboundResolver(oldResolver)
+				transport.SetBypassMark(oldMark)
+				transport.EnableIPv6()
+			})
+
+			cfg, err := NewFromString(configure(section))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := cfg.Apply(); err == nil ||
+				!strings.Contains(err.Error(), "conflicts with tun.bypass_mark") {
+				t.Fatalf("Apply() with conflicting marks error = %v", err)
+			}
+		})
 	}
-	if err := inherited.Apply(); err != nil {
-		t.Fatalf("Apply() with inherited mark error = %v", err)
-	}
-	if got := transport.BypassMark(); got != 21328 {
-		t.Fatalf("inherited BypassMark() = %#x, want %#x", got, uint32(21328))
+
+	// A redirect mark that was only defaulted must yield to TUN's. Rejecting
+	// these would fail a startup over a redirect.bypass_mark the operator never
+	// wrote, naming a value that appears nowhere in their configuration.
+	for name, section := range map[string]string{
+		"noRedirectSection":     ``,
+		"sectionWithoutMark":    `"redirect":{"max_connections":16},`,
+		"markRestatingTUNValue": fmt.Sprintf(`"redirect":{"bypass_mark":%d},`, tunMark),
+	} {
+		t.Run("agreeing/"+name, func(t *testing.T) {
+			oldMark := transport.BypassMark()
+			oldResolver := transport.OutboundResolver()
+			t.Cleanup(func() {
+				transport.SetOutboundResolver(oldResolver)
+				transport.SetBypassMark(oldMark)
+				transport.EnableIPv6()
+			})
+
+			cfg, err := NewFromString(configure(section))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := cfg.Apply(); err != nil {
+				t.Fatalf("Apply() error = %v, want TUN's mark inherited", err)
+			}
+			if got := transport.BypassMark(); got != tunMark {
+				t.Fatalf("BypassMark() = %#x, want TUN's %#x", got, tunMark)
+			}
+			// TUN cannot work without its mark, so it is a requirement however
+			// the redirect listener arrived at the same value.
+			if !cfg.BypassMarkRequired() {
+				t.Fatal("a TUN mark must be treated as a hard requirement")
+			}
+		})
 	}
 }
 
