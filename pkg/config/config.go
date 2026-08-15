@@ -212,6 +212,10 @@ func (c *MixedConfig) Apply() error {
 	// on unless the operator disables it explicitly with bypass_mark 0.
 	var redirectBypassMark uint32
 	redirectMarkRequired := false
+	// Explicitness decides who wins against TUN: a stated value must be honoured
+	// or reported, while a merely defaulted one yields to TUN's authoritative
+	// mark instead of contradicting a setting the operator never wrote.
+	redirectMarkExplicit := false
 	if c.ListenRedirect != "" && redirect.Supported() {
 		// Default the mark only where the listener can actually run. Installing
 		// one that this platform cannot apply would break every outbound dial in
@@ -230,6 +234,7 @@ func (c *MixedConfig) Apply() error {
 		}
 		if c.Redirect.BypassMark != nil {
 			redirectBypassMark = *c.Redirect.BypassMark
+			redirectMarkExplicit = true
 			redirectMarkRequired = redirectBypassMark != 0
 		}
 	}
@@ -274,15 +279,21 @@ func (c *MixedConfig) Apply() error {
 		bypassMark = tunConfig.BypassMark
 	}
 	if redirectBypassMark != 0 {
-		if bypassMark != 0 && bypassMark != redirectBypassMark {
+		switch {
+		case bypassMark == 0 || bypassMark == redirectBypassMark:
+			bypassMark = redirectBypassMark
+		case redirectMarkExplicit:
 			return fmt.Errorf(
 				"redirect.bypass_mark %#x conflicts with tun.bypass_mark %#x: "+
 					"a process has exactly one outbound socket mark",
 				redirectBypassMark,
 				bypassMark,
 			)
+		default:
+			// The redirect mark was only defaulted, so inherit TUN's rather than
+			// rejecting a configuration whose redirect mark the operator never
+			// set. Leaving bypassMark alone is that inheritance.
 		}
-		bypassMark = redirectBypassMark
 	}
 	previousBypassMark := transport.BypassMark()
 	previousOutboundResolver := transport.OutboundResolver()
