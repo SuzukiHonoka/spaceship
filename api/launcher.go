@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/dns"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/http"
@@ -26,6 +27,10 @@ type Launcher struct {
 	sigStop             chan struct{}
 	skipInternalLogging bool
 	stopOnce            sync.Once
+
+	forceExitTimeout time.Duration
+	forceExitMu      sync.Mutex
+	forceExitTimer   *time.Timer
 }
 
 func NewLauncher() *Launcher {
@@ -247,6 +252,10 @@ func (l *Launcher) Launch(cfg *config.MixedConfig) error {
 	// main context
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// A watchdog armed by the stop signal must not outlive this call: an
+	// embedder keeps running after Launch returns.
+	defer l.disarmForceExit()
 
 	// switch role
 	switch cfg.Role {

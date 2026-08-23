@@ -24,6 +24,8 @@ var (
 	showStats         = flag.Bool("s", false, "show stats")
 	showStatsInterval = flag.Duration("interval", 1*time.Second, "show stats interval in seconds")
 	managementAddr    = flag.String("mgmt", "", "management HTTP server address (loopback only, e.g. 127.0.0.1:19999); empty = disabled")
+	stopTimeout       = flag.Duration("stop-timeout", api.DefaultForceExitTimeout,
+		"hard limit on shutdown after SIGTERM/SIGINT; on expiry the process dumps goroutines and exits. 0 disables")
 )
 
 func init() {
@@ -38,6 +40,9 @@ func main() {
 
 	// Prepare to launch
 	launcher := api.NewLauncher()
+	// Shutdown is not graceful, and a supervisor restart must never wait on a
+	// stuck teardown path. Bound it.
+	launcher.SetForceExitTimeout(*stopTimeout)
 
 	var ir *indicator.Indicator
 	var ctx context.Context
