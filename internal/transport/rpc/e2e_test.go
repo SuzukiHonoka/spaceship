@@ -228,8 +228,7 @@ func TestServerCancelForceClosesConnectionsWithBlockedHandler(t *testing.T) {
 	}
 	defer func() { _ = proxyClient.Close() }()
 
-	proxyCtx, cancelProxy := context.WithCancel(context.Background())
-	defer cancelProxy()
+	proxyCtx := t.Context()
 	sourceReader, sourceWriter := io.Pipe()
 	defer func() { _ = sourceReader.Close() }()
 	defer func() { _ = sourceWriter.Close() }()

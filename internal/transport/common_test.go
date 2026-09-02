@@ -52,7 +52,7 @@ func TestTransport_GettersAndSetters(t *testing.T) {
 func TestTransport_Concurrency(t *testing.T) {
 	// Ensure that Getters and Setters don't panic under concurrent access
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		go func(val int) {
 			defer wg.Done()

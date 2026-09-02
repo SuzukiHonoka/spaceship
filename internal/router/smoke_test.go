@@ -97,7 +97,7 @@ func TestSmoke_ConcurrentGetRoute(t *testing.T) {
 		"Example.com", "example.com.", "a.example.com", "B.Example.COM",
 		"other.test", "OTHER.test.",
 	}
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -193,11 +193,9 @@ func TestConcurrentRouteReloadAndLookup(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	for worker := 0; worker < 8; worker++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < 200; i++ {
+	for range 8 {
+		wg.Go(func() {
+			for range 200 {
 				tr, err := GetRoute("reload.example")
 				if err != nil {
 					t.Errorf("GetRoute() during reload: %v", err)
@@ -210,13 +208,13 @@ func TestConcurrentRouteReloadAndLookup(t *testing.T) {
 				}
 				_ = tr.Close()
 			}
-		}()
+		})
 	}
 
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 50; i++ {
+		for i := range 50 {
 			routes := direct
 			if i%2 == 1 {
 				routes = blackhole
@@ -229,7 +227,7 @@ func TestConcurrentRouteReloadAndLookup(t *testing.T) {
 	}()
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 20; i++ {
+		for range 20 {
 			if err := GenerateCache(); err != nil {
 				t.Errorf("GenerateCache() during reload: %v", err)
 				return

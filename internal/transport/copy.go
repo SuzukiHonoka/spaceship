@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"io"
+	"slices"
 )
 
 type closeWriter interface {
@@ -65,13 +66,7 @@ func CloseAll(values ...any) {
 		if !ok || closer == nil {
 			continue
 		}
-		dup := false
-		for _, prev := range seen {
-			if prev == closer {
-				dup = true
-				break
-			}
-		}
+		dup := slices.Contains(seen, closer)
 		if dup {
 			continue
 		}

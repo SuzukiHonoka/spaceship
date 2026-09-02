@@ -52,7 +52,7 @@ func (s *DynamicProxyServer) RegisterWithGRPC(grpcServer *grpc.Server) {
 
 // createDnsExchangeHandler creates a handler for DnsExchange.
 func (s *DynamicProxyServer) createDnsExchangeHandler() grpc.MethodHandler {
-	return func(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	return func(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 		in := new(proto.DnsExchangeRequest)
 		if err := dec(in); err != nil {
 			return nil, err
@@ -64,7 +64,7 @@ func (s *DynamicProxyServer) createDnsExchangeHandler() grpc.MethodHandler {
 			Server:     srv,
 			FullMethod: rpc.GetDnsExchangeMethodName(),
 		}
-		handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		handler := func(ctx context.Context, req any) (any, error) {
 			return srv.(proto.ProxyServer).DnsExchange(ctx, req.(*proto.DnsExchangeRequest))
 		}
 		return interceptor(ctx, in, info, handler)
@@ -73,7 +73,7 @@ func (s *DynamicProxyServer) createDnsExchangeHandler() grpc.MethodHandler {
 
 // createDnsResolveHandler creates a handler for DnsResolve method
 func (s *DynamicProxyServer) createDnsResolveHandler() grpc.MethodHandler {
-	return func(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	return func(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 		in := new(proto.DnsRequest)
 		if err := dec(in); err != nil {
 			return nil, err
@@ -85,7 +85,7 @@ func (s *DynamicProxyServer) createDnsResolveHandler() grpc.MethodHandler {
 			Server:     srv,
 			FullMethod: rpc.GetDnsResolveMethodName(),
 		}
-		handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		handler := func(ctx context.Context, req any) (any, error) {
 			return srv.(proto.ProxyServer).DnsResolve(ctx, req.(*proto.DnsRequest))
 		}
 		return interceptor(ctx, in, info, handler)
@@ -94,7 +94,7 @@ func (s *DynamicProxyServer) createDnsResolveHandler() grpc.MethodHandler {
 
 // createProxyHandler creates a handler for Proxy method
 func (s *DynamicProxyServer) createProxyHandler() grpc.StreamHandler {
-	return func(srv interface{}, stream grpc.ServerStream) error {
+	return func(srv any, stream grpc.ServerStream) error {
 		return srv.(proto.ProxyServer).Proxy(&grpc.GenericServerStream[proto.ProxySRC, proto.ProxyDST]{ServerStream: stream})
 	}
 }

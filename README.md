@@ -7,6 +7,15 @@ Spaceship is a tool designed to create secure tunnels to remote networks.
 - gRPC
 - Protocol Buffers (protobuf)
 
+## Build
+
+Building Spaceship requires Go 1.27.0 or later. Go 1.27 Darwin binaries target
+macOS 13 Ventura or later.
+
+```shell
+go build ./cmd/spaceship
+```
+
 ## Usage
 
 ```shell

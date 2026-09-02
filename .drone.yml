@@ -4,19 +4,19 @@ name: golang-ci
 
 steps:
   - name: lint
-    image: golangci/golangci-lint:v2.12.2-alpine
+    image: golangci/golangci-lint:v2.13.2-alpine
     commands:
       - golangci-lint run --timeout=5m ./...
 
   - name: format-check
-    image: golang:1.26.5-alpine
+    image: golang:1.27.0-alpine
     commands:
       - apk add --no-cache bash
       - gofmt -l . | tee /dev/stderr
       - test -z "$(gofmt -l .)" # Fail if any files are not formatted
 
   - name: dependency-check
-    image: golang:1.26.5-alpine
+    image: golang:1.27.0-alpine
     commands:
       - apk add --no-cache git
       - go mod tidy
@@ -24,7 +24,7 @@ steps:
       - go mod verify
 
   - name: security-scan
-    image: ghcr.io/securego/gosec:2.28.0
+    image: ghcr.io/securego/gosec:2.29.0
     commands:
       # scripts/e2e is a developer harness, not shipped code: build.sh only
       # builds cmd/spaceship. It exists to spawn binaries with generated paths
@@ -34,7 +34,7 @@ steps:
       - gosec -exclude-generated -exclude-dir=scripts ./...
 
   - name: test-with-coverage
-    image: golang:1.26.5-alpine
+    image: golang:1.27.0-alpine
     environment:
       GO111MODULE: on
       GOCACHE: /go/cache
@@ -43,7 +43,10 @@ steps:
     commands:
       - apk add --no-cache gcc musl-dev
       - go vet ./...
-      - go test -race -coverprofile=coverage.out -covermode=atomic ./...
+      - |
+        # scripts/e2e is a developer harness and is not part of the shipped binary.
+        PACKAGES="$(go list ./... | grep -v '/scripts/e2e$')"
+        go test -race -coverprofile=coverage.out -covermode=atomic $PACKAGES
       - go tool cover -func=coverage.out
       - |
         COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
@@ -56,7 +59,7 @@ steps:
   # Drone only permits privileged steps for trusted repositories. This job
   # creates a disposable network namespace and never modifies the host rules.
   - name: netfilter-redirect-integration
-    image: golang:1.26.5-alpine
+    image: golang:1.27.0-alpine
     privileged: true
     environment:
       CGO_ENABLED: "1"

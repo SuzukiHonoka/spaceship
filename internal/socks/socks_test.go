@@ -9,8 +9,7 @@ import (
 )
 
 func TestServer_ServeConn_NoAuth(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	cfg := &Config{}
 	s := New(ctx, cfg)
@@ -55,8 +54,7 @@ func TestServer_ServeConn_NoAuth(t *testing.T) {
 }
 
 func TestServer_ServeConn_UserPass(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	cfg := &Config{
 		Credentials: StaticCredentials{"user": "pass"},
@@ -121,8 +119,7 @@ func TestServer_ServeConn_UserPass(t *testing.T) {
 }
 
 func TestServer_ServeConn_UserPass_Failure(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	cfg := &Config{
 		Credentials: StaticCredentials{"user": "pass"},
@@ -178,8 +175,7 @@ func TestServer_ServeConn_UserPass_Failure(t *testing.T) {
 }
 
 func TestServer_ServeConn_NoAcceptable(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	cfg := &Config{
 		Credentials: StaticCredentials{"user": "pass"},

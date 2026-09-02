@@ -72,11 +72,11 @@ func (p *proc) tail(n int) string {
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
 	}
-	out := ""
+	var out strings.Builder
 	for _, l := range lines {
-		out += "      | " + l + "\n"
+		out.WriteString("      | " + l + "\n")
 	}
-	return out
+	return out.String()
 }
 
 func freePort() (int, error) {

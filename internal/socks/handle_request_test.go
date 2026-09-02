@@ -12,8 +12,7 @@ import (
 )
 
 func TestHandleRequest_BindUnsupported(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	s := New(ctx, &Config{})
 
 	serverSide, clientSide := net.Pipe()
@@ -48,8 +47,7 @@ func TestHandleRequest_BindUnsupported(t *testing.T) {
 }
 
 func TestHandleRequest_UnsupportedCommand(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	s := New(ctx, &Config{})
 
 	var buf bytes.Buffer
@@ -83,8 +81,7 @@ func TestHandleConnect_NoRoute(t *testing.T) {
 		})
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	s := New(ctx, &Config{})
 
 	var buf bytes.Buffer

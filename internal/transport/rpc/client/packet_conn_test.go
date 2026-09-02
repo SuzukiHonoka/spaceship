@@ -62,8 +62,8 @@ func (m *mockProxyClient) Header() (metadata.MD, error) { return nil, nil }
 func (m *mockProxyClient) Trailer() metadata.MD         { return nil }
 func (m *mockProxyClient) CloseSend() error             { return nil }
 func (m *mockProxyClient) Context() context.Context     { return context.Background() }
-func (m *mockProxyClient) RecvMsg(m_ interface{}) error { return nil }
-func (m *mockProxyClient) SendMsg(m_ interface{}) error { return nil }
+func (m *mockProxyClient) RecvMsg(m_ any) error         { return nil }
+func (m *mockProxyClient) SendMsg(m_ any) error         { return nil }
 
 func TestStreamPacketConn_ReadFrom(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

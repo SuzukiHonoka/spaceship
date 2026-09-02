@@ -288,13 +288,11 @@ func roundTrip(socksAddr, target string, size int, user, pass string) error {
 	got := sha256.New()
 	var wg sync.WaitGroup
 	var readErr error
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		if _, err := io.CopyN(got, c, int64(size)); err != nil {
 			readErr = fmt.Errorf("read back: %w", err)
 		}
-	}()
+	})
 	if _, err := c.Write(payload); err != nil {
 		return fmt.Errorf("write: %w", err)
 	}
@@ -311,12 +309,10 @@ func roundTrip(socksAddr, target string, size int, user, pass string) error {
 func concurrentRoundTrips(socksAddr, target string, n, size int) error {
 	errs := make(chan error, n)
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range n {
+		wg.Go(func() {
 			errs <- roundTrip(socksAddr, target, size, "", "")
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)
@@ -374,13 +370,11 @@ func httpConnectRoundTrip(httpAddr, target string, size int) error {
 	got := sha256.New()
 	var wg sync.WaitGroup
 	var readErr error
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		if _, err := io.CopyN(got, br, int64(size)); err != nil {
 			readErr = err
 		}
-	}()
+	})
 	if _, err := c.Write(payload); err != nil {
 		return err
 	}

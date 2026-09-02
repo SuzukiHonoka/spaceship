@@ -37,8 +37,7 @@ func TestProxyRejectsNilStream(t *testing.T) {
 }
 
 func TestProxyTimesOutBeforeFirstMessage(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	stream := &mockProxyServer{
 		ctx:         ctx,
 		received:    make(chan *proto.ProxySRC),
@@ -86,8 +85,7 @@ func TestProxyAdmissionBoundsStreamsAcrossConnections(t *testing.T) {
 		t.Fatal("first Proxy call did not enter Recv")
 	}
 
-	secondCtx, cancelSecond := context.WithCancel(context.Background())
-	defer cancelSecond()
+	secondCtx := t.Context()
 	second := &mockProxyServer{
 		ctx:      secondCtx,
 		received: make(chan *proto.ProxySRC),
@@ -116,8 +114,7 @@ func TestProxyAdmissionBoundsStreamsAcrossConnections(t *testing.T) {
 }
 
 func TestReceiveProxyFirstMessage(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	want := &proto.ProxySRC{
 		HeaderOrPayload: &proto.ProxySRC_Header{
 			Header: &proto.ProxySRC_ProxyHeader{Addr: "example.com:443"},

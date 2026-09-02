@@ -25,7 +25,6 @@ func TestControlTarget(t *testing.T) {
 		"[2001:db8::10]:443",
 		"[fe80::1%en0]:443",
 	} {
-		address := address
 		t.Run(address, func(t *testing.T) {
 			t.Parallel()
 
@@ -58,7 +57,6 @@ func TestControlTargetRejectsInvalidAddress(t *testing.T) {
 		"dns:///control.example:443",
 		"2001:db8::10:443",
 	} {
-		address := address
 		t.Run(address, func(t *testing.T) {
 			t.Parallel()
 			if _, err := controlTarget(address); err == nil {

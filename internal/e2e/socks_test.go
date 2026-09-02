@@ -40,7 +40,7 @@ const (
 // the address is free just before returning.
 func freeLoopbackAddr(t *testing.T) string {
 	t.Helper()
-	for i := 0; i < 64; i++ {
+	for range 64 {
 		port := 40000 + int(freePortSeq.Add(1)%20000)
 		addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 		ln, err := net.Listen("tcp", addr)

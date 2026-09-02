@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 )
 
 const (
@@ -120,10 +121,8 @@ func (s *Server) authenticate(conn io.Writer, bufConn io.Reader) (*AuthContext, 
 		return NoAuthAuthenticator{}.Authenticate(bufConn, conn)
 	}
 	// check client whether supported user-password auth
-	for _, method := range methods {
-		if method == UserPassAuth {
-			return UserPassAuthenticator{s.config.Credentials}.Authenticate(bufConn, conn)
-		}
+	if slices.Contains(methods, UserPassAuth) {
+		return UserPassAuthenticator{s.config.Credentials}.Authenticate(bufConn, conn)
 	}
 	// no usable method found
 	return nil, noAcceptableAuth(conn)
