@@ -278,22 +278,33 @@ func (c *MixedConfig) Apply() error {
 	if tunConfig != nil {
 		bypassMark = tunConfig.BypassMark
 	}
-	if redirectBypassMark != 0 {
-		switch {
-		case bypassMark == 0 || bypassMark == redirectBypassMark:
-			bypassMark = redirectBypassMark
-		case redirectMarkExplicit:
-			return fmt.Errorf(
-				"redirect.bypass_mark %#x conflicts with tun.bypass_mark %#x: "+
-					"a process has exactly one outbound socket mark",
-				redirectBypassMark,
-				bypassMark,
-			)
-		default:
-			// The redirect mark was only defaulted, so inherit TUN's rather than
-			// rejecting a configuration whose redirect mark the operator never
-			// set. Leaving bypassMark alone is that inheritance.
-		}
+	switch {
+	case bypassMark == 0:
+		// No TUN mark, so the redirect setting decides outright — including an
+		// explicit 0, which disables marking.
+		bypassMark = redirectBypassMark
+	case redirectBypassMark == bypassMark:
+		// Already in agreement with TUN.
+	case redirectMarkExplicit && redirectBypassMark == 0:
+		// Disabling is as much a disagreement with TUN as naming a different
+		// value, and TUN cannot run unmarked, so report it rather than applying
+		// a mark the operator explicitly turned off.
+		return fmt.Errorf(
+			"redirect.bypass_mark 0 cannot disable marking while tun.bypass_mark %#x "+
+				"requires it: a process has exactly one outbound socket mark",
+			bypassMark,
+		)
+	case redirectMarkExplicit:
+		return fmt.Errorf(
+			"redirect.bypass_mark %#x conflicts with tun.bypass_mark %#x: "+
+				"a process has exactly one outbound socket mark",
+			redirectBypassMark,
+			bypassMark,
+		)
+	default:
+		// The redirect mark was only defaulted, so inherit TUN's rather than
+		// rejecting a configuration whose redirect mark the operator never set.
+		// Leaving bypassMark alone is that inheritance.
 	}
 	previousBypassMark := transport.BypassMark()
 	previousOutboundResolver := transport.OutboundResolver()
