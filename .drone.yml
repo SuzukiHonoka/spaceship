@@ -9,14 +9,16 @@ steps:
       - golangci-lint run --timeout=5m ./...
 
   - name: format-check
-    image: golang:1.27.0-alpine
+    image: golang:1-alpine
+    pull: always
     commands:
       - apk add --no-cache bash
       - gofmt -l . | tee /dev/stderr
       - test -z "$(gofmt -l .)" # Fail if any files are not formatted
 
   - name: dependency-check
-    image: golang:1.27.0-alpine
+    image: golang:1-alpine
+    pull: always
     commands:
       - apk add --no-cache git
       - go mod tidy
@@ -34,7 +36,8 @@ steps:
       - gosec -exclude-generated -exclude-dir=scripts ./...
 
   - name: test-with-coverage
-    image: golang:1.27.0-alpine
+    image: golang:1-alpine
+    pull: always
     environment:
       GO111MODULE: on
       GOCACHE: /go/cache
@@ -59,7 +62,8 @@ steps:
   # Drone only permits privileged steps for trusted repositories. This job
   # creates a disposable network namespace and never modifies the host rules.
   - name: netfilter-redirect-integration
-    image: golang:1.27.0-alpine
+    image: golang:1-alpine
+    pull: always
     privileged: true
     environment:
       CGO_ENABLED: "1"
