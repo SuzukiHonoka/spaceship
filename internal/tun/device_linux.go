@@ -50,6 +50,15 @@ func openTUNDevice(cfg Config, closed func(error)) (openedDevice, error) {
 
 	owned := &ownedDescriptor{fd: fd}
 	if created {
+		// NormalizeConfig already bounds this, but the conversion below is only
+		// provably safe with the check in view of it.
+		if cfg.MTU < minMTU || cfg.MTU > maxMTU {
+			_ = owned.Close()
+			return openedDevice{}, fmt.Errorf(
+				"tun: mtu must be between %d and %d: %d", minMTU, maxMTU, cfg.MTU,
+			)
+		}
+		// #nosec G115 -- explicitly bounded to minMTU..maxMTU immediately above.
 		if err := configureCreatedInterface(name, uint32(cfg.MTU)); err != nil {
 			_ = owned.Close()
 			return openedDevice{}, err
