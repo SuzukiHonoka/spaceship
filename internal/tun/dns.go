@@ -11,6 +11,7 @@ import (
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/dnswire"
 	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"github.com/miekg/dns"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
@@ -41,7 +42,7 @@ func (s *Service) handleUDPRequest(request *udp.ForwarderRequest) bool {
 	go func() {
 		defer s.endFlow()
 		defer s.releaseUDPFlow()
-		defer conn.Close()
+		defer utils.Close(conn)
 		s.serveUDPDNS(conn)
 	}()
 	return true
@@ -119,11 +120,11 @@ func (s *Service) serveTCPDNS(conn net.Conn) {
 		// The poll interval is irrelevant beside a network round trip and only
 		// applies while this connection is already at its ceiling.
 		const reevaluate = 5 * time.Millisecond
-		for {
-			if len(connectionSlots) < s.fairDNSShare(perConnection) &&
-				tryAcquireSlot(connectionSlots) {
-				break
-			}
+		reserve := func() bool {
+			return len(connectionSlots) < s.fairDNSShare(perConnection) &&
+				tryAcquireSlot(connectionSlots)
+		}
+		for !reserve() {
 			select {
 			case <-connectionCtx.Done():
 				return false, true

@@ -46,7 +46,7 @@ func (d *recordingSOCKSForward) DialContext(
 }
 
 func (d *recordingSOCKSForward) serveSOCKS(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	greeting := make([]byte, 3)
 	if _, err := io.ReadFull(conn, greeting); err != nil {
@@ -112,7 +112,7 @@ func TestLoadProxyWithDialerUsesProvidedForwardPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	select {
 	case got := <-forward.proxyAddress:

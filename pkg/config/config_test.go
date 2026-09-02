@@ -221,12 +221,12 @@ func TestApply_RedirectBypassMarkLifecycle(t *testing.T) {
 		t.Fatalf("Apply() left an unusable defaulted mark %#x installed: %v",
 			transport.BypassMark(), err)
 	}
-	switch got := transport.BypassMark(); {
-	case got == transport.DefaultBypassMark:
+	switch got := transport.BypassMark(); got {
+	case transport.DefaultBypassMark:
 		if !redirect.Supported() {
 			t.Fatalf("marked egress for a listener this platform cannot run")
 		}
-	case got == 0:
+	case 0:
 		// Either the platform cannot run the listener, or it cannot set SO_MARK.
 		if redirect.Supported() && transport.VerifyBypassMarkValue(transport.DefaultBypassMark) == nil {
 			t.Fatal("dropped a usable default mark on a supported platform")
@@ -433,6 +433,72 @@ func TestApply_RedirectBypassMarkAgreesWithTUN(t *testing.T) {
 // Disabling dns_hijack leaves the netstack with no UDP protocol at all, so DNS
 // through the TUN silently stops working. The combination stays legal — an
 // operator may exempt port 53 from the capture rule — but it must be loud.
+// Disabling is a disagreement with TUN just as much as naming a different
+// value: TUN cannot run unmarked, so an explicit 0 must be reported rather
+// than silently overridden by the mark TUN needs.
+func TestApply_RedirectBypassMarkZeroConflictsWithTUN(t *testing.T) {
+	if !tun.Supported() {
+		t.Skipf("TUN is unsupported on this platform")
+	}
+	oldMark := transport.BypassMark()
+	oldResolver := transport.OutboundResolver()
+	t.Cleanup(func() {
+		transport.SetOutboundResolver(oldResolver)
+		transport.SetBypassMark(oldMark)
+		transport.EnableIPv6()
+	})
+	transport.SetBypassMark(0)
+
+	tunMark := transport.DefaultBypassMark ^ 0x3333
+	cfg, err := NewFromString(fmt.Sprintf(`{
+		"role":"client","log":"skip",
+		"uuid":"00000000-0000-0000-0000-000000000001","ipv6":true,
+		"listen_redirect":"0.0.0.0:12345",
+		"redirect":{"bypass_mark":0},
+		"tun":{"name":"spaceship0","bypass_mark":%d,"dns_hijack":{"enabled":true}}
+	}`, tunMark))
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyErr := cfg.Apply()
+	if applyErr == nil {
+		t.Fatalf("Apply() silently applied %#x despite redirect.bypass_mark 0", transport.BypassMark())
+	}
+	if !strings.Contains(applyErr.Error(), "cannot disable marking") {
+		t.Fatalf("Apply() error = %v, want it to name the disabled redirect mark", applyErr)
+	}
+	if got := transport.BypassMark(); got != 0 {
+		t.Fatalf("rejected Apply() left mark %#x installed", got)
+	}
+}
+
+// Without TUN there is nothing to disagree with, so an explicit 0 simply
+// disables marking rather than being rejected.
+func TestApply_RedirectBypassMarkZeroWithoutTUNIsAccepted(t *testing.T) {
+	oldMark := transport.BypassMark()
+	t.Cleanup(func() {
+		transport.SetBypassMark(oldMark)
+		transport.EnableIPv6()
+	})
+	transport.SetBypassMark(0)
+
+	cfg, err := NewFromString(`{
+		"role":"client","log":"skip",
+		"uuid":"00000000-0000-0000-0000-000000000001","ipv6":true,
+		"listen_redirect":"0.0.0.0:12345",
+		"redirect":{"bypass_mark":0}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Apply(); err != nil {
+		t.Fatalf("Apply() rejected the documented opt-out: %v", err)
+	}
+	if got := transport.BypassMark(); got != 0 {
+		t.Fatalf("BypassMark() = %#x, want marking disabled", got)
+	}
+}
+
 func TestApply_WarnsWhenTUNDisablesDNSHijack(t *testing.T) {
 	if !tun.Supported() {
 		t.Skipf("TUN is unsupported on this platform")
@@ -1364,5 +1430,84 @@ func TestApply_NilEmbeddedConfigs(t *testing.T) {
 	}
 	if cfg.Client == nil {
 		t.Fatal("ensureEmbeddedConfigs did not populate Client")
+	}
+}
+
+// A configuration written for v2.1.7 must still apply unchanged. Everything
+// added since is additive, so this pins that promise against future validation
+// being tightened in a way that rejects a field combination operators already
+// have deployed. Every key here existed at that tag.
+func TestApply_V217ConfigsRemainValid(t *testing.T) {
+	oldMark := transport.BypassMark()
+	oldResolver := transport.OutboundResolver()
+	t.Cleanup(func() {
+		transport.SetOutboundResolver(oldResolver)
+		transport.SetBypassMark(oldMark)
+		transport.EnableIPv6()
+		_ = forward.Attach(nil)
+		_ = router.SetRoutes(nil)
+	})
+
+	const v217Client = `{
+		"role":"client",
+		"log":"skip",
+		"dns":{"type":"common","server":"1.1.1.1"},
+		"cas":[],
+		"server_addr":"tunnel.example.com:443",
+		"host":"tunnel.example.com",
+		"uuid":"00000000-0000-0000-0000-000000000001",
+		"listen_socks":"127.0.0.1:1080",
+		"listen_socks_unix":"/tmp/spaceship.sock",
+		"listen_http":"127.0.0.1:8080",
+		"listen_dns":"127.0.0.1:5353",
+		"basic_auth":["user:pass"],
+		"mux":4,
+		"tls":true,
+		"idle_timeout":300,
+		"block_ipv6_dns":true,
+		"udp":{
+			"disable":false,
+			"max_associations":64,
+			"max_associations_per_client":8,
+			"max_nat_entries":32,
+			"max_nat_entries_total":256,
+			"max_nat_entries_per_client":64
+		},
+		"route":[
+			{"src":["10.0.0.0/8"],"dst":"direct","type":"cidr"},
+			{"src":["example.com"],"dst":"proxy","type":"domain"},
+			{"dst":"proxy","type":"default"}
+		]
+	}`
+
+	const v217Server = `{
+		"role":"server",
+		"log":"skip",
+		"listen":"0.0.0.0:443",
+		"path":"custom.Service",
+		"buffer":32,
+		"ipv6":true,
+		"ssl":{"cert":"/etc/spaceship/fullchain.pem","key":"/etc/spaceship/privkey.pem"},
+		"users":[
+			{"uuid":"00000000-0000-0000-0000-000000000001","remark":"alice"},
+			{"uuid":"00000000-0000-0000-0000-000000000002","remark":"bob"}
+		]
+	}`
+
+	for name, raw := range map[string]string{"client": v217Client, "server": v217Server} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := NewFromString(raw)
+			if err != nil {
+				t.Fatalf("NewFromString() rejected a v2.1.7 %s config: %v", name, err)
+			}
+			if err := cfg.Apply(); err != nil {
+				t.Fatalf("Apply() rejected a v2.1.7 %s config: %v", name, err)
+			}
+		})
+	}
+
+	// Nothing since v2.1.7 marks egress unless a new frontend asks for it.
+	if got := transport.BypassMark(); got != 0 {
+		t.Fatalf("a v2.1.7 config installed outbound mark %#x", got)
 	}
 }

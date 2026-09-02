@@ -17,6 +17,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/server"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/tun"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/logger"
 	"github.com/google/uuid"
@@ -138,7 +139,7 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 		if err != nil {
 			return fmt.Errorf("create tun: %w", err)
 		}
-		defer tunService.Close()
+		defer utils.Close(tunService)
 
 		errGroup.Go(func() error {
 			if err := tunService.Run(); err != nil {

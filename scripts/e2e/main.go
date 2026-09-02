@@ -263,7 +263,7 @@ func runAuthSuite(bin, workDir string) {
 
 	c, err := socks5Connect(s.socks, s.echo.addr, "e2e", "wrong")
 	if err == nil {
-		c.Close()
+		_ = c.Close()
 		check("auth/wrong credentials rejected",
 			fmt.Errorf("connection succeeded with a bad password"), "")
 	} else {
@@ -282,7 +282,7 @@ func roundTrip(socksAddr, target string, size int, user, pass string) error {
 	if err != nil {
 		return err
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	_ = c.SetDeadline(time.Now().Add(60 * time.Second))
 
 	got := sha256.New()
@@ -341,7 +341,7 @@ func httpConnectRoundTrip(httpAddr, target string, size int) error {
 	if err != nil {
 		return err
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	_ = c.SetDeadline(time.Now().Add(60 * time.Second))
 
 	req := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
@@ -400,18 +400,18 @@ func httpForwardProxy(proxyAddr string) error {
 	if err != nil {
 		return err
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, body)
 	})}
 	go func() { _ = srv.Serve(ln) }()
-	defer srv.Close()
+	defer func() { _ = srv.Close() }()
 
 	c, err := net.DialTimeout("tcp", proxyAddr, 5*time.Second)
 	if err != nil {
 		return err
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	_ = c.SetDeadline(time.Now().Add(30 * time.Second))
 
 	origin := ln.Addr().String()
@@ -434,13 +434,13 @@ func udpRoundTrip(socksAddr, udpTarget string) error {
 	if err != nil {
 		return err
 	}
-	defer ctrl.Close()
+	defer func() { _ = ctrl.Close() }()
 
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		return err
 	}
-	defer pc.Close()
+	defer func() { _ = pc.Close() }()
 
 	relayAddr, err := net.ResolveUDPAddr("udp", relay)
 	if err != nil {

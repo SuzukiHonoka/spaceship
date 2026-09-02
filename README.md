@@ -101,9 +101,11 @@ and the process cannot apply it, Spaceship warns at startup and continues
 unmarked rather than refusing to run. Setting `bypass_mark` explicitly makes it
 a requirement instead: startup then fails with one clear error if it cannot be
 applied. Set it to `0` to disable marking deliberately and silence the warning.
-When TUN is also enabled its `bypass_mark` is inherited automatically; setting a
-different value here is rejected, because a process has exactly one outbound
-socket mark.
+When TUN is also enabled its `bypass_mark` is inherited automatically, because a
+process has exactly one outbound socket mark. Stating a value here that TUN
+contradicts is rejected rather than silently resolved — including `0`, since
+TUN cannot run unmarked, so disabling the mark and enabling TUN cannot both be
+honoured.
 
 Replace `192.0.2.10` with every IP used by `server_addr`; do not use the
 documentation address literally. Add explicit exclusions for management and

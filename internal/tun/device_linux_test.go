@@ -16,8 +16,8 @@ func TestValidateTUNDescriptorRejectsOrdinaryFD(t *testing.T) {
 	if err := unix.Pipe2(fds, unix.O_CLOEXEC); err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(fds[0])
-	defer unix.Close(fds[1])
+	defer func() { _ = unix.Close(fds[0]) }()
+	defer func() { _ = unix.Close(fds[1]) }()
 
 	if _, err := validateTUNDescriptor(fds[0]); err == nil {
 		t.Fatal("validateTUNDescriptor accepted a pipe")
@@ -29,8 +29,8 @@ func TestNewRejectsOrdinaryExternalDescriptorWithoutClosingOriginal(t *testing.T
 	if err := unix.Pipe2(fds, unix.O_CLOEXEC); err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(fds[0])
-	defer unix.Close(fds[1])
+	defer func() { _ = unix.Close(fds[0]) }()
+	defer func() { _ = unix.Close(fds[1]) }()
 
 	if _, err := New(context.Background(), Config{
 		FileDescriptor: &fds[0],
@@ -56,7 +56,7 @@ func TestOwnedDescriptorCloseIsIdempotent(t *testing.T) {
 	if err := unix.Pipe2(fds, unix.O_CLOEXEC); err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(fds[1])
+	defer func() { _ = unix.Close(fds[1]) }()
 
 	owned := &ownedDescriptor{fd: fds[0]}
 	if err := owned.Close(); err != nil {

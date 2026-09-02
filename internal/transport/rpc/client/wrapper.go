@@ -90,7 +90,7 @@ func (w *ConnWrapper) getState() connectivity.State {
 	if w == nil || w.ClientConn == nil {
 		return connectivity.Shutdown
 	}
-	return w.ClientConn.GetState()
+	return w.GetState()
 }
 
 func (w *ConnWrapper) Close() error {

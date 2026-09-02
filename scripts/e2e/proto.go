@@ -18,15 +18,15 @@ func socks5Connect(socksAddr, target string, user, pass string) (net.Conn, error
 		return nil, err
 	}
 	if err := socks5Handshake(c, user, pass); err != nil {
-		c.Close()
+		_ = c.Close()
 		return nil, err
 	}
 	if err := socks5Request(c, 0x01, target); err != nil {
-		c.Close()
+		_ = c.Close()
 		return nil, err
 	}
 	if _, err := readSocksReply(c); err != nil {
-		c.Close()
+		_ = c.Close()
 		return nil, err
 	}
 	return c, nil
@@ -151,16 +151,16 @@ func socks5UDPAssociate(socksAddr string) (net.Conn, string, error) {
 		return nil, "", err
 	}
 	if err := socks5Handshake(c, "", ""); err != nil {
-		c.Close()
+		_ = c.Close()
 		return nil, "", err
 	}
 	if err := socks5Request(c, 0x03, "0.0.0.0:0"); err != nil {
-		c.Close()
+		_ = c.Close()
 		return nil, "", err
 	}
 	relay, err := readSocksReply(c)
 	if err != nil {
-		c.Close()
+		_ = c.Close()
 		return nil, "", err
 	}
 	host, port, _ := net.SplitHostPort(relay)

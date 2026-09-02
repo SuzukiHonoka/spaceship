@@ -333,7 +333,7 @@ func TestTCPForwarderRoutesOriginalDestination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DialContextTCP() error = %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if err := writeAll(conn, []byte("ping")); err != nil {
 		t.Fatal(err)
@@ -378,7 +378,7 @@ func TestTCPForwarderRoutesIPv6OriginalDestination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DialContextTCP() error = %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if _, err := conn.Write([]byte("ping")); err != nil {
 		t.Fatal(err)
@@ -454,8 +454,8 @@ func TestProxyTCPErrorHandling(t *testing.T) {
 			},
 		}
 		conn, peer := net.Pipe()
-		defer conn.Close()
-		defer peer.Close()
+		defer func() { _ = conn.Close() }()
+		defer func() { _ = peer.Close() }()
 
 		if err := service.proxyTCP(conn, id); !errors.Is(err, wantErr) {
 			t.Fatalf("proxyTCP() error = %v, want wrapping %v", err, wantErr)
@@ -481,8 +481,8 @@ func TestProxyTCPErrorHandling(t *testing.T) {
 				},
 			}
 			conn, peer := net.Pipe()
-			defer conn.Close()
-			defer peer.Close()
+			defer func() { _ = conn.Close() }()
+			defer func() { _ = peer.Close() }()
 
 			err := service.proxyTCP(conn, id)
 			if tt.wantErr {
@@ -542,7 +542,7 @@ func TestCloseCancelsAndWaitsForActiveTCPFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	select {
 	case <-route.started:
@@ -910,7 +910,7 @@ func TestDNSHijackUsesRPCForTCPAndUDP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DialUDP() error = %v", err)
 	}
-	defer udpConn.Close()
+	defer func() { _ = udpConn.Close() }()
 	_ = udpConn.SetDeadline(time.Now().Add(3 * time.Second))
 	if _, err := udpConn.Write(wireQuery); err != nil {
 		t.Fatal(err)
@@ -928,7 +928,7 @@ func TestDNSHijackUsesRPCForTCPAndUDP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DialContextTCP(:53) error = %v", err)
 	}
-	defer tcpConn.Close()
+	defer func() { _ = tcpConn.Close() }()
 	_ = tcpConn.SetDeadline(time.Now().Add(3 * time.Second))
 	frame := make([]byte, 2+len(wireQuery))
 	binary.BigEndian.PutUint16(frame[:2], uint16(len(wireQuery)))

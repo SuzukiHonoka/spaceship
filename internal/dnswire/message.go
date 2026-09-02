@@ -80,7 +80,7 @@ func QueryErrorRcode(err error) int {
 func ErrorResponse(query *dns.Msg, rcode int) *dns.Msg {
 	response := new(dns.Msg)
 	if query == nil {
-		response.MsgHdr.Response = true
+		response.Response = true
 		response.Rcode = rcode
 		return response
 	}
