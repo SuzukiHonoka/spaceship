@@ -1,3 +1,5 @@
+//go:build unix
+
 // Command e2e drives spaceship end to end as real processes: a server binary
 // and a client binary talking over a real gRPC tunnel, exercised through the
 // front ends an operator actually uses.

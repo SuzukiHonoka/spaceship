@@ -10,6 +10,13 @@ the proxy egress on the client side and to direct on the server side. Separate
 processes are the only way to cover both legs at once, which is what this
 harness does.
 
+It is Unix-only, and built only on those platforms. Shutdown coverage is the
+point of the harness, and it drives that with POSIX signals — `SIGTERM` to stop
+a process, `SIGQUIT` for a stack dump, and `SIGSTOP` to freeze a peer so it
+stays connected while no longer reading. Windows supports none of that
+meaningfully, so the package carries a `unix` build constraint rather than
+compiling into something that cannot work.
+
 ```bash
 go build -o /tmp/spaceship ./cmd/spaceship && go run ./scripts/e2e /tmp/spaceship /tmp/spaceship-e2e
 ```
