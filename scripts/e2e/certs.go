@@ -43,7 +43,7 @@ func writeSelfSigned(dir string) (certPath, keyPath string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	defer certOut.Close()
+	defer func() { _ = certOut.Close() }()
 	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: der}); err != nil {
 		return "", "", err
 	}
@@ -56,7 +56,7 @@ func writeSelfSigned(dir string) (certPath, keyPath string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	defer keyOut.Close()
+	defer func() { _ = keyOut.Close() }()
 	if err := pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}); err != nil {
 		return "", "", err
 	}

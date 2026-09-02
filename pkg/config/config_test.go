@@ -221,12 +221,12 @@ func TestApply_RedirectBypassMarkLifecycle(t *testing.T) {
 		t.Fatalf("Apply() left an unusable defaulted mark %#x installed: %v",
 			transport.BypassMark(), err)
 	}
-	switch got := transport.BypassMark(); {
-	case got == transport.DefaultBypassMark:
+	switch got := transport.BypassMark(); got {
+	case transport.DefaultBypassMark:
 		if !redirect.Supported() {
 			t.Fatalf("marked egress for a listener this platform cannot run")
 		}
-	case got == 0:
+	case 0:
 		// Either the platform cannot run the listener, or it cannot set SO_MARK.
 		if redirect.Supported() && transport.VerifyBypassMarkValue(transport.DefaultBypassMark) == nil {
 			t.Fatal("dropped a usable default mark on a supported platform")

@@ -192,7 +192,7 @@ func runKernelTUNIntegrationHelper(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
 		if _, err := conn.Write([]byte("ping")); err != nil {
 			t.Fatal(err)
@@ -212,7 +212,7 @@ func runKernelTUNIntegrationHelper(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
 		if _, err := conn.Write([]byte("ping")); err != nil {
 			t.Fatal(err)
@@ -232,7 +232,7 @@ func runKernelTUNIntegrationHelper(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
 		query := kernelDNSQuery(t, 0x1001)
 		if _, err := conn.Write(query); err != nil {
@@ -252,7 +252,7 @@ func runKernelTUNIntegrationHelper(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
 
 		query := kernelDNSQuery(t, 0x1002)
@@ -279,7 +279,7 @@ func runKernelTUNIntegrationHelper(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
 
 		query := kernelDNSQuery(t, 0x1004)
@@ -306,7 +306,7 @@ func runKernelTUNIntegrationHelper(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
 		query := kernelDNSQuery(t, 0x1003)
 		if _, err := conn.Write(query); err != nil {
@@ -326,7 +326,7 @@ func runKernelTUNIntegrationHelper(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
 		_, writeErr := conn.Write([]byte("unsupported"))
 		var readErr error
@@ -355,7 +355,7 @@ func testKernelExternalDescriptorOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	if err := configureCreatedInterface(name, 1400); err != nil {
 		t.Fatal(err)
 	}
@@ -612,7 +612,7 @@ func (d *kernelTargetDialer) DialContext(
 	// DialContext's context only bounds connection establishment. Once the
 	// method returns, the connection remains valid until either peer closes it.
 	go func() {
-		defer targetConn.Close()
+		defer func() { _ = targetConn.Close() }()
 		_ = targetConn.SetDeadline(time.Now().Add(3 * time.Second))
 
 		payload := make([]byte, 4)
@@ -638,7 +638,7 @@ func TestKernelTargetDialerConnectionOutlivesDialContext(t *testing.T) {
 		cancel()
 		t.Fatalf("dial target: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	cancel()
 	assertKernelTarget(t, dialer.targets, "tcp", address)
@@ -781,7 +781,7 @@ func assertOutboundSocketMark(t *testing.T, want uint32) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	accepted := make(chan net.Conn, 1)
 	acceptErr := make(chan error, 1)
@@ -804,7 +804,7 @@ func assertOutboundSocketMark(t *testing.T, want uint32) {
 	if err != nil {
 		t.Fatalf("marked outbound dial: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	syscallConn, ok := conn.(syscall.Conn)
 	if !ok {

@@ -30,7 +30,7 @@ func startSpaceship(bin, name, configPath, logDir string, extraArgs ...string) (
 	cmd.Stdout = f
 	cmd.Stderr = f
 	if err := cmd.Start(); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	return &proc{name: name, cmd: cmd, log: logPath}, nil
@@ -84,7 +84,7 @@ func freePort() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
@@ -126,7 +126,7 @@ func startEchoServer() (*echoServer, error) {
 			e.conns = append(e.conns, c)
 			e.mu.Unlock()
 			go func(c net.Conn) {
-				defer c.Close()
+				defer func() { _ = c.Close() }()
 				_, _ = io.Copy(c, c)
 			}(c)
 		}

@@ -17,7 +17,7 @@ func Supported() bool {
 }
 
 func openTUNDevice(cfg Config, closed func(error)) (openedDevice, error) {
-	fd := -1
+	var fd int
 	name := cfg.Name
 	requestedName := cfg.Name
 	created := cfg.FileDescriptor == nil
@@ -166,7 +166,7 @@ func configureCreatedInterface(name string, mtu uint32) error {
 	if err != nil {
 		return fmt.Errorf("tun: open interface control socket: %w", err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 
 	ifreq, err := unix.NewIfreq(name)
 	if err != nil {
@@ -196,7 +196,7 @@ func interfaceMTU(name string) (uint32, error) {
 	if err != nil {
 		return 0, fmt.Errorf("tun: open MTU control socket: %w", err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 
 	ifreq, err := unix.NewIfreq(name)
 	if err != nil {
