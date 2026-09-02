@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"sync"
 	"testing"
 	"time"
 
@@ -144,4 +145,30 @@ func TestForceExitTerminatesProcess(t *testing.T) {
 	if !bytes.Contains(output, []byte("goroutine profile")) {
 		t.Errorf("child did not dump goroutines; output:\n%s", output)
 	}
+}
+
+// SetForceExitTimeout is exported, so it can be called while the watchdog is
+// being armed from the signal goroutine. The budget must be synchronised with
+// the arm and fire paths rather than relying on callers to sequence them.
+func TestForceExitTimeoutIsRaceFree(t *testing.T) {
+	l := NewLauncher()
+	t.Cleanup(l.disarmForceExit)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := range 500 {
+			// Large enough that the watchdog never actually fires here.
+			l.SetForceExitTimeout(time.Duration(i+1) * time.Hour)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 500 {
+			l.armForceExit()
+			l.disarmForceExit()
+		}
+	}()
+	wg.Wait()
 }

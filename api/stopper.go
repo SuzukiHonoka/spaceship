@@ -46,19 +46,21 @@ func (l *Launcher) listenSignal(ctx context.Context) error {
 // killing the process is only ever correct for a dedicated binary, never for an
 // embedder that merely hosts a Launcher.
 func (l *Launcher) SetForceExitTimeout(timeout time.Duration) {
+	l.forceExitMu.Lock()
+	defer l.forceExitMu.Unlock()
 	l.forceExitTimeout = timeout
 }
 
 func (l *Launcher) armForceExit() {
-	if l.forceExitTimeout <= 0 {
-		return
-	}
 	l.forceExitMu.Lock()
 	defer l.forceExitMu.Unlock()
-	if l.forceExitTimer != nil {
+	if l.forceExitTimeout <= 0 || l.forceExitTimer != nil {
 		return
 	}
-	l.forceExitTimer = time.AfterFunc(l.forceExitTimeout, l.forceExit)
+	// Capture the budget rather than re-reading it when the timer fires: the
+	// setter is exported, so the field may change while the watchdog is armed.
+	timeout := l.forceExitTimeout
+	l.forceExitTimer = time.AfterFunc(timeout, func() { l.forceExit(timeout) })
 }
 
 // disarmForceExit cancels a pending watchdog. Launch defers it so a library
@@ -73,8 +75,8 @@ func (l *Launcher) disarmForceExit() {
 	}
 }
 
-func (l *Launcher) forceExit() {
-	log.Printf("shutdown did not finish within %s, forcing exit; goroutine dump follows", l.forceExitTimeout)
+func (l *Launcher) forceExit(timeout time.Duration) {
+	log.Printf("shutdown did not finish within %s, forcing exit; goroutine dump follows", timeout)
 	if profile := pprof.Lookup("goroutine"); profile != nil {
 		_ = profile.WriteTo(log.Writer(), 1)
 	}
