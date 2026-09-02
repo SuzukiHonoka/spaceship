@@ -1,3 +1,5 @@
+//go:build unix
+
 package main
 
 import (
@@ -40,7 +42,7 @@ func runShutdownSuite(bin, workDir string) {
 	// is in at any moment.
 	const tunnels = 40
 	var held []net.Conn
-	for i := 0; i < tunnels; i++ {
+	for i := range tunnels {
 		c, err := socks5Connect(s.socks, silent.addr, "", "")
 		if err != nil {
 			check("shutdown/open tunnels", fmt.Errorf("tunnel %d: %w", i, err), s.client.tail(10))

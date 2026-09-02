@@ -103,7 +103,7 @@ func TestGetPromotesEntry(t *testing.T) {
 func TestNeverExceedsMaxSize(t *testing.T) {
 	const cap = 100
 	tbl := newSyncedRoutesTable(cap)
-	for i := 0; i < cap*3; i++ {
+	for i := range cap * 3 {
 		tbl.Set(fmt.Sprintf("key-%d", i), EgressDirect)
 		if tbl.lruList.Len() > cap {
 			t.Fatalf("list length %d exceeded maxSize %d at iteration %d",
@@ -119,7 +119,7 @@ func TestNeverExceedsMaxSize(t *testing.T) {
 func TestMapAndListAlwaysInSync(t *testing.T) {
 	const cap = 10
 	tbl := newSyncedRoutesTable(cap)
-	for i := 0; i < cap*3; i++ {
+	for i := range cap * 3 {
 		tbl.Set(fmt.Sprintf("key-%d", i), EgressDirect)
 		if tbl.lruList.Len() != len(tbl.cache) {
 			t.Fatalf("list len %d != map len %d at iteration %d",
@@ -182,7 +182,7 @@ func TestReset(t *testing.T) {
 
 func TestSetAfterReset(t *testing.T) {
 	tbl := newSyncedRoutesTable(3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		tbl.Set(fmt.Sprintf("key-%d", i), EgressDirect)
 	}
 	tbl.Reset()
@@ -206,10 +206,10 @@ func TestConcurrentSetGet(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for g := 0; g < goroutines; g++ {
+	for g := range goroutines {
 		go func(id int) {
 			defer wg.Done()
-			for i := 0; i < ops; i++ {
+			for i := range ops {
 				k := fmt.Sprintf("key-%d", (id*ops+i)%80)
 				tbl.Set(k, EgressDirect)
 				tbl.Get(k)
@@ -233,10 +233,10 @@ func TestConcurrentReset(t *testing.T) {
 	const goroutines = 20
 
 	wg.Add(goroutines)
-	for g := 0; g < goroutines; g++ {
+	for g := range goroutines {
 		go func(id int) {
 			defer wg.Done()
-			for i := 0; i < 200; i++ {
+			for i := range 200 {
 				switch i % 3 {
 				case 0:
 					tbl.Set(fmt.Sprintf("k-%d-%d", id, i), EgressDirect)
@@ -269,7 +269,7 @@ func BenchmarkSet(b *testing.B) {
 
 func BenchmarkGet(b *testing.B) {
 	tbl := newSyncedRoutesTable(maxCacheSize)
-	for i := 0; i < maxCacheSize; i++ {
+	for i := range maxCacheSize {
 		tbl.Set(fmt.Sprintf("host-%d", i), EgressDirect)
 	}
 	b.ResetTimer()
@@ -291,7 +291,7 @@ func BenchmarkSetParallel(b *testing.B) {
 
 func BenchmarkGetParallel(b *testing.B) {
 	tbl := newSyncedRoutesTable(maxCacheSize)
-	for i := 0; i < maxCacheSize; i++ {
+	for i := range maxCacheSize {
 		tbl.Set(fmt.Sprintf("host-%d", i), EgressDirect)
 	}
 	b.RunParallel(func(pb *testing.PB) {

@@ -966,8 +966,7 @@ func TestServeTCPDNSSupportsPipelining(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	service := &Service{
 		ctx:      ctx,
 		cfg:      cfg,
@@ -1069,8 +1068,7 @@ func TestServeTCPDNSPerConnectionLimitPreventsStarvation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	var inFlight, peak atomic.Int64
 	release := make(chan struct{})
@@ -1110,7 +1108,7 @@ func TestServeTCPDNSPerConnectionLimitPreventsStarvation(t *testing.T) {
 	greedyServer, greedyClient := net.Pipe()
 	go service.serveTCPDNS(greedyServer)
 	go func() {
-		for i := 0; i < globalSlots*2; i++ {
+		for i := range globalSlots * 2 {
 			_ = greedyClient.SetWriteDeadline(time.Now().Add(2 * time.Second))
 			if err := writeDNSFrame(greedyClient, dnsQueryWire(t, "greedy.test.", uint16(i+1))); err != nil {
 				return
@@ -1183,8 +1181,7 @@ func TestServeTCPDNSPerConnectionLimitBackpressuresRatherThanFails(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	var inFlight, peak atomic.Int64
 	service := &Service{
@@ -1216,7 +1213,7 @@ func TestServeTCPDNSPerConnectionLimitBackpressuresRatherThanFails(t *testing.T)
 	serverConn, clientConn := net.Pipe()
 	go service.serveTCPDNS(serverConn)
 	go func() {
-		for i := 0; i < queries; i++ {
+		for i := range queries {
 			_ = clientConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 			if err := writeDNSFrame(clientConn, dnsQueryWire(t, "deep.test.", uint16(i+1))); err != nil {
 				return
@@ -1225,7 +1222,7 @@ func TestServeTCPDNSPerConnectionLimitBackpressuresRatherThanFails(t *testing.T)
 	}()
 
 	answered, servfails := 0, 0
-	for i := 0; i < queries; i++ {
+	for i := range queries {
 		_ = clientConn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		var size [2]byte
 		if _, err := io.ReadFull(clientConn, size[:]); err != nil {
@@ -1302,7 +1299,7 @@ func TestServeTCPDNSBackpressureUnblocksOnShutdown(t *testing.T) {
 
 	// Two queries: the first occupies the sole slot, the second parks the reader.
 	go func() {
-		for i := 0; i < 2; i++ {
+		for i := range 2 {
 			_ = clientConn.SetWriteDeadline(time.Now().Add(3 * time.Second))
 			if err := writeDNSFrame(clientConn, dnsQueryWire(t, "park.test.", uint16(i+1))); err != nil {
 				return
@@ -1389,8 +1386,7 @@ func TestServeTCPDNSFairShareBoundsConcurrentConnections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	var inFlight atomic.Int64
 	held := map[string]*atomic.Int64{"a.": new(atomic.Int64), "b.": new(atomic.Int64)}
@@ -1447,7 +1443,7 @@ func TestServeTCPDNSFairShareBoundsConcurrentConnections(t *testing.T) {
 
 	for i, prefix := range []string{"a.", "b."} {
 		go func() {
-			for j := 0; j < globalSlots; j++ {
+			for j := range globalSlots {
 				_ = clients[i].SetWriteDeadline(time.Now().Add(3 * time.Second))
 				if err := writeDNSFrame(clients[i], dnsQueryWire(t, prefix+"greedy.test.", uint16(j+1))); err != nil {
 					return
@@ -1493,8 +1489,7 @@ func TestServeTCPDNSRejectsUnsupportedAndBusyQueries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	var calls atomic.Int32
 	service := &Service{
@@ -1594,8 +1589,7 @@ func TestDNSFailureResponsesNeverFallBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	var calls atomic.Int32
 	service := &Service{

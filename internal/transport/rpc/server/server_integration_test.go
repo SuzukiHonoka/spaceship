@@ -258,8 +258,7 @@ func TestServerCancelClosesPartialHandshakesImmediately(t *testing.T) {
 
 func TestNewServerTLS(t *testing.T) {
 	certPath, keyPath := writeSelfSigned(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	srv, err := NewServer(ctx, config.Users{{UUID: "tls-user"}}, &config.SSL{
 		PublicKey:  certPath,

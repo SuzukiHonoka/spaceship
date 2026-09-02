@@ -1,7 +1,6 @@
 package socks
 
 import (
-	"context"
 	"net"
 	"sync"
 	"testing"
@@ -27,7 +26,7 @@ func TestUDPRelay_Stress(t *testing.T) {
 	numPackets := 20
 
 	echoServers := make([]net.PacketConn, numTargets)
-	for i := 0; i < numTargets; i++ {
+	for i := range numTargets {
 		es, err := net.ListenPacket("udp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatalf("failed to start echo server: %v", err)
@@ -50,21 +49,15 @@ func TestUDPRelay_Stress(t *testing.T) {
 		t.Fatalf("failed to create udp relay: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	_ = ctx
-
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		_ = relay.Run()
-	}()
+	})
 
 	var targetWg sync.WaitGroup
 	targetWg.Add(numTargets)
 
-	for i := 0; i < numTargets; i++ {
+	for i := range numTargets {
 		go func(targetID int) {
 			defer targetWg.Done()
 
@@ -96,7 +89,7 @@ func TestUDPRelay_Stress(t *testing.T) {
 			destAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: relayUDPAddr.Port}
 
 			buf := make([]byte, 2048)
-			for p := 0; p < numPackets; p++ {
+			for range numPackets {
 				// UDP is unreliable: loopback datagrams can be dropped under the
 				// concurrent burst this test generates. A correct UDP client
 				// retransmits on timeout rather than treating a single drop as

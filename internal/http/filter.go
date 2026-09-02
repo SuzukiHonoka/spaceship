@@ -31,7 +31,7 @@ func (f Filter) RemoveHopHeaders(h http.Header) {
 	// RFC 9110 section 7.6.1 requires an intermediary to remove every field
 	// nominated by Connection before removing Connection itself.
 	for _, value := range h.Values("Connection") {
-		for _, token := range strings.Split(value, ",") {
+		for token := range strings.SplitSeq(value, ",") {
 			if token = strings.TrimSpace(token); token != "" {
 				h.Del(token)
 			}

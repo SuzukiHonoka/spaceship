@@ -86,8 +86,7 @@ func TestHandleRequestDoesNotForwardPipelinedRequest(t *testing.T) {
 	}))
 	defer secondOrigin.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	proxy := New(ctx, &Config{Credentials: StaticCredentials{"user": "pass"}})
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -179,8 +178,7 @@ func TestHandleRequestSupportsExpectContinue(t *testing.T) {
 	}))
 	defer origin.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	proxy := New(ctx, &Config{})
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

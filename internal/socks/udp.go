@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"net"
 	"runtime"
 	"strconv"
@@ -405,9 +406,7 @@ func (t *natTable) DeleteIf(key string, expected *natEntry) bool {
 func (t *natTable) Range(fn func(string, *natEntry) bool) {
 	t.mu.RLock()
 	entries := make(map[string]*natEntry, len(t.entries))
-	for key, entry := range t.entries {
-		entries[key] = entry
-	}
+	maps.Copy(entries, t.entries)
 	t.mu.RUnlock()
 
 	for key, entry := range entries {

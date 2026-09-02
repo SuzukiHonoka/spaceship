@@ -105,7 +105,7 @@ func (sw *Indicator) Write(p []byte) (n int, err error) {
 	logLine := bytes.TrimSuffix(p, ansiNewlineByte)
 
 	// Split multi-line log entries
-	for _, line := range bytes.Split(logLine, ansiNewlineByte) {
+	for line := range bytes.SplitSeq(logLine, ansiNewlineByte) {
 		// Add to log buffer
 		sw.logBuffer = append(sw.logBuffer, string(line))
 	}

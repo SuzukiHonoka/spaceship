@@ -84,7 +84,7 @@ func TestServerCancelDoesNotWaitForSilentPeers(t *testing.T) {
 	go func() { serveErr <- srv.serve(listener) }()
 
 	const peers = 4
-	for i := 0; i < peers; i++ {
+	for range peers {
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		if err != nil {
 			t.Fatal(err)

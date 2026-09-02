@@ -54,8 +54,8 @@ func (m *mockProxyServer) SetHeader(metadata.MD) error  { return nil }
 func (m *mockProxyServer) SendHeader(metadata.MD) error { return nil }
 func (m *mockProxyServer) SetTrailer(metadata.MD)       {}
 func (m *mockProxyServer) Context() context.Context     { return m.ctx }
-func (m *mockProxyServer) SendMsg(interface{}) error    { return nil }
-func (m *mockProxyServer) RecvMsg(interface{}) error    { return nil }
+func (m *mockProxyServer) SendMsg(any) error            { return nil }
+func (m *mockProxyServer) RecvMsg(any) error            { return nil }
 
 type closeTrackingRoute struct {
 	closeCount int

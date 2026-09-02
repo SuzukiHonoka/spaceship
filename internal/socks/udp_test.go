@@ -237,7 +237,7 @@ func TestUDPRelay_LargePayload(t *testing.T) {
 
 	var resp []byte
 	rbuf := make([]byte, 70000)
-	for attempt := 0; attempt < 20; attempt++ {
+	for range 20 {
 		_, _ = client.WriteTo(packet, dst)
 		_ = client.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		n, _, err := client.ReadFrom(rbuf)

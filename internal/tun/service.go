@@ -386,10 +386,7 @@ func releaseSlot(slots chan struct{}) {
 // holding more than its current share simply stops acquiring; its in-flight
 // queries drain within QueryTimeout, so the pool converges without revocation.
 func (s *Service) fairDNSShare(ceiling int) int {
-	active := s.dnsConnections.Load()
-	if active < 1 {
-		active = 1
-	}
+	active := max(s.dnsConnections.Load(), 1)
 	share := int64(cap(s.dnsSlots)) / active
 	return max(1, min(ceiling, int(share)))
 }
