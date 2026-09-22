@@ -2,7 +2,10 @@ package rpc
 
 import (
 	"bytes"
+	"fmt"
+	"slices"
 	"testing"
+	"time"
 
 	proxy "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	"google.golang.org/grpc/mem"
@@ -171,4 +174,117 @@ func TestProxyCodecHeaderRoundTrip(t *testing.T) {
 	if got.GetHeader().GetAddr() != "example.com:443" {
 		t.Fatalf("header addr = %q", got.GetHeader().GetAddr())
 	}
+}
+
+var codecBenchSizes = []int{16, 64, 256, 1024, 8192, 16384, 256 * 1024}
+
+func BenchmarkProxyCodec_MarshalPayload(b *testing.B) {
+	var c proxyCodec
+	pool := BufferPool()
+	for _, size := range codecBenchSizes {
+		b.Run(fmt.Sprintf("%d", size), func(b *testing.B) {
+			src := &proxy.ProxySRC{
+				HeaderOrPayload: &proxy.ProxySRC_Payload{},
+			}
+			payload := src.HeaderOrPayload.(*proxy.ProxySRC_Payload)
+			b.Cleanup(func() { ReleaseMessageBuffers(src) })
+
+			b.SetBytes(int64(size))
+			b.ReportAllocs()
+			samples := make([]time.Duration, b.N)
+			b.ResetTimer()
+			for i := range b.N {
+				b.StopTimer()
+				buf, read := AcquirePayloadBuffer(pool, size)
+				for j := range read[:size] {
+					read[j] = 0x5a
+				}
+				payload.Payload = read[:size]
+				OfferPayloadBuffer(src, buf, size, pool)
+				b.StartTimer()
+
+				start := time.Now()
+				got, err := c.Marshal(src)
+				samples[i] = time.Since(start)
+				if err != nil {
+					b.Fatal(err)
+				}
+				got.Free()
+				payload.Payload = nil
+			}
+			b.StopTimer()
+			reportCodecRTT(b, samples)
+		})
+	}
+}
+
+func BenchmarkProxyCodec_UnmarshalPayload(b *testing.B) {
+	var c proxyCodec
+	for _, size := range codecBenchSizes {
+		b.Run(fmt.Sprintf("%d", size), func(b *testing.B) {
+			wire, err := proto.Marshal(&proxy.ProxyDST{
+				HeaderOrPayload: &proxy.ProxyDST_Payload{
+					Payload: bytes.Repeat([]byte{0x5a}, size),
+				},
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			msg := &proxy.ProxyDST{
+				HeaderOrPayload: &proxy.ProxyDST_Payload{},
+			}
+			b.Cleanup(func() { ReleaseMessageBuffers(msg) })
+
+			b.SetBytes(int64(size))
+			b.ReportAllocs()
+			samples := make([]time.Duration, b.N)
+			b.ResetTimer()
+			for i := range b.N {
+				b.StopTimer()
+				frameBytes := append([]byte(nil), wire...)
+				frame := mem.NewBuffer(&frameBytes, nil)
+				b.StartTimer()
+
+				start := time.Now()
+				err := c.Unmarshal(mem.BufferSlice{frame}, msg)
+				samples[i] = time.Since(start)
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.StopTimer()
+				frame.Free()
+				b.StartTimer()
+			}
+			b.StopTimer()
+			reportCodecRTT(b, samples)
+		})
+	}
+}
+
+func reportCodecRTT(b *testing.B, samples []time.Duration) {
+	b.Helper()
+	if len(samples) == 0 {
+		return
+	}
+	sorted := slices.Clone(samples)
+	slices.Sort(sorted)
+	var sum time.Duration
+	for _, d := range sorted {
+		sum += d
+	}
+	b.ReportMetric(float64(sum)/float64(len(sorted))/float64(time.Nanosecond), "avg-ns")
+	b.ReportMetric(float64(sorted[len(sorted)/2])/float64(time.Nanosecond), "p50-ns")
+	b.ReportMetric(float64(sorted[codecPercentileIndex(len(sorted), 99)])/float64(time.Nanosecond), "p99-ns")
+}
+
+func codecPercentileIndex(n, p int) int {
+	if n <= 1 {
+		return 0
+	}
+	i := (p*(n-1) + 99) / 100
+	if i >= n {
+		return n - 1
+	}
+	return i
 }
