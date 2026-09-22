@@ -279,7 +279,7 @@ func (s *Service) exchangeDNSContext(parent context.Context, wire []byte, query 
 	ctx, cancel := context.WithTimeout(parent, s.cfg.DNS.QueryTimeout)
 	defer cancel()
 
-	response, err := s.exchanger.Exchange(ctx, wire, network, s.cfg.DNS.BlockIPv6)
+	response, err := s.getExchanger().Exchange(ctx, wire, network, s.cfg.DNS.BlockIPv6)
 	if err != nil {
 		return packDNSFailure(wire, query, dns.RcodeServerFailure)
 	}

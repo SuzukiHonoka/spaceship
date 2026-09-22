@@ -316,12 +316,12 @@ func newLinkedServiceForProtocol(
 func TestTCPForwarderRoutesOriginalDestination(t *testing.T) {
 	service, peer, peerNIC := newLinkedService(t, Config{MaxConnections: 4})
 	route := &echoRoute{targets: make(chan string, 1)}
-	service.resolveRoute = func(host string) (transport.Transport, error) {
+	service.setResolveRoute(func(host string) (transport.Transport, error) {
 		if host != "198.51.100.20" {
 			return nil, fmt.Errorf("unexpected route host %q", host)
 		}
 		return route, nil
-	}
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -358,12 +358,12 @@ func TestTCPForwarderRoutesOriginalDestination(t *testing.T) {
 func TestTCPForwarderRoutesIPv6OriginalDestination(t *testing.T) {
 	service, peer, peerNIC := newLinkedIPv6Service(t, Config{MaxConnections: 4})
 	route := &echoRoute{targets: make(chan string, 1)}
-	service.resolveRoute = func(host string) (transport.Transport, error) {
+	service.setResolveRoute(func(host string) (transport.Transport, error) {
 		if host != "2001:db8::20" {
 			return nil, fmt.Errorf("unexpected route host %q", host)
 		}
 		return route, nil
-	}
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -528,9 +528,9 @@ func TestTCPForwarderRejectsWhenConnectionLimitIsFull(t *testing.T) {
 func TestCloseCancelsAndWaitsForActiveTCPFlow(t *testing.T) {
 	service, peer, peerNIC := newLinkedService(t, Config{MaxConnections: 2})
 	route := &cancellationRoute{started: make(chan struct{})}
-	service.resolveRoute = func(string) (transport.Transport, error) {
+	service.setResolveRoute(func(string) (transport.Transport, error) {
 		return route, nil
-	}
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -878,7 +878,7 @@ func TestDNSHijackUsesRPCForTCPAndUDP(t *testing.T) {
 	})
 
 	networks := make(chan proto.Network, 2)
-	service.exchanger = &testDNSExchanger{exchange: func(
+	service.setExchanger(&testDNSExchanger{exchange: func(
 		_ context.Context,
 		wire []byte,
 		network proto.Network,
@@ -889,10 +889,10 @@ func TestDNSHijackUsesRPCForTCPAndUDP(t *testing.T) {
 		}
 		networks <- network
 		return dnsSuccess(t, wire, "203.0.113.9")
-	}}
-	service.resolveRoute = func(string) (transport.Transport, error) {
+	}})
+	service.setResolveRoute(func(string) (transport.Transport, error) {
 		return nil, errors.New("port 53 must not use the general route")
-	}
+	})
 
 	query := new(dns.Msg)
 	query.SetQuestion("known.test.", dns.TypeA)
@@ -976,7 +976,7 @@ func TestServeTCPDNSSupportsPipelining(t *testing.T) {
 	slowRelease := make(chan struct{})
 	fastSeen := make(chan struct{})
 	var fastOnce sync.Once
-	service.exchanger = &testDNSExchanger{exchange: func(
+	service.setExchanger(&testDNSExchanger{exchange: func(
 		ctx context.Context,
 		wire []byte,
 		_ proto.Network,
@@ -996,7 +996,7 @@ func TestServeTCPDNSSupportsPipelining(t *testing.T) {
 			fastOnce.Do(func() { close(fastSeen) })
 		}
 		return dnsSuccess(t, wire, "203.0.113.10")
-	}}
+	}})
 
 	serverConn, clientConn := net.Pipe()
 	done := make(chan struct{})

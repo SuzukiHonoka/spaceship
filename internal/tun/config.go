@@ -85,6 +85,12 @@ type Config struct {
 	MaxConnections        int
 	MaxPendingConnections int
 	DNS                   DNSConfig
+
+	// ResolveRoute overrides the process-global router when non-nil. It must be
+	// supplied to New rather than assigned on Service afterwards: CreateNIC
+	// starts gVisor's packet processors before New returns, so a later write
+	// races with handleTCPRequest.
+	ResolveRoute func(string) (transport.Transport, error)
 }
 
 // NormalizeConfig validates cfg and fills all zero-valued defaults.

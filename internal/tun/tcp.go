@@ -58,7 +58,7 @@ func (s *Service) proxyTCP(conn net.Conn, id stack.TransportEndpointID) error {
 		return err
 	}
 
-	route, err := s.resolveRoute(destination.Addr().String())
+	route, err := s.getResolveRoute()(destination.Addr().String())
 	if err != nil {
 		return fmt.Errorf("route %s: %w", destination, err)
 	}

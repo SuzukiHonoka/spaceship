@@ -45,6 +45,9 @@ type Service struct {
 	nicID  tcpip.NICID
 	device openedDevice
 
+	// hooksMu guards resolveRoute and exchanger so tests can replace them after
+	// New without racing gVisor packet goroutines started by CreateNIC.
+	hooksMu      sync.RWMutex
 	resolveRoute routeResolver
 	exchanger    spaceshipDNS.WireExchanger
 
@@ -130,6 +133,9 @@ func newService(ctx context.Context, cfg Config, device openedDevice, linkErrors
 		udpSlots:     make(chan struct{}, min(cfg.MaxConnections, cfg.DNS.MaxInFlight)),
 		closeDone:    make(chan struct{}),
 		runDone:      make(chan struct{}),
+	}
+	if cfg.ResolveRoute != nil {
+		s.resolveRoute = cfg.ResolveRoute
 	}
 
 	transportProtocols := []stack.TransportProtocolFactory{
@@ -379,6 +385,30 @@ func tryAcquireSlot(slots chan struct{}) bool {
 // releaseSlot returns one unit reserved by tryAcquireSlot.
 func releaseSlot(slots chan struct{}) {
 	<-slots
+}
+
+func (s *Service) getResolveRoute() routeResolver {
+	s.hooksMu.RLock()
+	defer s.hooksMu.RUnlock()
+	return s.resolveRoute
+}
+
+func (s *Service) setResolveRoute(fn routeResolver) {
+	s.hooksMu.Lock()
+	defer s.hooksMu.Unlock()
+	s.resolveRoute = fn
+}
+
+func (s *Service) getExchanger() spaceshipDNS.WireExchanger {
+	s.hooksMu.RLock()
+	defer s.hooksMu.RUnlock()
+	return s.exchanger
+}
+
+func (s *Service) setExchanger(exchanger spaceshipDNS.WireExchanger) {
+	s.hooksMu.Lock()
+	defer s.hooksMu.Unlock()
+	s.exchanger = exchanger
 }
 
 // fairDNSShare returns how many concurrent DNS RPCs one DNS client may hold

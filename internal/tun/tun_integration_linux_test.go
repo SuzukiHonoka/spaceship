@@ -129,6 +129,10 @@ func runKernelTUNIntegrationHelper(t *testing.T) {
 			QueryTimeout:   time.Second,
 			TCPIdleTimeout: 2 * time.Second,
 		},
+		// Set before CreateNIC: packet processors start as soon as New returns.
+		ResolveRoute: func(string) (transport.Transport, error) {
+			return rpcClient.New()
+		},
 	})
 	if err != nil {
 		cancel()
@@ -138,10 +142,6 @@ func runKernelTUNIntegrationHelper(t *testing.T) {
 		cancel()
 		_ = service.Close()
 	})
-
-	service.resolveRoute = func(string) (transport.Transport, error) {
-		return rpcClient.New()
-	}
 
 	runErr := make(chan error, 1)
 	go func() { runErr <- service.Run() }()
