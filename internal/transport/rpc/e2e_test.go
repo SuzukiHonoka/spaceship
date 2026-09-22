@@ -35,7 +35,7 @@ const testUUID = "e2e-test-user"
 // freeLoopbackAddr reserves a loopback port and releases it. ListenAndServe
 // binds the address itself, so there is no way to hand it a listener; the small
 // reuse window is acceptable for a test.
-func freeLoopbackAddr(t *testing.T) string {
+func freeLoopbackAddr(t testing.TB) string {
 	t.Helper()
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -49,12 +49,12 @@ func freeLoopbackAddr(t *testing.T) string {
 }
 
 // startProxyServer runs a real gRPC proxy server and returns its address.
-func startProxyServer(t *testing.T) string {
+func startProxyServer(t testing.TB) string {
 	t.Helper()
 	return startProxyServerWithOptions(t)
 }
 
-func startProxyServerWithOptions(t *testing.T, options ...server.Option) string {
+func startProxyServerWithOptions(t testing.TB, options ...server.Option) string {
 	t.Helper()
 
 	addr := freeLoopbackAddr(t)
@@ -88,7 +88,7 @@ func startProxyServerWithOptions(t *testing.T, options ...server.Option) string 
 	return addr
 }
 
-func waitForListener(t *testing.T, addr string) {
+func waitForListener(t testing.TB, addr string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
@@ -103,12 +103,12 @@ func waitForListener(t *testing.T, addr string) {
 }
 
 // connectClient initializes the client connection pool against addr.
-func connectClient(t *testing.T, addr string) {
+func connectClient(t testing.TB, addr string) {
 	t.Helper()
 	connectClientWithMux(t, addr, 1)
 }
 
-func connectClientWithMux(t *testing.T, addr string, mux uint8) {
+func connectClientWithMux(t testing.TB, addr string, mux uint8) {
 	t.Helper()
 	client.SetUUID(testUUID)
 	if err := client.Init(addr, "", false, mux, nil); err != nil {
@@ -119,7 +119,7 @@ func connectClientWithMux(t *testing.T, addr string, mux uint8) {
 
 // routeAllDirect makes the server dial targets itself, which is what a real
 // deployment does for the far end of the tunnel.
-func routeAllDirect(t *testing.T) {
+func routeAllDirect(t testing.TB) {
 	t.Helper()
 	if err := router.SetRoutes(router.Routes{
 		{MatchType: router.TypeDefault, Destination: router.EgressDirect},

@@ -72,8 +72,6 @@ func NewForwarder(ctx context.Context, cancel context.CancelFunc, s proxy.Proxy_
 }
 
 func (f *Forwarder) copySRCtoTarget(buf []byte, srcData *proxy.ProxySRC, payload *proxy.ProxySRC_Payload) error {
-	//log.Println("rpc client reading...")
-	//read from src
 	n, err := f.reader.Read(buf)
 	if err != nil {
 		return err
@@ -82,27 +80,25 @@ func (f *Forwarder) copySRCtoTarget(buf []byte, srcData *proxy.ProxySRC, payload
 		return transport.ErrInvalidPayload
 	}
 
-	//fmt.Printf("<----- packet size: %d\n%s\n", n, buf)
-	// send to rpc
 	payload.Payload = buf[:n]
-
 	if err = f.stream.Send(srcData); err != nil {
 		return err
 	}
 
 	f.addTx(n)
 	return nil
-	//log.Println("rpc client msg forwarded")
 }
 
 func (f *Forwarder) CopyTargetToSRC(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {
-		// reuse buffer
-		dstData := new(proxy.ProxyDST)
+		// Reuse one message for the life of the stream. The proxyCodec hot path
+		// copies payload bytes into the existing ProxyDST_Payload buffer so
+		// steady-state streaming does not allocate per chunk.
+		dstData := &proxy.ProxyDST{
+			HeaderOrPayload: &proxy.ProxyDST_Payload{},
+		}
 		for {
-			// reset for new message
-			dstData.Reset()
 			if err := f.stream.RecvMsg(dstData); err != nil {
 				// gRPC transport breakdown (Unavailable) is a stream
 				// termination, same as EOF — the session is over.
@@ -193,18 +189,14 @@ func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) error {
 func (f *Forwarder) CopySRCtoTarget(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {
-		// buffer
 		buf := transport.Buffer()
 		defer transport.PutBuffer(buf)
 
-		// reuse buffer
 		srcData := &proxy.ProxySRC{
 			HeaderOrPayload: &proxy.ProxySRC_Payload{
 				Payload: nil,
 			},
 		}
-
-		// wrapper
 		payload := srcData.HeaderOrPayload.(*proxy.ProxySRC_Payload)
 
 		b := *buf

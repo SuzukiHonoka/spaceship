@@ -35,10 +35,18 @@ const (
 	// a message within MaxMessageSize.
 	MaxTransportBufferSize = MaxMessageSize - MessageFramingOverhead
 
-	// connBufferSize is the per-connection read/write batching buffer. This is
-	// also the gRPC default; it remains explicit so memory sizing does not drift
-	// unnoticed if the upstream default changes.
-	connBufferSize = 32 * 1024
+	// connBufferSize is the per-connection read/write batching buffer. The
+	// gRPC default is 32KiB; a tunnel that moves full transport-buffer chunks
+	// benefits from a larger batch so HTTP/2 DATA frames coalesce into fewer
+	// syscalls on the control connection.
+	connBufferSize = 256 * 1024
+
+	// initialStreamWindow / initialConnWindow raise HTTP/2 flow-control above
+	// the 64KiB spec default so a single in-flight payload chunk (up to the
+	// transport buffer) does not stall waiting for WINDOW_UPDATE on loopback
+	// or LAN links. BDP estimation remains enabled (StaticWindowSize is unset).
+	initialStreamWindow = 1 << 20 // 1 MiB
+	initialConnWindow   = 4 << 20 // 4 MiB
 
 	// keepaliveTime is how often an idle connection is pinged to detect a peer
 	// that vanished without a FIN (NAT rebinding, silent middlebox drop).
@@ -66,10 +74,9 @@ var DefaultCurvePreferences = []tls.CurveID{
 // transport buffer.
 //
 // gRPC's default tiers are 256B/4KB/16KB/32KB/1MB. A payload chunk is a full
-// transport buffer (32KB by default) plus protobuf framing, which lands just
-// past the 32KB tier — so by default every in-flight message would take a 1MB
-// slab. Adding an exact tier keeps those allocations proportional to the
-// payload instead.
+// transport buffer plus protobuf framing; without an exact tier those chunks
+// fall into the next stock size (often the 1MB slab). Adding a tier at
+// GetBufferSize()+overhead keeps allocations proportional to the payload.
 //
 // Must be called after the config has been applied, so that
 // transport.GetBufferSize reflects the configured value.
@@ -128,9 +135,16 @@ func DialOptions() []grpc.DialOption {
 		grpc.WithContextDialer(dialContext),
 		grpc.WithWriteBufferSize(connBufferSize),
 		grpc.WithReadBufferSize(connBufferSize),
+		grpc.WithInitialWindowSize(initialStreamWindow),
+		grpc.WithInitialConnWindowSize(initialConnWindow),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(MaxMessageSize),
 			grpc.MaxCallSendMsgSize(MaxMessageSize),
+			// Force the tunnel-specialized codec on every call. Name() is still
+			// "proto", so the content-type and on-wire framing stay compatible
+			// with stock protobuf peers; only the local encode/decode path
+			// changes.
+			grpc.ForceCodecV2(proxyCodec{}),
 			// WaitForReady is deliberately NOT set. With it, an RPC blocks until
 			// the channel becomes READY, so an unreachable server turns every
 			// proxied request into an indefinite hang instead of a clean error
@@ -162,6 +176,8 @@ func ServerOptions() []grpc.ServerOption {
 	return []grpc.ServerOption{
 		grpc.ReadBufferSize(connBufferSize),
 		grpc.WriteBufferSize(connBufferSize),
+		grpc.InitialWindowSize(initialStreamWindow),
+		grpc.InitialConnWindowSize(initialConnWindow),
 		grpc.MaxRecvMsgSize(MaxMessageSize),
 		grpc.MaxSendMsgSize(MaxMessageSize),
 		grpc.MaxConcurrentStreams(MaxConcurrentStreams),
@@ -175,6 +191,7 @@ func ServerOptions() []grpc.ServerOption {
 			PermitWithoutStream: true,
 		}),
 		grpc.ConnectionTimeout(GeneralTimeout),
+		grpc.ForceServerCodecV2(proxyCodec{}),
 		experimental.BufferPool(payloadBufferPool()),
 		// WaitForHandlers is deliberately NOT set. Signal-driven shutdown calls
 		// Stop so every transport is closed immediately, even if an application

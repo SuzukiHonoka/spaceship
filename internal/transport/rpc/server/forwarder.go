@@ -255,11 +255,14 @@ func (f *Forwarder) CopyClientToTarget(ctx context.Context) error {
 	// loop read client and forward
 	errCh := make(chan error, 1)
 	go func() {
-		// reuse buffer
-		srcData := new(proto.ProxySRC)
+		// Reuse one message for the life of the stream. The proxyCodec hot path
+		// copies payload bytes into the existing ProxySRC_Payload buffer so
+		// steady-state streaming does not allocate per chunk. The first message
+		// on a session is the handshake header (consumed before this loop).
+		srcData := &proto.ProxySRC{
+			HeaderOrPayload: &proto.ProxySRC_Payload{},
+		}
 		for {
-			// reset for new message
-			srcData.Reset()
 			if err := f.Stream.RecvMsg(srcData); err != nil {
 				errCh <- err
 				return

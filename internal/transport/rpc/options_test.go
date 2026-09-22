@@ -11,9 +11,9 @@ import (
 // payloadBufferPool.
 //
 // gRPC's default tiers jump 32KB → 1MB. A payload chunk is a full transport
-// buffer plus protobuf framing, which lands just past 32KB, so with the default
-// pool every in-flight message would take a 1MB slab. The pool must instead hand
-// back a buffer proportional to the payload.
+// buffer plus protobuf framing. Without an exact tier, chunks that land just
+// past 32KB (or any other stock tier) would take a 1MB slab. The pool must
+// instead hand back a buffer proportional to the payload.
 func TestPayloadBufferPoolSizesTierToBuffer(t *testing.T) {
 	oldBuffer := transport.GetBufferSize()
 	t.Cleanup(func() { transport.SetBufferSize(uint16(oldBuffer / 1024)) })
