@@ -216,12 +216,6 @@ func (c *MixedConfig) Apply() error {
 	// or reported, while a merely defaulted one yields to TUN's authoritative
 	// mark instead of contradicting a setting the operator never wrote.
 	redirectMarkExplicit := false
-	if c.ListenRedirect != "" && redirect.Supported() {
-		// Default the mark only where the listener can actually run. Installing
-		// one that this platform cannot apply would break every outbound dial in
-		// the process, for a listener that startup rejects anyway.
-		redirectBypassMark = transport.DefaultBypassMark
-	}
 	if c.Redirect != nil {
 		// Settings that silently do nothing are a configuration trap: reject the
 		// section outright rather than let bypass_mark or max_connections look
@@ -237,6 +231,17 @@ func (c *MixedConfig) Apply() error {
 			redirectMarkExplicit = true
 			redirectMarkRequired = redirectBypassMark != 0
 		}
+	}
+	// Mirror TUN: refuse an unsupported listener before installing process-wide
+	// socket policy. Otherwise Apply can leave an explicit bypass_mark that
+	// every dialer rejects on this platform, and Launch's ErrUnsupported path
+	// used to return before VerifyBypassMark cleared it.
+	if c.ListenRedirect != "" && !redirect.Supported() {
+		return redirect.ErrUnsupported
+	}
+	if c.ListenRedirect != "" && !redirectMarkExplicit {
+		// Default the mark only where the listener can actually run.
+		redirectBypassMark = transport.DefaultBypassMark
 	}
 	c.redirectMarkRequired = redirectMarkRequired
 

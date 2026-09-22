@@ -97,7 +97,10 @@ func TestApplyRejectsOutOfRangeRedirectLimit(t *testing.T) {
 		})
 	}
 
-	// The boundary itself stays valid.
+	// The boundary itself stays valid where the listener can run.
+	if !redirect.Supported() {
+		return
+	}
 	cfg, err := NewFromString(fmt.Sprintf(`{
 		"role":"client",
 		"log":"skip",
@@ -118,6 +121,9 @@ func TestApplyRejectsOutOfRangeRedirectLimit(t *testing.T) {
 // socket, so a missing capability surfaces there as a lookup failure. Apply
 // must attribute that to the mark instead of blaming the resolver.
 func TestApply_AttributesResolverFailureToUnusableBypassMark(t *testing.T) {
+	if !redirect.Supported() {
+		t.Skip("transparent redirect is Linux-only")
+	}
 	oldMark := transport.BypassMark()
 	oldResolver := transport.OutboundResolver()
 	t.Cleanup(func() {
@@ -185,6 +191,9 @@ func TestApplyRejectsRedirectSectionWithoutListener(t *testing.T) {
 }
 
 func TestApply_RedirectBypassMarkLifecycle(t *testing.T) {
+	if !redirect.Supported() {
+		t.Skip("transparent redirect is Linux-only")
+	}
 	oldMark := transport.BypassMark()
 	oldResolver := transport.OutboundResolver()
 	t.Cleanup(func() {
@@ -223,12 +232,9 @@ func TestApply_RedirectBypassMarkLifecycle(t *testing.T) {
 	}
 	switch got := transport.BypassMark(); got {
 	case transport.DefaultBypassMark:
-		if !redirect.Supported() {
-			t.Fatalf("marked egress for a listener this platform cannot run")
-		}
 	case 0:
-		// Either the platform cannot run the listener, or it cannot set SO_MARK.
-		if redirect.Supported() && transport.VerifyBypassMarkValue(transport.DefaultBypassMark) == nil {
+		// The platform cannot set SO_MARK in this process.
+		if transport.VerifyBypassMarkValue(transport.DefaultBypassMark) == nil {
 			t.Fatal("dropped a usable default mark on a supported platform")
 		}
 	default:
@@ -274,6 +280,38 @@ func TestApply_RedirectBypassMarkLifecycle(t *testing.T) {
 	}
 }
 
+// Apply must refuse listen_redirect on platforms that cannot run it, before any
+// process-wide bypass mark is installed — the same contract as tun.
+func TestApply_RejectsRedirectOnUnsupportedPlatform(t *testing.T) {
+	if redirect.Supported() {
+		t.Skip("platform supports transparent redirect")
+	}
+	oldMark := transport.BypassMark()
+	t.Cleanup(func() {
+		transport.SetBypassMark(oldMark)
+		transport.EnableIPv6()
+	})
+	transport.SetBypassMark(0)
+
+	cfg, err := NewFromString(`{
+		"role":"client",
+		"log":"skip",
+		"uuid":"00000000-0000-0000-0000-000000000001",
+		"ipv6":true,
+		"listen_redirect":"0.0.0.0:12345",
+		"redirect":{"bypass_mark":21328}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Apply(); !errors.Is(err, redirect.ErrUnsupported) {
+		t.Fatalf("Apply() error = %v, want ErrUnsupported", err)
+	}
+	if got := transport.BypassMark(); got != 0 {
+		t.Fatalf("rejected redirect config still marked egress: BypassMark() = %#x", got)
+	}
+}
+
 // The bypass mark is process-global, so a server config carrying a redirect
 // listener must not be able to mark server egress for a listener that never
 // starts. launchServer ignores listen_redirect entirely, so reject it outright.
@@ -308,6 +346,9 @@ func TestApply_RejectsRedirectListenerOnServerRole(t *testing.T) {
 // A rejected reload must leave the live outbound mark untouched, exactly as it
 // does for the TUN path.
 func TestApply_RestoresRedirectBypassMarkAfterLaterFailure(t *testing.T) {
+	if !redirect.Supported() {
+		t.Skip("transparent redirect is Linux-only")
+	}
 	oldMark := transport.BypassMark()
 	oldResolver := transport.OutboundResolver()
 	t.Cleanup(func() {
@@ -475,6 +516,9 @@ func TestApply_RedirectBypassMarkZeroConflictsWithTUN(t *testing.T) {
 // Without TUN there is nothing to disagree with, so an explicit 0 simply
 // disables marking rather than being rejected.
 func TestApply_RedirectBypassMarkZeroWithoutTUNIsAccepted(t *testing.T) {
+	if !redirect.Supported() {
+		t.Skip("transparent redirect is Linux-only")
+	}
 	oldMark := transport.BypassMark()
 	t.Cleanup(func() {
 		transport.SetBypassMark(oldMark)

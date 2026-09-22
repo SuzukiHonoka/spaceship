@@ -14,9 +14,26 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"github.com/miekg/dns"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
 )
+
+// handleUDPDNSPacket admits destination port 53 into the DNS hijack path.
+// Non-DNS UDP is dropped without cloning so promiscuous capture cannot leak
+// PacketBuffers for QUIC, scans, or other UDP through the TUN.
+func (s *Service) handleUDPDNSPacket(id stack.TransportEndpointID, pkt *stack.PacketBuffer) bool {
+	if id.LocalPort != 53 || !s.cfg.DNS.Enabled || pkt == nil {
+		return false
+	}
+	cloned := pkt.Clone()
+	handled := s.handleUDPRequest(udp.NewForwarderRequest(s.stack, id, cloned))
+	// CreateEndpoint clones again into the endpoint receive queue and never
+	// takes ownership of the ForwarderRequest packet; rejected paths never
+	// touch it. Release our clone in both cases.
+	cloned.DecRef()
+	return handled
+}
 
 func (s *Service) handleUDPRequest(request *udp.ForwarderRequest) bool {
 	if request == nil || request.ID().LocalPort != 53 || !s.cfg.DNS.Enabled {
@@ -49,6 +66,11 @@ func (s *Service) handleUDPRequest(request *udp.ForwarderRequest) bool {
 }
 
 func (s *Service) serveUDPDNS(conn net.Conn) {
+	// Counted with TCP DNS clients so UDP sessions shrink every client's fair
+	// share of the shared pool instead of monopolising it unseen.
+	s.dnsClients.Add(1)
+	defer s.dnsClients.Add(-1)
+
 	buffer := make([]byte, dnswire.MaxMessageSize)
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(DefaultDNSUDPIdleTimeout))
@@ -82,9 +104,9 @@ func (s *Service) serveTCPDNS(conn net.Conn) {
 	defer cancel()
 
 	// Counted for the whole session so the DNS pool is divided between the
-	// connections actually contending for it.
-	s.dnsConnections.Add(1)
-	defer s.dnsConnections.Add(-1)
+	// clients actually contending for it (TCP connections and UDP sessions).
+	s.dnsClients.Add(1)
+	defer s.dnsClients.Add(-1)
 
 	var (
 		pending   sync.WaitGroup
@@ -115,11 +137,13 @@ func (s *Service) serveTCPDNS(conn net.Conn) {
 	// — that would stall this reader on other connections' work — so a genuinely
 	// exhausted pool still answers SERVFAIL.
 	acquireExchange := func() (acquired, aborted bool) {
-		// The ceiling moves as connections come and go, and rises when one
-		// leaves, so the wait re-evaluates it rather than parking on the channel.
-		// The poll interval is irrelevant beside a network round trip and only
-		// applies while this connection is already at its ceiling.
+		// The ceiling moves as clients come and go, and rises when one leaves,
+		// so the wait re-evaluates it rather than parking on the channel. A
+		// single timer is reset across iterations so a connection parked at its
+		// ceiling does not allocate a fresh timer every few milliseconds.
 		const reevaluate = 5 * time.Millisecond
+		timer := time.NewTimer(reevaluate)
+		defer timer.Stop()
 		reserve := func() bool {
 			return len(connectionSlots) < s.fairDNSShare(perConnection) &&
 				tryAcquireSlot(connectionSlots)
@@ -128,7 +152,8 @@ func (s *Service) serveTCPDNS(conn net.Conn) {
 			select {
 			case <-connectionCtx.Done():
 				return false, true
-			case <-time.After(reevaluate):
+			case <-timer.C:
+				timer.Reset(reevaluate)
 			}
 		}
 		if !s.acquireDNS() {

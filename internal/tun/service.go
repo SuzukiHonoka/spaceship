@@ -56,9 +56,10 @@ type Service struct {
 	flowSlots chan struct{}
 	dnsSlots  chan struct{}
 	udpSlots  chan struct{}
-	// dnsConnections counts live DNS-over-TCP connections so the DNS pool can
-	// be shared fairly between them. See fairDNSShare.
-	dnsConnections atomic.Int64
+	// dnsClients counts live DNS-over-TCP connections and DNS-over-UDP
+	// sessions so the DNS pool can be shared fairly between them. See
+	// fairDNSShare.
+	dnsClients atomic.Int64
 
 	closeOnce sync.Once
 	closeDone chan struct{}
@@ -166,8 +167,13 @@ func newService(ctx context.Context, cfg Config, device openedDevice, linkErrors
 	netstack.SetTransportProtocolHandler(icmp.ProtocolNumber6, dropICMP)
 
 	if cfg.DNS.Enabled {
-		udpForwarder := udp.NewForwarder(netstack, s.handleUDPRequest)
-		netstack.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
+		// Do not use udp.Forwarder.HandlePacket as the protocol handler: it
+		// clones every datagram before the callback runs, and a false return
+		// (non-53 traffic, overload) never DecRefs that clone. Own the clone
+		// here so rejected packets and CreateEndpoint's internal re-clone both
+		// release cleanly. CreateEndpoint feeds the receive queue via Clone and
+		// does not take ownership of the ForwarderRequest packet.
+		netstack.SetTransportProtocolHandler(udp.ProtocolNumber, s.handleUDPDNSPacket)
 	}
 
 	s.nicID = netstack.NextNICID()
@@ -375,18 +381,19 @@ func releaseSlot(slots chan struct{}) {
 	<-slots
 }
 
-// fairDNSShare returns how many concurrent DNS RPCs one DNS-over-TCP
-// connection may hold right now, given ceiling as its static upper bound.
+// fairDNSShare returns how many concurrent DNS RPCs one DNS client may hold
+// right now, given ceiling as its static upper bound. Clients are DNS-over-TCP
+// connections and DNS-over-UDP sessions counted in dnsClients.
 //
-// A static ceiling alone bounds any single connection but reserves nothing: a
-// few busy connections can still fill the pool between them and leave a new
-// connection with no capacity. Dividing the pool by the number of active
-// connections gives every one of them at least one slot while there are no
-// more connections than slots, so none is starved. A connection already
-// holding more than its current share simply stops acquiring; its in-flight
-// queries drain within QueryTimeout, so the pool converges without revocation.
+// A static ceiling alone bounds any single client but reserves nothing: a few
+// busy TCP connections can still fill the pool between them and leave a new
+// client with no capacity. Dividing the pool by the number of active clients
+// gives every one of them at least one slot while there are no more clients
+// than slots, so none is starved. A client already holding more than its
+// current share simply stops acquiring; its in-flight queries drain within
+// QueryTimeout, so the pool converges without revocation.
 func (s *Service) fairDNSShare(ceiling int) int {
-	active := max(s.dnsConnections.Load(), 1)
+	active := max(s.dnsClients.Load(), 1)
 	share := int64(cap(s.dnsSlots)) / active
 	return max(1, min(ceiling, int(share)))
 }

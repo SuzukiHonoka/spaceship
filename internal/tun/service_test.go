@@ -1331,8 +1331,8 @@ func TestServeTCPDNSBackpressureUnblocksOnShutdown(t *testing.T) {
 	close(blocked)
 }
 
-// fairDNSShare divides the pool between the connections contending for it, so
-// no connection can claim capacity that would leave another with none.
+// fairDNSShare divides the pool between the DNS clients contending for it, so
+// no client can claim capacity that would leave another with none.
 func TestFairDNSShare(t *testing.T) {
 	s := &Service{dnsSlots: make(chan struct{}, 8)}
 	for _, tc := range []struct {
@@ -1350,7 +1350,7 @@ func TestFairDNSShare(t *testing.T) {
 		{"ceilingStillApplies", 2, 3, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s.dnsConnections.Store(tc.active)
+			s.dnsClients.Store(tc.active)
 			if got := s.fairDNSShare(tc.ceiling); got != tc.want {
 				t.Fatalf("fairDNSShare(%d) with %d active = %d, want %d",
 					tc.ceiling, tc.active, got, tc.want)
@@ -1434,10 +1434,10 @@ func TestServeTCPDNSFairShareBoundsConcurrentConnections(t *testing.T) {
 		}
 	}()
 	deadline := time.Now().Add(3 * time.Second)
-	for service.dnsConnections.Load() < connections && time.Now().Before(deadline) {
+	for service.dnsClients.Load() < connections && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if got := service.dnsConnections.Load(); got != connections {
+	if got := service.dnsClients.Load(); got != connections {
 		t.Fatalf("only %d of %d connections registered", got, connections)
 	}
 

@@ -171,16 +171,23 @@ func TestLaunchRejectsRedirectOnUnsupportedPlatform(t *testing.T) {
 	if redirect.Supported() {
 		t.Skip("platform supports transparent redirect")
 	}
-	t.Cleanup(transport.EnableIPv6)
+	oldMark := transport.BypassMark()
+	t.Cleanup(func() {
+		transport.SetBypassMark(oldMark)
+		transport.EnableIPv6()
+	})
+	transport.SetBypassMark(0)
 
 	launcher := NewLauncher()
 	launcher.SkipInternalLogging()
+	requiredMark := uint32(21328)
 	cfg := &config.MixedConfig{
 		Role: config.RoleClient,
 		Client: &client.Client{
 			ServerAddr:     "127.0.0.1:1",
 			UUID:           testUserUUID,
 			ListenRedirect: "127.0.0.1:12345",
+			Redirect:       &client.Redirect{BypassMark: &requiredMark},
 			Mux:            1,
 		},
 		Server: &server.Server{},
@@ -189,6 +196,9 @@ func TestLaunchRejectsRedirectOnUnsupportedPlatform(t *testing.T) {
 	err := launcher.Launch(cfg)
 	if !errors.Is(err, redirect.ErrUnsupported) {
 		t.Fatalf("Launch() error = %v, want ErrUnsupported", err)
+	}
+	if got := transport.BypassMark(); got != 0 {
+		t.Fatalf("unsupported redirect Launch left BypassMark %#x installed", got)
 	}
 }
 

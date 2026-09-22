@@ -60,6 +60,7 @@ func (l *Launcher) armForceExit() {
 	// Capture the budget rather than re-reading it when the timer fires: the
 	// setter is exported, so the field may change while the watchdog is armed.
 	timeout := l.forceExitTimeout
+	l.forceExitArmed = true
 	l.forceExitTimer = time.AfterFunc(timeout, func() { l.forceExit(timeout) })
 }
 
@@ -69,6 +70,7 @@ func (l *Launcher) armForceExit() {
 func (l *Launcher) disarmForceExit() {
 	l.forceExitMu.Lock()
 	defer l.forceExitMu.Unlock()
+	l.forceExitArmed = false
 	if l.forceExitTimer != nil {
 		l.forceExitTimer.Stop()
 		l.forceExitTimer = nil
@@ -76,9 +78,23 @@ func (l *Launcher) disarmForceExit() {
 }
 
 func (l *Launcher) forceExit(timeout time.Duration) {
+	l.forceExitMu.Lock()
+	armed := l.forceExitArmed
+	l.forceExitArmed = false
+	l.forceExitTimer = nil
+	hook := l.forceExitHook
+	l.forceExitMu.Unlock()
+	if !armed {
+		// disarmed after the timer had already started this callback.
+		return
+	}
 	log.Printf("shutdown did not finish within %s, forcing exit; goroutine dump follows", timeout)
 	if profile := pprof.Lookup("goroutine"); profile != nil {
 		_ = profile.WriteTo(log.Writer(), 1)
+	}
+	if hook != nil {
+		hook()
+		return
 	}
 	os.Exit(1)
 }

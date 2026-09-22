@@ -32,6 +32,10 @@ type Launcher struct {
 	forceExitTimeout time.Duration
 	forceExitMu      sync.Mutex
 	forceExitTimer   *time.Timer
+	forceExitArmed   bool
+	// forceExitHook, when set, replaces os.Exit in tests so disarm races can
+	// be asserted without killing the test binary.
+	forceExitHook func()
 }
 
 func NewLauncher() *Launcher {

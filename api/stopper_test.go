@@ -172,3 +172,46 @@ func TestForceExitTimeoutIsRaceFree(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+// Timer.Stop does not cancel a callback that has already started. disarm must
+// clear the armed flag so forceExit becomes a no-op instead of os.Exit(1) after
+// a successful Launch return.
+func TestForceExitIgnoresDisarmedWatchdog(t *testing.T) {
+	l := NewLauncher()
+	fired := make(chan struct{}, 1)
+	l.forceExitMu.Lock()
+	l.forceExitHook = func() { fired <- struct{}{} }
+	l.forceExitArmed = true
+	l.forceExitMu.Unlock()
+
+	l.disarmForceExit()
+	l.forceExit(time.Millisecond)
+
+	select {
+	case <-fired:
+		t.Fatal("forceExit ran the exit hook after disarm")
+	default:
+	}
+}
+
+// When the armed flag is still set, forceExit must invoke the hook (or os.Exit
+// in production) rather than returning silently.
+func TestForceExitRunsWhenStillArmed(t *testing.T) {
+	l := NewLauncher()
+	fired := make(chan struct{}, 1)
+	l.forceExitMu.Lock()
+	l.forceExitHook = func() { fired <- struct{}{} }
+	l.forceExitArmed = true
+	l.forceExitMu.Unlock()
+
+	l.forceExit(time.Millisecond)
+
+	select {
+	case <-fired:
+	case <-time.After(time.Second):
+		t.Fatal("forceExit did not run the exit hook while armed")
+	}
+	if armedForceExitTimer(l) {
+		t.Fatal("forceExit left the timer field set")
+	}
+}

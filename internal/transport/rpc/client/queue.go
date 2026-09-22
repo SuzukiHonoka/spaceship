@@ -102,14 +102,15 @@ func (q *ConnQueue) Destroy() {
 // GetConnOutSide gets a connection outside the pool
 func (q *ConnQueue) GetConnOutSide() (*ConnWrapper, func() error, error) {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	if q.shutdown {
+		q.mu.Unlock()
 		return nil, nil, fmt.Errorf("connection queue is shutdown")
 	}
-	return q.getConnOutsideLocked()
+	q.mu.Unlock()
+	return q.dialOutside()
 }
 
-func (q *ConnQueue) getConnOutsideLocked() (*ConnWrapper, func() error, error) {
+func (q *ConnQueue) dialOutside() (*ConnWrapper, func() error, error) {
 	conn, err := q.Dial()
 	if err != nil {
 		return nil, nil, err
@@ -119,30 +120,48 @@ func (q *ConnQueue) getConnOutsideLocked() (*ConnWrapper, func() error, error) {
 
 // GetConn gets a grpc connection from the pool, also moves the cursor
 func (q *ConnQueue) GetConn() (*ConnWrapper, func() error, error) {
-	// Selection and load reservation must be one exclusive operation. With a
-	// shared read lock (or a reservation after unlocking), a burst of callers
-	// can all observe the same least-loaded connection and exceed its HTTP/2
-	// stream limit while the rest of the pool remains idle.
+	// Selection and load reservation must be exclusive, but NewClient/Connect
+	// must not run under q.mu: unpooled dials and elastic growth would otherwise
+	// serialise every checkout behind control-plane setup.
 	q.mu.Lock()
 	if q.shutdown {
 		q.mu.Unlock()
 		return nil, nil, fmt.Errorf("connection queue is shutdown")
 	}
 	if q.Size == 0 {
-		conn, done, err := q.getConnOutsideLocked()
 		q.mu.Unlock()
-		return conn, done, err
+		return q.dialOutside()
 	}
 
 	el := q.Conn.PickLeastLoaded()
 	if el == nil {
-		var err error
-		el, err = q.replaceFirstShutdownLocked()
-		if err != nil {
+		replaceIndex, replaceID := q.firstShutdownIndexLocked()
+		if replaceIndex < 0 {
 			q.mu.Unlock()
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("no available connections in pool")
+		}
+		q.mu.Unlock()
+		replacement, err := q.Dial()
+		if err != nil {
+			return nil, nil, fmt.Errorf("replace unavailable connection %d: %w", replaceID, err)
+		}
+		q.mu.Lock()
+		if q.shutdown {
+			q.mu.Unlock()
+			utils.Close(replacement)
+			return nil, nil, fmt.Errorf("connection queue is shutdown")
+		}
+		el = q.installReplacementLocked(replaceIndex, replaceID, replacement)
+		if el == nil {
+			// Another goroutine repaired the slot; prefer any live wrapper.
+			el = q.Conn.PickLeastLoaded()
+			if el == nil {
+				q.mu.Unlock()
+				return nil, nil, fmt.Errorf("no available connections in pool")
+			}
 		}
 	}
+
 	if el.GetCurrentLoad() >= q.streamLimit() {
 		if len(q.Conn) >= q.persistentLimit() {
 			q.mu.Unlock()
@@ -152,13 +171,37 @@ func (q *ConnQueue) GetConn() (*ConnWrapper, func() error, error) {
 				q.streamLimit(),
 			)
 		}
-		var err error
-		el, err = q.dialPersistentLocked()
+		q.mu.Unlock()
+		grown, err := q.Dial()
 		if err != nil {
-			q.mu.Unlock()
 			return nil, nil, fmt.Errorf("grow connection pool: %w", err)
 		}
+		q.mu.Lock()
+		if q.shutdown {
+			q.mu.Unlock()
+			utils.Close(grown)
+			return nil, nil, fmt.Errorf("connection queue is shutdown")
+		}
+		if existing := q.Conn.PickLeastLoaded(); existing != nil &&
+			existing.GetCurrentLoad() < q.streamLimit() {
+			// Capacity freed or another grower landed while we dialled.
+			utils.Close(grown)
+			el = existing
+		} else if len(q.Conn) >= q.persistentLimit() {
+			q.mu.Unlock()
+			utils.Close(grown)
+			return nil, nil, fmt.Errorf(
+				"connection pool capacity exhausted: %d connections at %d streams each",
+				len(q.Conn),
+				q.streamLimit(),
+			)
+		} else {
+			grown.ID = len(q.Conn) + 1
+			q.Conn = append(q.Conn, grown)
+			el = grown
+		}
 	}
+
 	el.Use()
 	q.mu.Unlock()
 
@@ -215,40 +258,45 @@ func (q *ConnQueue) persistentLimit() int {
 	return MaxPersistentConnections
 }
 
-// dialPersistentLocked adds one live wrapper to an elastic persistent queue.
-// q.mu must be held by the caller.
-func (q *ConnQueue) dialPersistentLocked() (*ConnWrapper, error) {
-	conn, err := q.Dial()
-	if err != nil {
-		return nil, err
-	}
-	conn.ID = len(q.Conn) + 1
-	q.Conn = append(q.Conn, conn)
-	return conn, nil
-}
-
-// replaceFirstShutdownLocked synchronously repairs a pool whose every wrapper
-// is permanently closed. q.mu must be held by the caller.
-func (q *ConnQueue) replaceFirstShutdownLocked() (*ConnWrapper, error) {
+// firstShutdownIndexLocked finds a permanently closed pool slot to repair.
+// q.mu must be held by the caller. replaceID is the 1-based connection ID.
+func (q *ConnQueue) firstShutdownIndexLocked() (index int, replaceID int) {
 	for index, old := range q.Conn {
 		if old != nil && old.getState() != connectivity.Shutdown {
 			continue
 		}
-		replacement, err := q.Dial()
-		if err != nil {
-			return nil, fmt.Errorf("replace unavailable connection %d: %w", index+1, err)
-		}
-		replacement.ID = index + 1
+		replaceID = index + 1
 		if old != nil && old.ID > 0 {
-			replacement.ID = old.ID
+			replaceID = old.ID
 		}
-		q.Conn[index] = replacement
-		if old != nil {
-			utils.Close(old)
-		}
-		return replacement, nil
+		return index, replaceID
 	}
-	return nil, fmt.Errorf("no available connections in pool")
+	return -1, 0
+}
+
+// installReplacementLocked places a dialled wrapper into a shutdown slot when
+// that slot still needs repair. Returns the live wrapper to use, which may be
+// an existing one if another goroutine won the race. q.mu must be held.
+func (q *ConnQueue) installReplacementLocked(
+	index int,
+	replaceID int,
+	replacement *ConnWrapper,
+) *ConnWrapper {
+	if index < 0 || index >= len(q.Conn) {
+		utils.Close(replacement)
+		return nil
+	}
+	old := q.Conn[index]
+	if old != nil && old.getState() != connectivity.Shutdown {
+		utils.Close(replacement)
+		return old
+	}
+	replacement.ID = replaceID
+	q.Conn[index] = replacement
+	if old != nil {
+		utils.Close(old)
+	}
+	return replacement
 }
 
 // GetClient gets a grpc client from connection
