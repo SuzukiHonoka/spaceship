@@ -71,21 +71,30 @@ func NewForwarder(ctx context.Context, cancel context.CancelFunc, s proxy.Proxy_
 	}
 }
 
-func (f *Forwarder) copySRCtoTarget(buf []byte, srcData *proxy.ProxySRC, payload *proxy.ProxySRC_Payload) error {
-	n, err := f.reader.Read(buf)
+func (f *Forwarder) copySRCtoTarget(srcData *proxy.ProxySRC, payload *proxy.ProxySRC_Payload) error {
+	pool := rpc.BufferPool()
+	buf, read := rpc.AcquirePayloadBuffer(pool, transport.GetBufferSize())
+	n, err := f.reader.Read(read)
+	if n <= 0 {
+		pool.Put(buf)
+		if err != nil {
+			return err
+		}
+		return transport.ErrInvalidPayload
+	}
+	payload.Payload = read[:n]
+	rpc.OfferPayloadBuffer(srcData, buf, n, pool)
+	if sendErr := f.stream.Send(srcData); sendErr != nil {
+		rpc.DiscardPayloadBuffer(srcData)
+		payload.Payload = nil
+		return sendErr
+	}
+	payload.Payload = nil
+
+	f.addTx(n)
 	if err != nil {
 		return err
 	}
-	if n <= 0 {
-		return transport.ErrInvalidPayload
-	}
-
-	payload.Payload = buf[:n]
-	if err = f.stream.Send(srcData); err != nil {
-		return err
-	}
-
-	f.addTx(n)
 	return nil
 }
 
@@ -93,11 +102,12 @@ func (f *Forwarder) CopyTargetToSRC(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {
 		// Reuse one message for the life of the stream. The proxyCodec hot path
-		// copies payload bytes into the existing ProxyDST_Payload buffer so
-		// steady-state streaming does not allocate per chunk.
+		// retains a refcounted view into the receive buffer so steady-state
+		// streaming does not allocate/copy per chunk.
 		dstData := &proxy.ProxyDST{
 			HeaderOrPayload: &proxy.ProxyDST_Payload{},
 		}
+		defer rpc.ReleaseMessageBuffers(dstData)
 		for {
 			if err := f.stream.RecvMsg(dstData); err != nil {
 				// gRPC transport breakdown (Unavailable) is a stream
@@ -189,9 +199,6 @@ func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) error {
 func (f *Forwarder) CopySRCtoTarget(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {
-		buf := transport.Buffer()
-		defer transport.PutBuffer(buf)
-
 		srcData := &proxy.ProxySRC{
 			HeaderOrPayload: &proxy.ProxySRC_Payload{
 				Payload: nil,
@@ -199,9 +206,10 @@ func (f *Forwarder) CopySRCtoTarget(ctx context.Context) error {
 		}
 		payload := srcData.HeaderOrPayload.(*proxy.ProxySRC_Payload)
 
-		b := *buf
+		defer rpc.ReleaseMessageBuffers(srcData)
+
 		for {
-			if err := f.copySRCtoTarget(b, srcData, payload); err != nil {
+			if err := f.copySRCtoTarget(srcData, payload); err != nil {
 				errCh <- err
 				return
 			}

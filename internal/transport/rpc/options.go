@@ -7,6 +7,7 @@ import (
 	"net"
 	"runtime"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
@@ -39,14 +40,14 @@ const (
 	// gRPC default is 32KiB; a tunnel that moves full transport-buffer chunks
 	// benefits from a larger batch so HTTP/2 DATA frames coalesce into fewer
 	// syscalls on the control connection.
-	connBufferSize = 256 * 1024
+	connBufferSize = 512 * 1024
 
 	// initialStreamWindow / initialConnWindow raise HTTP/2 flow-control above
-	// the 64KiB spec default so a single in-flight payload chunk (up to the
-	// transport buffer) does not stall waiting for WINDOW_UPDATE on loopback
+	// the 64KiB spec default so several in-flight payload chunks (up to the
+	// transport buffer) do not stall waiting for WINDOW_UPDATE on loopback
 	// or LAN links. BDP estimation remains enabled (StaticWindowSize is unset).
-	initialStreamWindow = 1 << 20 // 1 MiB
-	initialConnWindow   = 4 << 20 // 4 MiB
+	initialStreamWindow = 4 << 20 // 4 MiB
+	initialConnWindow   = 16 << 20 // 16 MiB
 
 	// keepaliveTime is how often an idle connection is pinged to detect a peer
 	// that vanished without a FIN (NAT rebinding, silent middlebox drop).
@@ -79,12 +80,35 @@ var DefaultCurvePreferences = []tls.CurveID{
 // GetBufferSize()+overhead keeps allocations proportional to the payload.
 //
 // Must be called after the config has been applied, so that
-// transport.GetBufferSize reflects the configured value.
+// transport.GetBufferSize reflects the configured value. The returned pool is
+// also stored for BufferPool() so forwarders/codec share the same tiers without
+// racing on experimental.SetDefaultBufferPool (unsafe under parallel Dial/Serve).
 func payloadBufferPool() mem.BufferPool {
 	sizes := []int{256, 4 * 1024, 16 * 1024, 32 * 1024, 1024 * 1024}
-	sizes = append(sizes, transport.GetBufferSize()+MessageFramingOverhead)
+	// Exact tiers for a raw transport-buffer read (with in-place protobuf
+	// header reserve) and for a framed payload chunk so neither Get falls
+	// into the 1MB slab.
+	buf := transport.GetBufferSize()
+	sizes = append(sizes, buf, buf+maxProtobufBytesHeader, buf+MessageFramingOverhead)
 	slices.Sort(sizes)
-	return mem.NewTieredBufferPool(slices.Compact(sizes)...)
+	pool := mem.NewTieredBufferPool(slices.Compact(sizes)...)
+	setBufferPool(pool)
+	return pool
+}
+
+var bufferPool atomic.Value // mem.BufferPool
+
+func setBufferPool(pool mem.BufferPool) {
+	bufferPool.Store(pool)
+}
+
+// BufferPool returns the sized tiered pool last installed by DialOptions /
+// ServerOptions, or gRPC's default pool if neither has run yet.
+func BufferPool() mem.BufferPool {
+	if p, ok := bufferPool.Load().(mem.BufferPool); ok && p != nil {
+		return p
+	}
+	return mem.DefaultBufferPool()
 }
 
 // dialContext dials the control connection to the spaceship server.
@@ -126,6 +150,7 @@ func serverKeepaliveParams() keepalive.ServerParameters {
 // to a shared slice risks aliasing its backing array) and so buffer-pool tiers
 // reflect the applied config.
 func DialOptions() []grpc.DialOption {
+	pool := payloadBufferPool()
 	return []grpc.DialOption{
 		grpc.WithKeepaliveParams(clientKeepaliveParams()),
 		grpc.WithConnectParams(grpc.ConnectParams{
@@ -157,7 +182,7 @@ func DialOptions() []grpc.DialOption {
 		// indistinguishable from any other Go gRPC client, whereas advertising
 		// the product name is a gratuitous fingerprint anywhere TLS is
 		// terminated or logged upstream (e.g. an nginx reverse proxy).
-		experimental.WithBufferPool(payloadBufferPool()),
+		experimental.WithBufferPool(pool),
 	}
 }
 
@@ -173,6 +198,7 @@ func streamWorkerCount() uint32 {
 // ServerOptions returns the base server options. See DialOptions for why this
 // is a function.
 func ServerOptions() []grpc.ServerOption {
+	pool := payloadBufferPool()
 	return []grpc.ServerOption{
 		grpc.ReadBufferSize(connBufferSize),
 		grpc.WriteBufferSize(connBufferSize),
@@ -192,7 +218,7 @@ func ServerOptions() []grpc.ServerOption {
 		}),
 		grpc.ConnectionTimeout(GeneralTimeout),
 		grpc.ForceServerCodecV2(proxyCodec{}),
-		experimental.BufferPool(payloadBufferPool()),
+		experimental.BufferPool(pool),
 		// WaitForHandlers is deliberately NOT set. Signal-driven shutdown calls
 		// Stop so every transport is closed immediately, even if an application
 		// handler is still blocked in a cancellation-unaware target dial.

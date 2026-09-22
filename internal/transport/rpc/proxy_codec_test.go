@@ -56,11 +56,12 @@ func TestProxyCodecPayloadWireCompatible(t *testing.T) {
 	}
 }
 
-func TestProxyCodecUnmarshalReusesPayloadBuffer(t *testing.T) {
+func TestProxyCodecUnmarshalZeroCopy(t *testing.T) {
 	var c proxyCodec
 	msg := &proxy.ProxyDST{
 		HeaderOrPayload: &proxy.ProxyDST_Payload{},
 	}
+	defer ReleaseMessageBuffers(msg)
 
 	first := bytes.Repeat([]byte{0x11}, 4096)
 	wire, err := proto.Marshal(&proxy.ProxyDST{
@@ -69,27 +70,62 @@ func TestProxyCodecUnmarshalReusesPayloadBuffer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Unmarshal(mem.BufferSlice{mem.SliceBuffer(wire)}, msg); err != nil {
+	frame := mem.NewBuffer(&wire, nil)
+	if err := c.Unmarshal(mem.BufferSlice{frame}, msg); err != nil {
 		t.Fatal(err)
 	}
-	bufPtr := &msg.GetPayload()[0]
+	frame.Free() // recv() would Free the frame; view must remain valid
+	if !bytes.Equal(msg.GetPayload(), first) {
+		t.Fatal("payload contents not set")
+	}
+	if &msg.GetPayload()[0] == &first[0] {
+		t.Fatal("expected payload to alias the frame buffer, not the proto.Marshal input")
+	}
 
 	second := bytes.Repeat([]byte{0x22}, 4096)
-	wire, err = proto.Marshal(&proxy.ProxyDST{
+	wire2, err := proto.Marshal(&proxy.ProxyDST{
 		HeaderOrPayload: &proxy.ProxyDST_Payload{Payload: second},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Unmarshal(mem.BufferSlice{mem.SliceBuffer(wire)}, msg); err != nil {
+	frame2 := mem.NewBuffer(&wire2, nil)
+	if err := c.Unmarshal(mem.BufferSlice{frame2}, msg); err != nil {
 		t.Fatal(err)
 	}
-	if &msg.GetPayload()[0] != bufPtr {
-		t.Fatal("expected payload backing array to be reused across Unmarshal calls")
-	}
+	frame2.Free()
 	if !bytes.Equal(msg.GetPayload(), second) {
 		t.Fatal("payload contents not updated")
 	}
+}
+
+func TestProxyCodecMarshalAdoptsOfferedBuffer(t *testing.T) {
+	var c proxyCodec
+	pool := mem.DefaultBufferPool()
+	payload := bytes.Repeat([]byte{0xa5}, 8192)
+	buf, read := AcquirePayloadBuffer(pool, len(payload))
+	copy(read, payload)
+
+	src := &proxy.ProxySRC{
+		HeaderOrPayload: &proxy.ProxySRC_Payload{Payload: read[:len(payload)]},
+	}
+	OfferPayloadBuffer(src, buf, len(payload), pool)
+	got, err := c.Marshal(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer got.Free()
+
+	want, err := proto.Marshal(&proxy.ProxySRC{
+		HeaderOrPayload: &proxy.ProxySRC_Payload{Payload: payload},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.Materialize(), want) {
+		t.Fatal("adopted-buffer marshal wire != proto.Marshal")
+	}
+	DiscardPayloadBuffer(src)
 }
 
 func TestProxyCodecStatusOnlyWireCompatible(t *testing.T) {
@@ -131,6 +167,7 @@ func TestProxyCodecHeaderRoundTrip(t *testing.T) {
 	if err := c.Unmarshal(wire, got); err != nil {
 		t.Fatal(err)
 	}
+	defer ReleaseMessageBuffers(got)
 	if got.GetHeader().GetAddr() != "example.com:443" {
 		t.Fatalf("header addr = %q", got.GetHeader().GetAddr())
 	}

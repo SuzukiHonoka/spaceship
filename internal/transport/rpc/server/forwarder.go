@@ -12,6 +12,7 @@ import (
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
 	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	"golang.org/x/sync/errgroup"
 )
@@ -134,24 +135,21 @@ func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 	}()
 	defer close(done)
 
-	var b []byte
+	var udpBuf []byte
 	if isUDPNetwork(f.network) {
 		// A UDP Read returns at most one datagram and silently discards bytes
 		// that do not fit. Use the protocol maximum instead of the tunable TCP
 		// copy buffer so large datagrams are never truncated.
-		b = make([]byte, maxUDPPacketSize)
-	} else {
-		buf := transport.Buffer()
-		defer transport.PutBuffer(buf)
-		b = *buf
+		udpBuf = make([]byte, maxUDPPacketSize)
 	}
 
 	dstData := &proto.ProxyDST{
 		HeaderOrPayload: &proto.ProxyDST_Payload{Payload: nil},
 	}
+	defer rpc.ReleaseMessageBuffers(dstData)
 	payload := dstData.HeaderOrPayload.(*proto.ProxyDST_Payload)
 	for {
-		if err := f.copyTargetToClient(b, dstData, payload); err != nil {
+		if err := f.copyTargetToClient(udpBuf, dstData, payload); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -160,15 +158,33 @@ func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 	}
 }
 
-func (f *Forwarder) copyTargetToClient(buf []byte, dstData *proto.ProxyDST, payload *proto.ProxyDST_Payload) error {
-	n, err := f.Conn.Read(buf)
-	// Per io.Reader contract: process n > 0 bytes before considering error.
-	// Prevents dropping the last chunk when Read returns data + io.EOF.
-	if n > 0 || (n == 0 && err == nil && isUDPNetwork(f.network)) {
-		payload.Payload = buf[:n]
+func (f *Forwarder) copyTargetToClient(udpBuf []byte, dstData *proto.ProxyDST, payload *proto.ProxyDST_Payload) error {
+	if isUDPNetwork(f.network) {
+		n, err := f.Conn.Read(udpBuf)
+		// Per io.Reader contract: process n > 0 bytes before considering error.
+		if n > 0 || (n == 0 && err == nil) {
+			payload.Payload = udpBuf[:n]
+			if sendErr := f.Stream.Send(dstData); sendErr != nil {
+				return sendErr
+			}
+		}
+		return err
+	}
+
+	pool := rpc.BufferPool()
+	buf, read := rpc.AcquirePayloadBuffer(pool, transport.GetBufferSize())
+	n, err := f.Conn.Read(read)
+	if n > 0 {
+		payload.Payload = read[:n]
+		rpc.OfferPayloadBuffer(dstData, buf, n, pool)
 		if sendErr := f.Stream.Send(dstData); sendErr != nil {
+			rpc.DiscardPayloadBuffer(dstData)
+			payload.Payload = nil
 			return sendErr
 		}
+		payload.Payload = nil
+	} else {
+		pool.Put(buf)
 	}
 	return err
 }
@@ -256,12 +272,13 @@ func (f *Forwarder) CopyClientToTarget(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {
 		// Reuse one message for the life of the stream. The proxyCodec hot path
-		// copies payload bytes into the existing ProxySRC_Payload buffer so
-		// steady-state streaming does not allocate per chunk. The first message
-		// on a session is the handshake header (consumed before this loop).
+		// retains a refcounted view into the receive buffer so steady-state
+		// streaming does not allocate/copy per chunk. The first message on a
+		// session is the handshake header (consumed before this loop).
 		srcData := &proto.ProxySRC{
 			HeaderOrPayload: &proto.ProxySRC_Payload{},
 		}
+		defer rpc.ReleaseMessageBuffers(srcData)
 		for {
 			if err := f.Stream.RecvMsg(srcData); err != nil {
 				errCh <- err

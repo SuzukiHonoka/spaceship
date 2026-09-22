@@ -22,10 +22,10 @@ var (
 )
 
 func init() {
-	// BufferSize default: 128KiB. Larger chunks cut gRPC/protobuf framing
+	// BufferSize default: 256KiB. Larger chunks cut gRPC/protobuf framing
 	// overhead on the tunnel path; Direct.Proxy benefits from the same
 	// io.CopyBuffer size. Operators can still override via config "buffer".
-	bufferSize.Store(int64(128 * 1024))
+	bufferSize.Store(int64(256 * 1024))
 	network.Store("tcp")
 	dialTimeout.Store(int64(3 * time.Minute))
 	idleTimeout.Store(int64(30 * time.Minute))
