@@ -35,6 +35,9 @@ func startSpaceship(bin, name, configPath, logDir string, extraArgs ...string) (
 		_ = f.Close()
 		return nil, err
 	}
+	// The child has inherited the descriptors; drop the parent's copy so a long
+	// harness run does not accumulate one open log FD per process started.
+	_ = f.Close()
 	return &proc{name: name, cmd: cmd, log: logPath}, nil
 }
 
@@ -56,6 +59,16 @@ func (p *proc) stop(budget time.Duration) (time.Duration, error) {
 		<-done
 		return time.Since(start), fmt.Errorf("%s did not exit within %s", p.name, budget)
 	}
+}
+
+// shutdown ends a process the way a supervisor would. SIGKILL leaves no chance
+// to run exit handlers — including coverage flushing — so reserve kill() for
+// teardown after a failure has already been recorded.
+func (p *proc) shutdown() {
+	if p == nil || p.cmd == nil || p.cmd.Process == nil {
+		return
+	}
+	_, _ = p.stop(5 * time.Second)
 }
 
 func (p *proc) kill() {

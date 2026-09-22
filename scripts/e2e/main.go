@@ -28,6 +28,7 @@ import (
 
 var (
 	failures int
+	skipped  int
 	results  []string
 )
 
@@ -45,6 +46,16 @@ func check(name string, err error, detail string) {
 	fmt.Printf("  PASS  %s\n", name)
 }
 
+// skip records a check that could not run here — a privileged or
+// platform-specific path — so the summary distinguishes "not exercised" from
+// "passed". Skips never fail the run, but they are counted separately so a CI
+// job that was meant to cover them cannot quietly stop doing so.
+func skip(name, reason string) {
+	skipped++
+	results = append(results, fmt.Sprintf("  SKIP  %s (%s)", name, reason))
+	fmt.Printf("  SKIP  %s (%s)\n", name, reason)
+}
+
 func checkf(name string, err error, format string, args ...any) {
 	if err == nil {
 		results = append(results, fmt.Sprintf("  PASS  %s (%s)", name, fmt.Sprintf(format, args...)))
@@ -58,6 +69,13 @@ func main() {
 	bin := os.Args[1]
 	workDir := os.Args[2]
 
+	if runRedirectChildIfRequested(bin, workDir) {
+		return
+	}
+	if runTUNChildIfRequested(bin, workDir) {
+		return
+	}
+
 	fmt.Println("== spaceship end-to-end ==")
 	fmt.Printf("binary: %s\n\n", bin)
 
@@ -68,6 +86,11 @@ func main() {
 	runSuite(bin, workDir, false)
 	runSuite(bin, workDir, true)
 	runAuthSuite(bin, workDir)
+	runDNSSuite(bin, workDir)
+	runLimitSuite(bin, workDir)
+	runRouteSuite(bin, workDir)
+	runRedirectSuite(bin, workDir)
+	runTUNSuite(bin, workDir)
 	runShutdownSuite(bin, workDir)
 
 	fmt.Println("\n== summary ==")
@@ -77,6 +100,10 @@ func main() {
 	if failures > 0 {
 		fmt.Printf("\n%d FAILURE(S)\n", failures)
 		os.Exit(1)
+	}
+	if skipped > 0 {
+		fmt.Printf("\nall %d checks passed (%d skipped)\n", len(results)-skipped, skipped)
+		return
 	}
 	fmt.Printf("\nall %d checks passed\n", len(results))
 }
@@ -93,10 +120,10 @@ type stack struct {
 
 func (s *stack) teardown() {
 	if s.client != nil {
-		s.client.kill()
+		s.client.shutdown()
 	}
 	if s.server != nil {
-		s.server.kill()
+		s.server.shutdown()
 	}
 	for _, f := range s.closes {
 		f()

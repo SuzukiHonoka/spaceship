@@ -24,12 +24,35 @@ go build -o /tmp/spaceship ./cmd/spaceship && go run ./scripts/e2e /tmp/spaceshi
 Arguments are the binary under test and a scratch directory for configs, keys,
 and per-process logs. Exit status is non-zero if any check fails.
 
+Privileged Linux checks (transparent redirect, TUN device lifecycle) need root,
+`unshare`, `ip`, `iptables`, and `/dev/net/tun`. Without them the harness
+records `SKIP` rather than failing, so a Darwin or unprivileged run still
+covers the portable suites. A full Linux pass under Docker looks like:
+
+```bash
+docker run --rm --privileged --device /dev/net/tun \
+  -v "$PWD:/src:ro" -w /src golang:1.27-alpine \
+  sh -ec 'apk add --no-cache git gcc musl-dev iproute2 iptables util-linux >/dev/null
+    go build -o /tmp/spaceship ./cmd/spaceship
+    mkdir -p /tmp/spaceship-e2e
+    go run ./scripts/e2e /tmp/spaceship /tmp/spaceship-e2e'
+```
+
 Coverage:
 
 - h2c and TLS tunnels: 4 MiB SOCKS5 round trip verified by SHA-256, 40
   concurrent tunnels, HTTP `CONNECT`, absolute-form HTTP GET, SOCKS5 UDP
   associate.
 - `basic_auth` accepted and rejected.
+- DNS front end: client `listen_dns` through the authenticated DnsExchange RPC
+  to the server's configured upstream resolver.
+- Server `proxy_sessions.max_concurrent` refuses work beyond the ceiling and
+  recovers capacity when sessions end.
+- Route `block` egress refuses a matching destination.
+- Linux transparent REDIRECT: netfilter capture in a disposable netns, original
+  destination recovery, and bypass-mark loop protection.
+- Linux TUN: config creates a real interface with the configured MTU; SIGTERM
+  removes it.
 - Shutdown under load: 40 established sessions plus a peer frozen with SIGSTOP
   mid-session, then SIGTERM. Both processes must exit within 2s. This is the
   regression that shipped in v2.1.7, where the server called grpc `GracefulStop`

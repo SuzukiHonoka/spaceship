@@ -6,5 +6,7 @@ vendor
 build
 # compiled root binary (cmd/spaceship output); anchored so cmd/spaceship/ stays tracked
 /spaceship
+# local build of the developer e2e harness
+/e2e
 # macOS finder metadata
 .DS_Store
