@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -92,6 +93,80 @@ func BenchmarkEndToEnd_TCPTunnel(b *testing.B) {
 	}
 }
 
+// BenchmarkEndToEnd_TCPTunnel_Latency measures per-chunk RTT over one long-lived
+// client→gRPC→server→echo session and reports avg/p50/p99 in microseconds.
+func BenchmarkEndToEnd_TCPTunnel_Latency(b *testing.B) {
+	oldWriter := log.Writer()
+	log.SetOutput(io.Discard)
+	b.Cleanup(func() { log.SetOutput(oldWriter) })
+
+	routeAllDirect(b)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer func() { _ = c.Close() }()
+				_, _ = io.Copy(c, c)
+			}(c)
+		}
+	}()
+
+	connectClient(b, startProxyServer(b))
+	c, err := client.New()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = c.Close() })
+
+	for _, size := range opensslSpeedSizes {
+		b.Run(fmt.Sprintf("%d", size), func(b *testing.B) {
+			srcReader, srcWriter := io.Pipe()
+			dst := newChunkGate(size)
+			errCh := make(chan error, 1)
+			go func() {
+				errCh <- c.Proxy(
+					context.Background(),
+					ln.Addr().String(),
+					make(chan string, 1),
+					dst,
+					srcReader,
+				)
+			}()
+
+			payload := bytes.Repeat([]byte{0x5a}, size)
+			samples := make([]time.Duration, b.N)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := range b.N {
+				start := time.Now()
+				if _, err := srcWriter.Write(payload); err != nil {
+					b.Fatal(err)
+				}
+				if err := dst.WaitChunk(); err != nil {
+					b.Fatal(err)
+				}
+				samples[i] = time.Since(start)
+			}
+			b.StopTimer()
+			reportRTT(b, samples)
+
+			_ = srcWriter.Close()
+			if err := <-errCh; err != nil && err != io.EOF {
+				b.Fatal(err)
+			}
+		})
+	}
+}
+
 type chunkGate struct {
 	size   int64
 	n      atomic.Int64
@@ -123,4 +198,31 @@ func (g *chunkGate) WaitChunk() error {
 	case <-time.After(5 * time.Second):
 		return fmt.Errorf("timeout waiting for %d-byte chunk", g.size)
 	}
+}
+
+func reportRTT(b *testing.B, samples []time.Duration) {
+	b.Helper()
+	if len(samples) == 0 {
+		return
+	}
+	sorted := slices.Clone(samples)
+	slices.Sort(sorted)
+	var sum time.Duration
+	for _, d := range sorted {
+		sum += d
+	}
+	b.ReportMetric(float64(sum)/float64(len(sorted))/float64(time.Microsecond), "avg-µs")
+	b.ReportMetric(float64(sorted[len(sorted)/2])/float64(time.Microsecond), "p50-µs")
+	b.ReportMetric(float64(sorted[percentileIndex(len(sorted), 99)])/float64(time.Microsecond), "p99-µs")
+}
+
+func percentileIndex(n, p int) int {
+	if n <= 1 {
+		return 0
+	}
+	i := (p*(n-1) + 99) / 100
+	if i >= n {
+		return n - 1
+	}
+	return i
 }

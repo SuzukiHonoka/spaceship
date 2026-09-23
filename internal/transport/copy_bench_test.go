@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -100,6 +101,56 @@ func BenchmarkCopyWithContext_Bidirectional(b *testing.B) {
 	}
 }
 
+// BenchmarkCopyWithContext_Bidirectional_Latency measures per-chunk RTT on a
+// long-lived TCP echo session and reports avg/p50/p99 in microseconds.
+func BenchmarkCopyWithContext_Bidirectional_Latency(b *testing.B) {
+	echoAddr := startBenchEcho(b)
+	for _, size := range opensslSpeedSizes {
+		b.Run(fmt.Sprintf("%d", size), func(b *testing.B) {
+			conn, err := net.Dial("tcp", echoAddr)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.Cleanup(func() { _ = conn.Close() })
+
+			srcReader, srcWriter := io.Pipe()
+			dst := newChunkGate(size)
+			ctx, cancel := context.WithCancel(context.Background())
+			b.Cleanup(cancel)
+
+			var group errgroup.Group
+			group.Go(func() error {
+				defer CloseWriteOrClose(conn)
+				return CopyWithContext(ctx, cancel, conn, srcReader, DirectionOut)
+			})
+			group.Go(func() error {
+				defer cancel()
+				return CopyWithContext(ctx, func() { _ = conn.Close() }, dst, conn, DirectionIn)
+			})
+
+			payload := bytes.Repeat([]byte{0xa5}, size)
+			samples := make([]time.Duration, b.N)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := range b.N {
+				start := time.Now()
+				if _, err := srcWriter.Write(payload); err != nil {
+					b.Fatal(err)
+				}
+				if err := dst.WaitChunk(); err != nil {
+					b.Fatal(err)
+				}
+				samples[i] = time.Since(start)
+			}
+			b.StopTimer()
+			reportRTT(b, samples)
+
+			_ = srcWriter.Close()
+			_ = group.Wait()
+		})
+	}
+}
+
 func reportOpsPerSec(b *testing.B, start time.Time) {
 	b.Helper()
 	elapsed := time.Since(start).Seconds()
@@ -163,4 +214,31 @@ func (g *chunkGate) WaitChunk() error {
 	case <-time.After(5 * time.Second):
 		return fmt.Errorf("timeout waiting for %d-byte chunk", g.size)
 	}
+}
+
+func reportRTT(b *testing.B, samples []time.Duration) {
+	b.Helper()
+	if len(samples) == 0 {
+		return
+	}
+	sorted := slices.Clone(samples)
+	slices.Sort(sorted)
+	var sum time.Duration
+	for _, d := range sorted {
+		sum += d
+	}
+	b.ReportMetric(float64(sum)/float64(len(sorted))/float64(time.Microsecond), "avg-µs")
+	b.ReportMetric(float64(sorted[len(sorted)/2])/float64(time.Microsecond), "p50-µs")
+	b.ReportMetric(float64(sorted[percentileIndex(len(sorted), 99)])/float64(time.Microsecond), "p99-µs")
+}
+
+func percentileIndex(n, p int) int {
+	if n <= 1 {
+		return 0
+	}
+	i := (p*(n-1) + 99) / 100
+	if i >= n {
+		return n - 1
+	}
+	return i
 }
