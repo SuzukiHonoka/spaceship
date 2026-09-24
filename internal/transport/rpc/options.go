@@ -46,7 +46,7 @@ const (
 	// the 64KiB spec default so several in-flight payload chunks (up to the
 	// transport buffer) do not stall waiting for WINDOW_UPDATE on loopback
 	// or LAN links. BDP estimation remains enabled (StaticWindowSize is unset).
-	initialStreamWindow = 4 << 20 // 4 MiB
+	initialStreamWindow = 4 << 20  // 4 MiB
 	initialConnWindow   = 16 << 20 // 16 MiB
 
 	// keepaliveTime is how often an idle connection is pinged to detect a peer

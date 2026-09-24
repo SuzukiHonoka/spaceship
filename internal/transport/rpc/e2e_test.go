@@ -22,6 +22,7 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/forward"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
 	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/server"
@@ -360,6 +361,69 @@ func TestEndToEnd_UDPMultipleDatagrams(t *testing.T) {
 		if !bytes.Equal(buf[:n], payload) {
 			t.Fatalf("datagram %d: got %q, want %q", i, buf[:n], payload)
 		}
+	}
+}
+
+// TestEndToEnd_UDPReleasesReceiveBuffers guards the zero-copy codec against
+// pinning gRPC receive buffers for messages nobody releases. The UDP packet
+// conn receives through the generated Recv, which allocates a fresh message per
+// datagram; retaining a view for each of those leaked one buffer per datagram
+// for the life of the process.
+func TestEndToEnd_UDPReleasesReceiveBuffers(t *testing.T) {
+	routeAllDirect(t)
+	echoAddr := startUDPEcho(t)
+	connectClient(t, startProxyServer(t))
+
+	c, err := client.New()
+	if err != nil {
+		t.Fatalf("client.New() error = %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	before := rpc.RetainedPayloadViewCount()
+
+	pc, err := c.DialPacket("udp", echoAddr)
+	if err != nil {
+		t.Fatalf("DialPacket() error = %v", err)
+	}
+	target, err := net.ResolveUDPAddr("udp", echoAddr)
+	if err != nil {
+		t.Fatalf("resolve echo addr: %v", err)
+	}
+
+	const datagrams = 32
+	// Above gRPC's pooling threshold so each frame is a refcounted pool buffer.
+	payload := bytes.Repeat([]byte{0x5a}, 1400)
+	buf := make([]byte, 2048)
+	for i := range datagrams {
+		if _, err := pc.WriteTo(payload, target); err != nil {
+			t.Fatalf("datagram %d: WriteTo() error = %v", i, err)
+		}
+		if err := pc.SetReadDeadline(time.Now().Add(15 * time.Second)); err != nil {
+			t.Fatalf("SetReadDeadline() error = %v", err)
+		}
+		n, _, err := pc.ReadFrom(buf)
+		if err != nil {
+			t.Fatalf("datagram %d: ReadFrom() error = %v", i, err)
+		}
+		if !bytes.Equal(buf[:n], payload) {
+			t.Fatalf("datagram %d: payload mismatch", i)
+		}
+	}
+	_ = pc.Close()
+
+	// The server forwarder releases its registration when its stream ends,
+	// which happens asynchronously after the client closes.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got := rpc.RetainedPayloadViewCount()
+		if got <= before {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("retained payload views = %d after %d datagrams, want at most %d", got, datagrams, before)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

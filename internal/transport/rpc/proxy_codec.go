@@ -24,9 +24,13 @@ import (
 //     protobuf envelope (identical on the wire to proto.Marshal). When the
 //     forwarder offered a pooled buffer via OfferPayloadBuffer, the header is
 //     written into a reserved prefix and the buffer is adopted with no copy;
-//   - unmarshals those messages by retaining a refcounted view into the gRPC
-//     receive buffer (no per-chunk copy). ReleaseMessageBuffers must be called
-//     when a reused message is retired so the view is freed.
+//   - unmarshals those messages into a message registered with
+//     RetainPayloadViews by retaining a refcounted view into the gRPC receive
+//     buffer (no per-chunk copy). ReleaseMessageBuffers must be called when
+//     that message is retired so the view and the registration are freed.
+//     Messages that were not registered (for example the fresh message the
+//     generated Recv allocates per call) take the copying path, so they never
+//     pin a receive buffer that nothing would release.
 //
 // Non-payload messages (handshake headers, DNS, status-only EOF/Error) fall
 // through to the standard protobuf implementation.
@@ -203,32 +207,57 @@ func takeOfferedFrame(msg any, fieldNum int, data []byte) (mem.BufferSlice, bool
 	return mem.BufferSlice{view}, true
 }
 
-// heldBuffers keeps refcounted receive-buffer views alive for as long as a
-// reused ProxySRC/ProxyDST message aliases them via its Payload field.
-var heldBuffers sync.Map // any -> mem.Buffer
+// heldBuffers maps each message registered with RetainPayloadViews to the
+// receive-buffer view its Payload field currently aliases.
+var heldBuffers sync.Map // *proxy.ProxySRC | *proxy.ProxyDST -> *heldView
 
-// ReleaseMessageBuffers frees any receive-buffer view retained for m and
-// drops any pending marshal offer. Call when a long-lived message is about
-// to be discarded (stream exit).
+// heldView is owned by the single goroutine that receives into its message,
+// which is also the goroutine that eventually calls ReleaseMessageBuffers, so
+// buf needs no further synchronization.
+type heldView struct {
+	buf mem.Buffer
+}
+
+// replace installs view (which may be nil) and frees the view it supersedes.
+func (h *heldView) replace(view mem.Buffer) {
+	old := h.buf
+	h.buf = view
+	if old != nil {
+		old.Free()
+	}
+}
+
+// RetainPayloadViews opts m into zero-copy receive. Unmarshal into m then
+// aliases its payload to the gRPC receive buffer instead of copying it; the
+// view stays valid only until the next Unmarshal into m or until
+// ReleaseMessageBuffers(m), which the caller must defer. Register only a
+// message that one goroutine reuses for a whole stream, and finish with each
+// payload before receiving the next.
+func RetainPayloadViews(m any) {
+	if m == nil {
+		return
+	}
+	heldBuffers.LoadOrStore(m, &heldView{})
+}
+
+// ReleaseMessageBuffers frees any receive-buffer view retained for m, ends its
+// RetainPayloadViews registration, and drops any pending marshal offer. Call
+// when a long-lived message is about to be discarded (stream exit).
 func ReleaseMessageBuffers(m any) {
 	if m == nil {
 		return
 	}
 	if v, ok := heldBuffers.LoadAndDelete(m); ok {
-		v.(mem.Buffer).Free()
+		v.(*heldView).replace(nil)
 	}
 	clearOfferedPayload(m)
 }
 
-func holdBuffer(m any, buf mem.Buffer) {
+func retainedView(m any) *heldView {
 	if v, ok := heldBuffers.Load(m); ok {
-		heldBuffers.Store(m, buf)
-		v.(mem.Buffer).Free()
-		return
+		return v.(*heldView)
 	}
-	if buf != nil {
-		heldBuffers.Store(m, buf)
-	}
+	return nil
 }
 
 func marshalBytesField(msg any, fieldNum int, payload []byte) (mem.BufferSlice, error) {
@@ -265,41 +294,53 @@ func marshalStatusOnly(status proxy.ProxyStatus) (mem.BufferSlice, error) {
 }
 
 func unmarshalProxySRC(data mem.BufferSlice, m *proxy.ProxySRC) error {
-	if payload, view, ok := tryPayloadView(data, 2); ok {
-		setSRCPayloadView(m, payload)
-		holdBuffer(m, view)
-		return nil
+	held := retainedView(m)
+	if held != nil {
+		if payload, view, ok := tryPayloadView(data, 2); ok {
+			setSRCPayloadView(m, payload)
+			held.replace(view)
+			return nil
+		}
 	}
-	ReleaseMessageBuffers(m)
 
 	raw, free := frameBytes(data)
 	if free != nil {
 		defer free()
 	}
 	clearSRC(m)
+	if held != nil {
+		// m no longer aliases the previous view, so it can be returned now.
+		held.replace(nil)
+	}
 	return proto.Unmarshal(raw, m)
 }
 
 func unmarshalProxyDST(data mem.BufferSlice, m *proxy.ProxyDST) error {
-	if payload, view, ok := tryPayloadView(data, 3); ok {
-		m.Status = proxy.ProxyStatus_Session
-		setDSTPayloadView(m, payload)
-		holdBuffer(m, view)
-		return nil
+	held := retainedView(m)
+	if held != nil {
+		if payload, view, ok := tryPayloadView(data, 3); ok {
+			m.Status = proxy.ProxyStatus_Session
+			setDSTPayloadView(m, payload)
+			held.replace(view)
+			return nil
+		}
 	}
-	ReleaseMessageBuffers(m)
 
 	raw, free := frameBytes(data)
 	if free != nil {
 		defer free()
 	}
 	clearDST(m)
+	if held != nil {
+		// m no longer aliases the previous view, so it can be returned now.
+		held.replace(nil)
+	}
 	return proto.Unmarshal(raw, m)
 }
 
 // tryPayloadView returns a refcounted view of the sole length-delimited bytes
 // field when the frame is a single payload chunk. The caller must Free view
-// (via holdBuffer/ReleaseMessageBuffers) after it is done aliasing payload.
+// (via heldView.replace/ReleaseMessageBuffers) after it is done aliasing payload.
 func tryPayloadView(data mem.BufferSlice, fieldNum int) (payload []byte, view mem.Buffer, ok bool) {
 	if len(data) == 0 {
 		return nil, nil, false

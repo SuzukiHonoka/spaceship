@@ -278,6 +278,7 @@ func (f *Forwarder) CopyClientToTarget(ctx context.Context) error {
 		srcData := &proto.ProxySRC{
 			HeaderOrPayload: &proto.ProxySRC_Payload{},
 		}
+		rpc.RetainPayloadViews(srcData)
 		defer rpc.ReleaseMessageBuffers(srcData)
 		for {
 			if err := f.Stream.RecvMsg(srcData); err != nil {
