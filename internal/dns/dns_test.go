@@ -3,11 +3,14 @@ package dns
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 
 	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	mdns "github.com/miekg/dns"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type responseRecorder struct {
@@ -202,5 +205,135 @@ func TestServeDNSRejectsInvalidQueriesWithoutRPC(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("invalid queries reached RPC exchanger %d times", calls)
+	}
+}
+
+type fakeLegacyResolver struct {
+	resolve func(context.Context, *mdns.Msg, bool) ([]mdns.RR, int, error)
+}
+
+func (r fakeLegacyResolver) Resolve(
+	ctx context.Context,
+	query *mdns.Msg,
+	blockIPv6 bool,
+) ([]mdns.RR, int, error) {
+	return r.resolve(ctx, query, blockIPv6)
+}
+
+func TestServeDNSFallsBackToLegacyResolveOnOlderServer(t *testing.T) {
+	s, err := NewServer("127.0.0.1:0", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.exchanger = fakeWireExchanger{exchange: func(
+		context.Context,
+		[]byte,
+		proto.Network,
+		bool,
+	) ([]byte, error) {
+		// Wrapped the way the RPC client wraps it.
+		return nil, fmt.Errorf("rpc dns exchange: %w",
+			status.Error(codes.Unimplemented, "unknown method DnsExchange"))
+	}}
+	var gotBlock bool
+	var gotQuestion mdns.Question
+	s.legacy = fakeLegacyResolver{resolve: func(
+		_ context.Context,
+		query *mdns.Msg,
+		blockIPv6 bool,
+	) ([]mdns.RR, int, error) {
+		gotBlock = blockIPv6
+		gotQuestion = query.Question[0]
+		return []mdns.RR{&mdns.A{
+			Hdr: mdns.RR_Header{
+				Name:   "example.com.",
+				Rrtype: mdns.TypeA,
+				Class:  mdns.ClassINET,
+				Ttl:    60,
+			},
+			A: net.IPv4(192, 0, 2, 1),
+		}}, mdns.RcodeSuccess, nil
+	}}
+
+	query := new(mdns.Msg)
+	query.SetQuestion("example.com.", mdns.TypeA)
+	recorder := new(responseRecorder)
+	s.ServeDNS(recorder, query)
+
+	if recorder.msg == nil || recorder.msg.Rcode != mdns.RcodeSuccess {
+		t.Fatalf("ServeDNS() response = %+v, want NOERROR", recorder.msg)
+	}
+	if recorder.msg.Id != query.Id || !recorder.msg.Response {
+		t.Fatalf("response header = %+v, want a reply to query %d", recorder.msg.MsgHdr, query.Id)
+	}
+	if len(recorder.msg.Answer) != 1 {
+		t.Fatalf("answers = %v, want the legacy answer", recorder.msg.Answer)
+	}
+	if !gotBlock || gotQuestion.Name != "example.com." || gotQuestion.Qtype != mdns.TypeA {
+		t.Fatalf("legacy resolve got question %+v, blockIPv6 %t", gotQuestion, gotBlock)
+	}
+}
+
+func TestServeDNSDoesNotFallBackOnOtherRPCErrors(t *testing.T) {
+	s, err := NewServer("127.0.0.1:0", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.exchanger = fakeWireExchanger{exchange: func(
+		context.Context,
+		[]byte,
+		proto.Network,
+		bool,
+	) ([]byte, error) {
+		return nil, fmt.Errorf("rpc dns exchange: %w",
+			status.Error(codes.ResourceExhausted, "dns: exchange capacity exhausted"))
+	}}
+	s.legacy = fakeLegacyResolver{resolve: func(
+		context.Context,
+		*mdns.Msg,
+		bool,
+	) ([]mdns.RR, int, error) {
+		t.Fatal("legacy resolve must only serve servers without DnsExchange")
+		return nil, 0, nil
+	}}
+
+	query := new(mdns.Msg)
+	query.SetQuestion("example.com.", mdns.TypeA)
+	recorder := new(responseRecorder)
+	s.ServeDNS(recorder, query)
+
+	if recorder.msg == nil || recorder.msg.Rcode != mdns.RcodeServerFailure {
+		t.Fatalf("ServeDNS() response = %+v, want SERVFAIL", recorder.msg)
+	}
+}
+
+func TestServeDNSLegacyFailureReturnsServfail(t *testing.T) {
+	s, err := NewServer("127.0.0.1:0", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.exchanger = fakeWireExchanger{exchange: func(
+		context.Context,
+		[]byte,
+		proto.Network,
+		bool,
+	) ([]byte, error) {
+		return nil, status.Error(codes.Unimplemented, "unknown method DnsExchange")
+	}}
+	s.legacy = fakeLegacyResolver{resolve: func(
+		context.Context,
+		*mdns.Msg,
+		bool,
+	) ([]mdns.RR, int, error) {
+		return nil, mdns.RcodeServerFailure, errors.New("rpc dns: unavailable")
+	}}
+
+	query := new(mdns.Msg)
+	query.SetQuestion("example.com.", mdns.TypeA)
+	recorder := new(responseRecorder)
+	s.ServeDNS(recorder, query)
+
+	if recorder.msg == nil || recorder.msg.Rcode != mdns.RcodeServerFailure {
+		t.Fatalf("ServeDNS() response = %+v, want SERVFAIL", recorder.msg)
 	}
 }
