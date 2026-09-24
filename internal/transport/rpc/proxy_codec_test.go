@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"slices"
 	"testing"
@@ -297,6 +298,71 @@ func TestProxyCodecStatusOnlyWireCompatible(t *testing.T) {
 			t.Fatalf("status %v: codec wire != proto.Marshal (%x vs %x)", status, got.Materialize(), want)
 		}
 		got.Free()
+	}
+}
+
+// A status outside the single-byte varint range must not be truncated by the
+// hand-rolled status encoder.
+func TestProxyCodecStatusOnlyLargeValueWireCompatible(t *testing.T) {
+	var c proxyCodec
+	for _, status := range []proxy.ProxyStatus{0x7f, 0x80, 300, -1} {
+		msg := &proxy.ProxyDST{Status: status}
+		if status == 0x7f {
+			// Only EOF and Error take the hand-rolled path; exercise its bound
+			// directly for the largest value it accepts.
+			frame, ok := marshalStatusOnly(status)
+			if !ok {
+				t.Fatalf("marshalStatusOnly(%d) rejected a one-byte varint", status)
+			}
+			want, err := proto.Marshal(msg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(frame.Materialize(), want) {
+				t.Fatalf("status %d: %x, want %x", status, frame.Materialize(), want)
+			}
+			continue
+		}
+		if _, ok := marshalStatusOnly(status); ok {
+			t.Fatalf("marshalStatusOnly(%d) accepted a multi-byte varint", status)
+		}
+		got, err := c.Marshal(msg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := proto.Marshal(msg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got.Materialize(), want) {
+			t.Fatalf("status %d: codec wire != proto.Marshal", status)
+		}
+		got.Free()
+	}
+}
+
+// A length prefix that exceeds int must never be accepted as the frame size,
+// including where int is 32 bits and a truncating conversion would wrap it.
+func TestSoleBytesFieldRangeRejectsOversizedLength(t *testing.T) {
+	payload := []byte("payload")
+	honest := uint64(len(payload))
+	for _, length := range []uint64{honest + 1<<32, honest + 1<<63, honest + 1, honest - 1} {
+		raw := []byte{dstPayloadTag}
+		raw = binary.AppendUvarint(raw, length)
+		raw = append(raw, payload...)
+		if _, _, ok := soleBytesFieldRange(raw, dstPayloadTag); ok {
+			t.Fatalf("accepted length prefix %#x for a %d-byte payload", length, len(payload))
+		}
+	}
+
+	raw := binary.AppendUvarint([]byte{dstPayloadTag}, honest)
+	raw = append(raw, payload...)
+	start, end, ok := soleBytesFieldRange(raw, dstPayloadTag)
+	if !ok || !bytes.Equal(raw[start:end], payload) {
+		t.Fatalf("rejected a well-formed frame: ok=%t range=[%d:%d]", ok, start, end)
+	}
+	if _, _, ok := soleBytesFieldRange(raw, srcPayloadTag); ok {
+		t.Fatal("accepted a frame with the wrong field tag")
 	}
 }
 
