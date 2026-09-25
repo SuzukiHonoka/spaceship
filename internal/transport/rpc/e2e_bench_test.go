@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
 	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/server"
@@ -134,55 +136,97 @@ func BenchmarkEndToEnd_TCPTunnelParallel(b *testing.B) {
 	const size = 32 * 1024
 	for _, sessions := range []int{1, 8, 32} {
 		b.Run(fmt.Sprintf("sessions=%d", sessions), func(b *testing.B) {
-			type session struct {
-				w     *io.PipeWriter
-				gate  *chunkGate
-				errCh chan error
-			}
-			all := make([]session, sessions)
-			for i := range all {
-				r, w := io.Pipe()
-				all[i] = session{w: w, gate: newChunkGate(size), errCh: make(chan error, 1)}
-				go func(s session) {
-					s.errCh <- c.Proxy(context.Background(), echoAddr, make(chan string, 1), s.gate, r)
-				}(all[i])
-			}
+			runEchoSessions(b, c, echoAddr, size, sessions)
+		})
+	}
+}
 
-			payload := bytes.Repeat([]byte{0x5a}, size)
-			var next atomic.Int64
-			b.SetBytes(int64(size) * 2)
-			b.ReportAllocs()
-			b.ResetTimer()
-			errs := make(chan error, sessions)
-			for _, s := range all {
-				go func(s session) {
-					for next.Add(1) <= int64(b.N) {
-						if _, err := s.w.Write(payload); err != nil {
-							errs <- err
-							return
-						}
-						if err := s.gate.WaitChunk(); err != nil {
-							errs <- err
-							return
-						}
-					}
-					errs <- nil
-				}(s)
-			}
-			for range all {
-				if err := <-errs; err != nil {
-					b.Fatal(err)
-				}
-			}
-			b.StopTimer()
+// BenchmarkEndToEnd_TCPTunnelBufferSize sweeps the configurable transport
+// buffer (config "buffer", in KiB) across its range. The buffer sizes every
+// transport read and the pooled payload buffers, so each size gets its own
+// server and client. Two shapes: one session moving 1MiB writes, where a
+// larger buffer means fewer, larger messages; and eight sessions moving 32KiB
+// writes, where most of a large buffer goes unused on each read.
+func BenchmarkEndToEnd_TCPTunnelBufferSize(b *testing.B) {
+	quietLogs(b)
+	routeAllDirect(b)
+	echoAddr := startTCPEcho(b)
+	defaultSize := transport.GetBufferSize()
+	b.Cleanup(func() { transport.SetBufferSize(uint16(defaultSize / 1024)) }) // #nosec G115 -- default is 256KiB
 
-			for _, s := range all {
-				_ = s.w.Close()
-				if err := <-s.errCh; err != nil && err != io.EOF {
-					b.Fatal(err)
-				}
+	for _, kib := range []uint16{16, 64, 256, 1024, rpc.MaxTransportBufferSize / 1024} {
+		b.Run(fmt.Sprintf("buffer=%dKiB", kib), func(b *testing.B) {
+			transport.SetBufferSize(kib)
+			connectClient(b, startProxyServer(b))
+			c := benchClient(b)
+
+			for _, shape := range []struct {
+				name     string
+				size     int
+				sessions int
+			}{
+				{"bulk=1MiB/sessions=1", 1 << 20, 1},
+				{"chunk=32KiB/sessions=8", 32 * 1024, 8},
+			} {
+				b.Run(shape.name, func(b *testing.B) {
+					runEchoSessions(b, c, echoAddr, shape.size, shape.sessions)
+				})
 			}
 		})
+	}
+}
+
+// runEchoSessions opens sessions long-lived tunnels to echoAddr and splits
+// b.N round trips of size bytes between them.
+func runEchoSessions(b *testing.B, c *client.Client, echoAddr string, size, sessions int) {
+	b.Helper()
+	type session struct {
+		w     *io.PipeWriter
+		gate  *chunkGate
+		errCh chan error
+	}
+	all := make([]session, sessions)
+	for i := range all {
+		r, w := io.Pipe()
+		all[i] = session{w: w, gate: newChunkGate(size), errCh: make(chan error, 1)}
+		go func(s session) {
+			s.errCh <- c.Proxy(context.Background(), echoAddr, make(chan string, 1), s.gate, r)
+		}(all[i])
+	}
+
+	payload := bytes.Repeat([]byte{0x5a}, size)
+	var next atomic.Int64
+	b.SetBytes(int64(size) * 2)
+	b.ReportAllocs()
+	b.ResetTimer()
+	errs := make(chan error, sessions)
+	for _, s := range all {
+		go func(s session) {
+			for next.Add(1) <= int64(b.N) {
+				if _, err := s.w.Write(payload); err != nil {
+					errs <- err
+					return
+				}
+				if err := s.gate.WaitChunk(); err != nil {
+					errs <- err
+					return
+				}
+			}
+			errs <- nil
+		}(s)
+	}
+	for range all {
+		if err := <-errs; err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+
+	for _, s := range all {
+		_ = s.w.Close()
+		if err := <-s.errCh; err != nil && err != io.EOF {
+			b.Fatal(err)
+		}
 	}
 }
 
