@@ -324,7 +324,10 @@ returned by the loopback management `/api/stats` endpoint.
 For a rolling upgrade, deploy servers with the wire DNS RPC before enabling
 `dns_hijack` on clients. A new client connected to an older server receives
 gRPC `Unimplemented`, returns DNS `SERVFAIL`, and deliberately does not bypass
-the tunnel through a local or destination resolver.
+the tunnel through a local or destination resolver. The `listen_dns` resolver
+instead falls back to the older `DnsResolve` RPC, which still resolves through
+the tunnel but drops EDNS and non-answer sections, so existing deployments keep
+working when clients are upgraded first.
 
 All non-DNS UDP traffic remains unsupported and is rejected by the netstack with
 an ICMP unreachable, so a QUIC client falls back to TCP immediately instead of

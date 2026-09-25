@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"slices"
 	"testing"
@@ -64,6 +65,7 @@ func TestProxyCodecUnmarshalZeroCopy(t *testing.T) {
 	msg := &proxy.ProxyDST{
 		HeaderOrPayload: &proxy.ProxyDST_Payload{},
 	}
+	RetainPayloadViews(msg)
 	defer ReleaseMessageBuffers(msg)
 
 	first := bytes.Repeat([]byte{0x11}, 4096)
@@ -99,6 +101,155 @@ func TestProxyCodecUnmarshalZeroCopy(t *testing.T) {
 	frame2.Free()
 	if !bytes.Equal(msg.GetPayload(), second) {
 		t.Fatal("payload contents not updated")
+	}
+}
+
+// countingPool records how many buffers were returned, so a test can observe
+// exactly when the codec drops its last reference to a receive frame.
+type countingPool struct {
+	puts int
+}
+
+func (p *countingPool) Get(length int) *[]byte {
+	b := make([]byte, length)
+	return &b
+}
+
+func (p *countingPool) Put(*[]byte) {
+	p.puts++
+}
+
+func pooledFrame(t *testing.T, msg proto.Message, pool mem.BufferPool) mem.Buffer {
+	t.Helper()
+	wire, err := proto.Marshal(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Above the pooling threshold so mem.NewBuffer really refcounts it.
+	if mem.IsBelowBufferPoolingThreshold(len(wire)) {
+		t.Fatalf("frame of %d bytes is below the pooling threshold", len(wire))
+	}
+	return mem.NewBuffer(&wire, pool)
+}
+
+// A message nobody registered, such as the fresh one the generated Recv
+// allocates per call, must never pin the receive buffer: nothing would ever
+// release it.
+func TestProxyCodecUnmarshalUnregisteredCopies(t *testing.T) {
+	var c proxyCodec
+	pool := new(countingPool)
+	payload := bytes.Repeat([]byte{0x33}, 4096)
+	before := RetainedPayloadViewCount()
+
+	for _, tc := range []struct {
+		name string
+		wire proto.Message
+		into proto.Message
+		get  func(proto.Message) []byte
+	}{
+		{
+			name: "ProxyDST",
+			wire: &proxy.ProxyDST{HeaderOrPayload: &proxy.ProxyDST_Payload{Payload: payload}},
+			into: new(proxy.ProxyDST),
+			get:  func(m proto.Message) []byte { return m.(*proxy.ProxyDST).GetPayload() },
+		},
+		{
+			name: "ProxySRC",
+			wire: &proxy.ProxySRC{HeaderOrPayload: &proxy.ProxySRC_Payload{Payload: payload}},
+			into: new(proxy.ProxySRC),
+			get:  func(m proto.Message) []byte { return m.(*proxy.ProxySRC).GetPayload() },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			puts := pool.puts
+			frame := pooledFrame(t, tc.wire, pool)
+			if err := c.Unmarshal(mem.BufferSlice{frame}, tc.into); err != nil {
+				t.Fatal(err)
+			}
+			frame.Free()
+			if pool.puts != puts+1 {
+				t.Fatal("receive frame still referenced after Unmarshal into an unregistered message")
+			}
+			if !bytes.Equal(tc.get(tc.into), payload) {
+				t.Fatal("payload contents not copied")
+			}
+		})
+	}
+	if got := RetainedPayloadViewCount(); got != before {
+		t.Fatalf("held buffers = %d, want %d", got, before)
+	}
+}
+
+func TestProxyCodecRetainedViewLifetime(t *testing.T) {
+	var c proxyCodec
+	pool := new(countingPool)
+	msg := &proxy.ProxyDST{HeaderOrPayload: &proxy.ProxyDST_Payload{}}
+	RetainPayloadViews(msg)
+	released := false
+	defer func() {
+		if !released {
+			ReleaseMessageBuffers(msg)
+		}
+	}()
+
+	payload := bytes.Repeat([]byte{0x44}, 4096)
+	frame := pooledFrame(t, &proxy.ProxyDST{
+		HeaderOrPayload: &proxy.ProxyDST_Payload{Payload: payload},
+	}, pool)
+	if err := c.Unmarshal(mem.BufferSlice{frame}, msg); err != nil {
+		t.Fatal(err)
+	}
+	frame.Free()
+	if pool.puts != 0 {
+		t.Fatal("receive frame returned while the message still aliases it")
+	}
+	if !bytes.Equal(msg.GetPayload(), payload) {
+		t.Fatal("payload contents not set")
+	}
+
+	// A non-payload frame takes the copying path and must drop the old view
+	// while keeping the registration for later payload frames.
+	header := &proxy.ProxyDST{
+		Status: proxy.ProxyStatus_Accepted,
+		HeaderOrPayload: &proxy.ProxyDST_Header{
+			Header: &proxy.ProxyDST_ProxyHeader{Addr: "192.0.2.1:443"},
+		},
+	}
+	wire, err := proto.Marshal(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Unmarshal(mem.BufferSlice{mem.SliceBuffer(wire)}, msg); err != nil {
+		t.Fatal(err)
+	}
+	if pool.puts != 1 {
+		t.Fatalf("previous view not released by a non-payload frame: puts = %d", pool.puts)
+	}
+	if msg.GetHeader().GetAddr() != "192.0.2.1:443" {
+		t.Fatalf("header addr = %q", msg.GetHeader().GetAddr())
+	}
+	if retainedView(msg) == nil {
+		t.Fatal("registration lost after a non-payload frame")
+	}
+
+	frame = pooledFrame(t, &proxy.ProxyDST{
+		HeaderOrPayload: &proxy.ProxyDST_Payload{Payload: payload},
+	}, pool)
+	if err := c.Unmarshal(mem.BufferSlice{frame}, msg); err != nil {
+		t.Fatal(err)
+	}
+	frame.Free()
+	if pool.puts != 1 {
+		t.Fatal("second payload frame was not retained")
+	}
+
+	ReleaseMessageBuffers(msg)
+	released = true
+	if pool.puts != 2 {
+		t.Fatalf("ReleaseMessageBuffers did not free the view: puts = %d", pool.puts)
+	}
+	if retainedView(msg) != nil {
+		t.Fatal("ReleaseMessageBuffers left the registration behind")
 	}
 }
 
@@ -147,6 +298,71 @@ func TestProxyCodecStatusOnlyWireCompatible(t *testing.T) {
 			t.Fatalf("status %v: codec wire != proto.Marshal (%x vs %x)", status, got.Materialize(), want)
 		}
 		got.Free()
+	}
+}
+
+// A status outside the single-byte varint range must not be truncated by the
+// hand-rolled status encoder.
+func TestProxyCodecStatusOnlyLargeValueWireCompatible(t *testing.T) {
+	var c proxyCodec
+	for _, status := range []proxy.ProxyStatus{0x7f, 0x80, 300, -1} {
+		msg := &proxy.ProxyDST{Status: status}
+		if status == 0x7f {
+			// Only EOF and Error take the hand-rolled path; exercise its bound
+			// directly for the largest value it accepts.
+			frame, ok := marshalStatusOnly(status)
+			if !ok {
+				t.Fatalf("marshalStatusOnly(%d) rejected a one-byte varint", status)
+			}
+			want, err := proto.Marshal(msg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(frame.Materialize(), want) {
+				t.Fatalf("status %d: %x, want %x", status, frame.Materialize(), want)
+			}
+			continue
+		}
+		if _, ok := marshalStatusOnly(status); ok {
+			t.Fatalf("marshalStatusOnly(%d) accepted a multi-byte varint", status)
+		}
+		got, err := c.Marshal(msg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := proto.Marshal(msg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got.Materialize(), want) {
+			t.Fatalf("status %d: codec wire != proto.Marshal", status)
+		}
+		got.Free()
+	}
+}
+
+// A length prefix that exceeds int must never be accepted as the frame size,
+// including where int is 32 bits and a truncating conversion would wrap it.
+func TestSoleBytesFieldRangeRejectsOversizedLength(t *testing.T) {
+	payload := []byte("payload")
+	honest := uint64(len(payload))
+	for _, length := range []uint64{honest + 1<<32, honest + 1<<63, honest + 1, honest - 1} {
+		raw := []byte{dstPayloadTag}
+		raw = binary.AppendUvarint(raw, length)
+		raw = append(raw, payload...)
+		if _, _, ok := soleBytesFieldRange(raw, dstPayloadTag); ok {
+			t.Fatalf("accepted length prefix %#x for a %d-byte payload", length, len(payload))
+		}
+	}
+
+	raw := binary.AppendUvarint([]byte{dstPayloadTag}, honest)
+	raw = append(raw, payload...)
+	start, end, ok := soleBytesFieldRange(raw, dstPayloadTag)
+	if !ok || !bytes.Equal(raw[start:end], payload) {
+		t.Fatalf("rejected a well-formed frame: ok=%t range=[%d:%d]", ok, start, end)
+	}
+	if _, _, ok := soleBytesFieldRange(raw, srcPayloadTag); ok {
+		t.Fatal("accepted a frame with the wrong field tag")
 	}
 }
 
@@ -234,6 +450,7 @@ func BenchmarkProxyCodec_UnmarshalPayload(b *testing.B) {
 			msg := &proxy.ProxyDST{
 				HeaderOrPayload: &proxy.ProxyDST_Payload{},
 			}
+			RetainPayloadViews(msg)
 			b.Cleanup(func() { ReleaseMessageBuffers(msg) })
 
 			b.SetBytes(int64(size))

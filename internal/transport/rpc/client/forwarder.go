@@ -107,6 +107,7 @@ func (f *Forwarder) CopyTargetToSRC(ctx context.Context) error {
 		dstData := &proxy.ProxyDST{
 			HeaderOrPayload: &proxy.ProxyDST_Payload{},
 		}
+		rpc.RetainPayloadViews(dstData)
 		defer rpc.ReleaseMessageBuffers(dstData)
 		for {
 			if err := f.stream.RecvMsg(dstData); err != nil {
