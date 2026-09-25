@@ -166,7 +166,7 @@ func (d *blockingTargetDialer) unblock() {
 }
 
 // startUDPEcho runs a UDP echo server and returns its address.
-func startUDPEcho(t *testing.T) string {
+func startUDPEcho(t testing.TB) string {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {

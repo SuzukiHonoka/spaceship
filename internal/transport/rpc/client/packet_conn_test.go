@@ -361,6 +361,43 @@ func TestStreamPacketConn_WriteDeadlineSetWhileBlocked(t *testing.T) {
 	}
 }
 
+// A write deadline that expires while no write is in flight must not cancel
+// the stream: clearing it leaves the association usable.
+func TestStreamPacketConn_IdleWriteDeadlineKeepsStream(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := &mockProxyClient{
+		recvChan: make(chan *proto.ProxyDST),
+		sendChan: make(chan *proto.ProxySRC, 1),
+		ctx:      ctx,
+	}
+	conn := NewStreamPacketConn(ctx, m, cancel, "8.8.8.8:53")
+
+	if err := conn.SetWriteDeadline(time.Now().Add(10 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if _, err := conn.WriteTo([]byte("late"), nil); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("WriteTo() after expiry = %v, want os.ErrDeadlineExceeded", err)
+	}
+	if err := conn.SetWriteDeadline(time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("an idle write deadline canceled the stream")
+	}
+
+	if err := conn.SetWriteDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.WriteTo([]byte("again"), nil); err != nil {
+		t.Fatalf("WriteTo() after clearing the deadline = %v", err)
+	}
+	if got := (<-m.sendChan).GetPayload(); string(got) != "again" {
+		t.Fatalf("sent %q, want %q", got, "again")
+	}
+}
+
 func TestStreamPacketConn_SetDeadlineIncludesWrite(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &mockProxyClient{

@@ -99,14 +99,10 @@ func (s *Server) exchangeDNSMessage(ctx context.Context, query *dns.Msg, network
 	// dns.Client has request-local connection state. Copy the shared template so
 	// UDP and TCP requests may run concurrently without mutating it.
 	client := *s.dnsClient
+	// exchangeDNSContext receives the complete datagram even when an upstream
+	// ignores the request's advertised size; DnsExchange validates it and then
+	// truncates the response itself to what the client advertised.
 	client.Net = network
-	if network == "udp" {
-		// Receive the complete datagram even when an upstream incorrectly ignores
-		// the request's advertised size. We validate it first and truncate the
-		// response ourselves below; miekg/dns otherwise defaults to a 512-byte
-		// receive buffer and turns such replies into an unpacking error/SERVFAIL.
-		client.UDPSize = uint16(dnswire.MaxMessageSize)
-	}
 	response, _, err := exchangeDNSContext(ctx, &client, query, s.dnsAddr)
 	if err != nil {
 		return nil, err

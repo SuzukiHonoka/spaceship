@@ -38,6 +38,11 @@ type StreamPacketConn struct {
 	writeMu   sync.Mutex // serializes stream send-side ops (WriteTo / CloseSend)
 	rdeadline pipeDeadline
 	wdeadline pipeDeadline
+
+	// sendMu orders a write deadline firing against a Send starting, so the
+	// deadline either stops the Send before it begins or cancels it in flight.
+	sendMu  sync.Mutex
+	sending bool
 }
 
 // NewStreamPacketConn creates a new StreamPacketConn from a gRPC stream.
@@ -64,6 +69,7 @@ func NewStreamPacketConn(ctx context.Context, stream proto.Proxy_ProxyClient, ca
 		rdeadline: makePipeDeadline(),
 		wdeadline: makePipeDeadline(),
 	}
+	c.wdeadline.onFire = c.writeDeadlineFired
 	go c.readLoop()
 	return c
 }
@@ -151,36 +157,45 @@ func (c *StreamPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 			Payload: p,
 		},
 	}
-	sendDone := make(chan error, 1)
-	go func() {
-		sendDone <- c.stream.Send(req)
-	}()
-
-	select {
-	case err := <-sendDone:
-		if err == nil {
-			return len(p), nil
-		}
-		select {
-		case <-deadline:
-			return 0, os.ErrDeadlineExceeded
-		default:
-		}
-		if c.ctx.Err() != nil || errors.Is(err, context.Canceled) {
-			return 0, net.ErrClosed
-		}
-		return 0, err
-	case <-c.ctx.Done():
-		// A gRPC stream Send observes cancellation. Wait for it to exit before
-		// releasing writeMu so CloseSend cannot race the in-flight Send.
-		<-sendDone
-		return 0, net.ErrClosed
-	case <-deadline:
-		// gRPC has no per-Send deadline. Canceling the stream is the only safe
-		// way to unblock Send without leaving a concurrent sender behind.
-		c.cancel()
-		<-sendDone
+	// Send inline rather than on a helper goroutine: the handoff cost a
+	// scheduler hop per datagram. Close still unblocks it because Send observes
+	// stream cancellation, and a write deadline cancels the stream through
+	// writeDeadlineFired, since gRPC has no per-Send deadline.
+	c.sendMu.Lock()
+	if isClosedChan(deadline) {
+		c.sendMu.Unlock()
 		return 0, os.ErrDeadlineExceeded
+	}
+	c.sending = true
+	c.sendMu.Unlock()
+
+	err = c.stream.Send(req)
+
+	c.sendMu.Lock()
+	c.sending = false
+	c.sendMu.Unlock()
+
+	if err == nil {
+		return len(p), nil
+	}
+	if isClosedChan(deadline) {
+		return 0, os.ErrDeadlineExceeded
+	}
+	if c.ctx.Err() != nil || errors.Is(err, context.Canceled) {
+		return 0, net.ErrClosed
+	}
+	return 0, err
+}
+
+// writeDeadlineFired cancels the stream when the write deadline expires during
+// a Send. Canceling is the only way to unblock a gRPC Send, and it ends the
+// association, as it did when the deadline was enforced by a helper goroutine.
+func (c *StreamPacketConn) writeDeadlineFired() {
+	c.sendMu.Lock()
+	sending := c.sending
+	c.sendMu.Unlock()
+	if sending {
+		c.cancel()
 	}
 }
 
@@ -223,6 +238,9 @@ type pipeDeadline struct {
 	mu     sync.Mutex
 	timer  *time.Timer
 	cancel chan struct{} // closed when the deadline fires
+	// onFire, when set, runs each time the deadline expires, after cancel is
+	// closed. Set it before the deadline is first used.
+	onFire func()
 }
 
 func makePipeDeadline() pipeDeadline {
@@ -253,8 +271,12 @@ func (d *pipeDeadline) set(t time.Time) {
 		if closed {
 			d.cancel = make(chan struct{})
 		}
+		cancel := d.cancel
 		d.timer = time.AfterFunc(dur, func() {
-			close(d.cancel)
+			close(cancel)
+			if d.onFire != nil {
+				d.onFire()
+			}
 		})
 		return
 	}
@@ -262,6 +284,9 @@ func (d *pipeDeadline) set(t time.Time) {
 	// Time in the past, so close immediately.
 	if !closed {
 		close(d.cancel)
+		if d.onFire != nil {
+			d.onFire()
+		}
 	}
 }
 
