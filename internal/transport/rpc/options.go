@@ -6,7 +6,6 @@ import (
 	"math"
 	"net"
 	"runtime"
-	"slices"
 	"sync/atomic"
 	"time"
 
@@ -77,21 +76,23 @@ var DefaultCurvePreferences = []tls.CurveID{
 // gRPC's default tiers are 256B/4KB/16KB/32KB/1MB. A payload chunk is a full
 // transport buffer plus protobuf framing; without an exact tier those chunks
 // fall into the next stock size (often the 1MB slab). Adding a tier at
-// GetBufferSize()+overhead keeps allocations proportional to the payload.
+// GetBufferSize()+overhead keeps allocations proportional to the payload, and
+// the 64KB/128KB tiers do the same for chunks that arrive split across HTTP/2
+// frames and are coalesced. The pool does not zero buffers; see
+// dirtyTieredPool for why that is safe and why it matters.
 //
 // Must be called after the config has been applied, so that
 // transport.GetBufferSize reflects the configured value. The returned pool is
 // also stored for BufferPool() so forwarders/codec share the same tiers without
 // racing on experimental.SetDefaultBufferPool (unsafe under parallel Dial/Serve).
 func payloadBufferPool() mem.BufferPool {
-	sizes := []int{256, 4 * 1024, 16 * 1024, 32 * 1024, 1024 * 1024}
+	sizes := []int{256, 4 * 1024, 16 * 1024, 32 * 1024, 64 * 1024, 128 * 1024, 1024 * 1024}
 	// Exact tiers for a raw transport-buffer read (with in-place protobuf
 	// header reserve) and for a framed payload chunk so neither Get falls
 	// into the 1MB slab.
 	buf := transport.GetBufferSize()
 	sizes = append(sizes, buf, buf+maxProtobufBytesHeader, buf+MessageFramingOverhead)
-	slices.Sort(sizes)
-	pool := mem.NewTieredBufferPool(slices.Compact(sizes)...)
+	pool := newDirtyTieredPool(sizes...)
 	setBufferPool(pool)
 	return pool
 }
