@@ -20,7 +20,7 @@ import (
 
 // startTestResolver runs a DNS server over a fixed zone so the tunnel's resolve
 // path can be exercised without touching a public resolver.
-func startTestResolver(t *testing.T) string {
+func startTestResolver(t testing.TB) string {
 	t.Helper()
 
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -111,13 +111,13 @@ func startBlockingTestResolver(t *testing.T) (string, <-chan struct{}, func()) {
 
 // startProxyServerWithResolver runs a proxy server pointed at a specific
 // upstream resolver.
-func startProxyServerWithResolver(t *testing.T, resolver string) string {
+func startProxyServerWithResolver(t testing.TB, resolver string) string {
 	t.Helper()
 	return startProxyServerWithResolverOptions(t, resolver)
 }
 
 func startProxyServerWithResolverOptions(
-	t *testing.T,
+	t testing.TB,
 	resolver string,
 	options ...server.Option,
 ) string {
