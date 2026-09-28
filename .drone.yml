@@ -4,7 +4,7 @@ name: golang-ci
 
 steps:
   - name: lint
-    image: golangci/golangci-lint:v2.13.2-alpine
+    image: golangci/golangci-lint:v2.14.0-alpine
     commands:
       - golangci-lint run --timeout=5m ./...
 
