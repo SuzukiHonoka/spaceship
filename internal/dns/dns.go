@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/dnswire"
@@ -22,6 +23,10 @@ type Server struct {
 	exchanger    WireExchanger
 	legacy       legacyResolver
 	legacyNotice sync.Once
+	// A bounded negative capability cache avoids an extra failed RPC (and,
+	// without multiplexing, an extra connection) for every legacy query. Probe
+	// again after a minute so a server upgrade needs no client restart.
+	legacyUntil atomic.Int64
 }
 
 func NewServer(addr string, blockIPv6DNS bool) (*Server, error) {
@@ -54,8 +59,13 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	// indefinitely-hanging ServeDNS goroutines when the upstream is slow.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if time.Now().UnixNano() < s.legacyUntil.Load() {
+		s.serveLegacy(ctx, w, r)
+		return
+	}
 	wireResponse, err := s.exchanger.Exchange(ctx, wireQuery, proto.Network_UDP, s.blockIPv6DNS)
 	if status.Code(err) == codes.Unimplemented {
+		s.legacyUntil.Store(time.Now().Add(time.Minute).UnixNano())
 		// Servers older than 2.2.0 only implement DnsResolve, which this listener
 		// used until then. Keep resolving through the tunnel instead of failing
 		// every query for a deployment that upgraded its clients first.

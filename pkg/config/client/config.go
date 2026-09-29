@@ -30,7 +30,15 @@ type Client struct {
 	BlockIPv6DNS bool `json:"block_ipv6_dns,omitempty"` // block IPv6 DNS queries (AAAA records)
 	// UDP tunes the SOCKS5 UDP ASSOCIATE relay. Omit the whole section to keep
 	// UDP enabled with built-in defaults.
-	UDP *UDP `json:"udp,omitempty"`
+	UDP   *UDP   `json:"udp,omitempty"`
+	SOCKS *SOCKS `json:"socks,omitempty"`
+}
+
+// SOCKS bounds accepted sessions and the greeting/authentication/request phase.
+// HandshakeTimeout is in seconds. Zero fields select safe built-in defaults.
+type SOCKS struct {
+	MaxConnections   int `json:"max_connections,omitempty"`
+	HandshakeTimeout int `json:"handshake_timeout,omitempty"`
 }
 
 // Redirect configures the Linux TCP transparent redirect listener. Zero-valued

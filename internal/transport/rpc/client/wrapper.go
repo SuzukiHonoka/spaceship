@@ -23,8 +23,11 @@ type ConnectionDetail struct {
 
 type ConnWrapper struct {
 	*grpc.ClientConn
-	ID    int           // Connection ID for display
-	InUse atomic.Uint32 // How many external connections are currently using this gRPC connection
+	// Set before publication and immutable thereafter. Warm wrappers need no
+	// idle-retirement bookkeeping on the hot release path.
+	surplus bool
+	ID      int           // Connection ID for display
+	InUse   atomic.Uint32 // How many external connections are currently using this gRPC connection
 }
 
 func NewConnWrapper(p *Params) (*ConnWrapper, error) {

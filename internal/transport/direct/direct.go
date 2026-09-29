@@ -26,6 +26,8 @@ type Direct struct{}
 // router's Egress.SupportsUDP for EgressDirect.
 var _ transport.PacketTargetDialer = (*Direct)(nil)
 var _ transport.ContextDialer = (*Direct)(nil)
+var _ transport.ContextPacketDialer = (*Direct)(nil)
+var _ transport.ContextPacketTargetDialer = (*Direct)(nil)
 
 func New() transport.Transport {
 	return &Direct{}
@@ -82,13 +84,21 @@ func (c *connectedPacketConn) WriteTo(p []byte, _ net.Addr) (int, error) {
 // the family-specific network ("udp4"/"udp6") to force the family. When IPv6 is
 // disabled, resolution and dialing are forced onto IPv4.
 func (d *Direct) DialPacket(network, addr string) (net.PacketConn, error) {
-	conn, _, err := d.DialPacketTarget(network, addr)
+	return d.DialPacketContext(context.Background(), network, addr)
+}
+
+func (d *Direct) DialPacketContext(ctx context.Context, network, addr string) (net.PacketConn, error) {
+	conn, _, err := d.DialPacketTargetContext(ctx, network, addr)
 	return conn, err
 }
 
 // DialPacketTarget resolves addr once, connects a matching socket, and returns
 // the exact address that must be used with that socket.
 func (d *Direct) DialPacketTarget(network, addr string) (net.PacketConn, net.Addr, error) {
+	return d.DialPacketTargetContext(context.Background(), network, addr)
+}
+
+func (d *Direct) DialPacketTargetContext(ctx context.Context, network, addr string) (net.PacketConn, net.Addr, error) {
 	network = transport.DialNetwork(network)
 	if network != "udp" && network != "udp4" && network != "udp6" {
 		return nil, nil, fmt.Errorf("direct: unsupported packet network %s", network)
@@ -106,7 +116,7 @@ func (d *Direct) DialPacketTarget(network, addr string) (net.PacketConn, net.Add
 	}
 
 	dialer := transport.NewOutboundDialer(transport.GetDialTimeout())
-	conn, err := dialer.DialContext(context.Background(), network, addr)
+	conn, err := dialer.DialContext(ctx, network, addr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("direct: dial packet %s to %s: %w", network, addr, err)
 	}

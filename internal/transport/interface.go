@@ -28,6 +28,17 @@ type PacketDialer interface {
 	DialPacket(network, addr string) (net.PacketConn, error)
 }
 
+// ContextPacketDialer allows owners to cancel packet setup. Stream-based
+// implementations may also bind the returned stream's lifetime to ctx.
+// The legacy interface remains available for source compatibility.
+type ContextPacketDialer interface {
+	DialPacketContext(ctx context.Context, network, addr string) (net.PacketConn, error)
+}
+
+type ContextPacketTargetDialer interface {
+	DialPacketTargetContext(ctx context.Context, network, addr string) (net.PacketConn, net.Addr, error)
+}
+
 // PacketTargetDialer extends PacketDialer for transports that resolve a packet
 // target locally. Returning the address selected while opening the socket keeps
 // address-family selection and the destination address consistent, and avoids

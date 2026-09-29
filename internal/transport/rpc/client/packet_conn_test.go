@@ -376,7 +376,13 @@ func TestStreamPacketConn_IdleWriteDeadlineKeepsStream(t *testing.T) {
 	if err := conn.SetWriteDeadline(time.Now().Add(10 * time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(30 * time.Millisecond)
+	// Timer callbacks can be scheduled late under load (especially with the
+	// race detector). Observe expiry instead of assuming a sleep ran it.
+	select {
+	case <-conn.wdeadline.wait():
+	case <-time.After(2 * time.Second):
+		t.Fatal("idle write deadline did not expire")
+	}
 	if _, err := conn.WriteTo([]byte("late"), nil); !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("WriteTo() after expiry = %v, want os.ErrDeadlineExceeded", err)
 	}

@@ -223,15 +223,32 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) DialPacket(network, addr string) (net.PacketConn, error) {
+	return c.DialPacketContext(context.Background(), network, addr)
+}
+
+func (c *Client) DialPacketContext(parent context.Context, network, addr string) (net.PacketConn, error) {
 	if network != "udp" && network != "udp4" && network != "udp6" {
 		return nil, fmt.Errorf("rpc client: unsupported packet network %s", network)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancelCause := context.WithCancelCause(parent)
+	cancel := func() { cancelCause(context.Canceled) }
+	// Bound stream creation too (it may wait for HTTP/2 quota or connection
+	// readiness). Stop the setup timer before returning a long-lived stream.
+	timeout := transport.GetDialTimeout()
+	setupTimer := time.AfterFunc(timeout, func() { cancelCause(context.DeadlineExceeded) })
+	defer setupTimer.Stop()
+	setupError := func(err error) error {
+		cause := context.Cause(ctx)
+		cancel()
+		if errors.Is(cause, context.DeadlineExceeded) {
+			return fmt.Errorf("rpc client: UDP setup to %s timed out: %w", addr, context.DeadlineExceeded)
+		}
+		return fmt.Errorf("rpc client: UDP setup to %s: %w", addr, err)
+	}
 	stream, err := c.ProxyClient.Proxy(ctx)
 	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("rpc client: failed to create proxy stream: %w", err)
+		return nil, setupError(err)
 	}
 
 	// Send the handshake header, selecting UDP via the typed Network field.
@@ -244,12 +261,18 @@ func (c *Client) DialPacket(network, addr string) (net.PacketConn, error) {
 		},
 	}
 
-	// Bound the handshake so a stalled stream cannot block the caller — and, in
-	// the SOCKS UDP relay, a pool worker — indefinitely. ctx governs the stream's
-	// long-lived context, which outlives this handshake; only the Send is timed.
-	if err := sendHandshake(stream, req, cancel, transport.GetDialTimeout(), addr); err != nil {
-		cancel()
-		return nil, fmt.Errorf("rpc client: UDP %w", err)
+	// One timer covers both stream creation and its opening Send. gRPC observes
+	// context cancellation, so neither a second timer nor a sender goroutine is
+	// needed. Stopping it leaves the returned stream governed by its owner.
+	if err := stream.Send(req); err != nil {
+		return nil, setupError(err)
+	}
+	if !setupTimer.Stop() {
+		cancelCause(context.DeadlineExceeded)
+		return nil, setupError(context.DeadlineExceeded)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, setupError(err)
 	}
 
 	return NewStreamPacketConn(ctx, stream, cancel, addr), nil

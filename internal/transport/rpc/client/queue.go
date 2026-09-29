@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
 	proxy "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
@@ -21,11 +22,17 @@ type ConnQueue struct {
 	Conn     ConnWrappers
 	shutdown bool
 	mu       sync.RWMutex // Protect concurrent access.
+	// Only connection creation is serialized; healthy checkouts stay on mu.
+	dialMu      sync.Mutex
+	idleSince   map[*ConnWrapper]time.Time
+	retireTimer *time.Timer
+	retireAfter time.Duration // zero selects the one-minute surplus grace period
 
 	// Test seams also make the two independent safety limits explicit. Zero
 	// selects the production defaults.
 	maxLoadPerConnection     uint32
 	maxPersistentConnections int
+	newWrapper               func() (*ConnWrapper, error) // test/benchmark connection factory
 }
 
 func NewConnQueue(size int, params *Params) *ConnQueue {
@@ -48,7 +55,8 @@ func (q *ConnQueue) Add(conn *ConnWrapper) {
 		utils.Close(conn)
 		return
 	}
-	conn.ID = len(q.Conn) + 1 // Assign sequential ID starting from 1
+	conn.ID = q.nextIDLocked()
+	conn.surplus = len(q.Conn) >= q.Size
 	q.Conn = append(q.Conn, conn)
 }
 
@@ -77,6 +85,9 @@ func (q *ConnQueue) Init() error {
 
 // Dial dials new grpc connection with saved params
 func (q *ConnQueue) Dial() (*ConnWrapper, error) {
+	if q.newWrapper != nil {
+		return q.newWrapper()
+	}
 	w, err := NewConnWrapper(q.Params)
 	if err != nil {
 		return nil, fmt.Errorf("creating grpc wrapper: %w", err)
@@ -92,6 +103,11 @@ func (q *ConnQueue) Destroy() {
 	defer q.mu.Unlock()
 
 	q.shutdown = true
+	if q.retireTimer != nil {
+		q.retireTimer.Stop()
+		q.retireTimer = nil
+	}
+	q.idleSince = nil
 	for _, conn := range q.Conn {
 		if conn != nil {
 			utils.Close(conn)
@@ -115,11 +131,25 @@ func (q *ConnQueue) dialOutside() (*ConnWrapper, func() error, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	q.mu.RLock()
+	closed := q.shutdown
+	q.mu.RUnlock()
+	if closed {
+		utils.Close(conn)
+		return nil, nil, fmt.Errorf("connection queue is shutdown")
+	}
 	return conn, onceError(conn.Close), nil
 }
 
 // GetConn gets a grpc connection from the pool, also moves the cursor
 func (q *ConnQueue) GetConn() (*ConnWrapper, func() error, error) {
+	slowHeld := false
+	defer func() {
+		if slowHeld {
+			q.dialMu.Unlock()
+		}
+	}()
+retry:
 	// Selection and load reservation must be exclusive, but NewClient/Connect
 	// must not run under q.mu: unpooled dials and elastic growth would otherwise
 	// serialise every checkout behind control-plane setup.
@@ -135,6 +165,12 @@ func (q *ConnQueue) GetConn() (*ConnWrapper, func() error, error) {
 
 	el := q.Conn.PickLeastLoaded()
 	if el == nil {
+		if !slowHeld {
+			q.mu.Unlock()
+			q.dialMu.Lock()
+			slowHeld = true
+			goto retry // capacity may have changed while waiting for the builder
+		}
 		replaceIndex, replaceID := q.firstShutdownIndexLocked()
 		if replaceIndex < 0 {
 			q.mu.Unlock()
@@ -171,6 +207,12 @@ func (q *ConnQueue) GetConn() (*ConnWrapper, func() error, error) {
 				q.streamLimit(),
 			)
 		}
+		if !slowHeld {
+			q.mu.Unlock()
+			q.dialMu.Lock()
+			slowHeld = true
+			goto retry
+		}
 		q.mu.Unlock()
 		grown, err := q.Dial()
 		if err != nil {
@@ -196,13 +238,17 @@ func (q *ConnQueue) GetConn() (*ConnWrapper, func() error, error) {
 				q.streamLimit(),
 			)
 		} else {
-			grown.ID = len(q.Conn) + 1
+			grown.ID = q.nextIDLocked()
+			grown.surplus = true
 			q.Conn = append(q.Conn, grown)
 			el = grown
 		}
 	}
 
 	el.Use()
+	if el.surplus {
+		delete(q.idleSince, el)
+	}
 	q.mu.Unlock()
 
 	// Check the state after reserving load. If the connection became permanently
@@ -228,7 +274,88 @@ func (q *ConnQueue) GetConn() (*ConnWrapper, func() error, error) {
 		return nil, nil, fmt.Errorf("grpc connection %d is shutdown", el.ID)
 	}
 
-	return el, onceError(el.Done), nil
+	if !el.surplus {
+		return el, onceError(el.Done), nil
+	}
+	return el, onceError(func() error { return q.release(el) }), nil
+}
+
+func (q *ConnQueue) nextIDLocked() int {
+	id := 0
+	for _, conn := range q.Conn {
+		if conn != nil && conn.ID > id {
+			id = conn.ID
+		}
+	}
+	return id + 1
+}
+
+func (q *ConnQueue) release(conn *ConnWrapper) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err := conn.Done(); err != nil {
+		return err
+	}
+	if q.shutdown || conn.GetCurrentLoad() != 0 {
+		return nil
+	}
+	for i := q.Size; i < len(q.Conn); i++ {
+		if q.Conn[i] != conn {
+			continue
+		}
+		if q.idleSince == nil {
+			q.idleSince = make(map[*ConnWrapper]time.Time)
+		}
+		q.idleSince[conn] = time.Now()
+		q.scheduleRetirementLocked()
+		break
+	}
+	return nil
+}
+
+func (q *ConnQueue) scheduleRetirementLocked() {
+	if q.shutdown || q.retireTimer != nil || len(q.idleSince) == 0 {
+		return
+	}
+	grace := q.retireAfter
+	if grace <= 0 {
+		grace = time.Minute
+	}
+	q.retireTimer = time.AfterFunc(grace, q.retireIdle)
+}
+
+// retireIdle removes only surplus zero-load wrappers under the same lock that
+// reserves stream capacity. A live checkout can never race with retirement.
+func (q *ConnQueue) retireIdle() {
+	q.mu.Lock()
+	q.retireTimer = nil
+	if q.shutdown {
+		q.mu.Unlock()
+		return
+	}
+	grace := q.retireAfter
+	if grace <= 0 {
+		grace = time.Minute
+	}
+	var retired []*ConnWrapper
+	for i := q.Size; i < len(q.Conn); {
+		conn := q.Conn[i]
+		since, idle := q.idleSince[conn]
+		if !idle || conn.GetCurrentLoad() != 0 || time.Since(since) < grace {
+			i++
+			continue
+		}
+		retired = append(retired, conn)
+		delete(q.idleSince, conn)
+		copy(q.Conn[i:], q.Conn[i+1:])
+		q.Conn[len(q.Conn)-1] = nil
+		q.Conn = q.Conn[:len(q.Conn)-1]
+	}
+	q.scheduleRetirementLocked()
+	q.mu.Unlock()
+	for _, conn := range retired {
+		utils.Close(conn)
+	}
 }
 
 func onceError(fn func() error) func() error {
@@ -292,7 +419,9 @@ func (q *ConnQueue) installReplacementLocked(
 		return old
 	}
 	replacement.ID = replaceID
+	replacement.surplus = index >= q.Size
 	q.Conn[index] = replacement
+	delete(q.idleSince, old)
 	if old != nil {
 		utils.Close(old)
 	}
@@ -312,6 +441,22 @@ func (q *ConnQueue) GetClient() (proxy.ProxyClient, func() error, error) {
 
 // replaceConn replaces a shutdown connection with a new one in the pool.
 func (q *ConnQueue) replaceConn(old *ConnWrapper) {
+	q.dialMu.Lock()
+	defer q.dialMu.Unlock()
+	q.mu.RLock()
+	needed := false
+	if !q.shutdown {
+		for _, conn := range q.Conn {
+			if conn == old {
+				needed = true
+				break
+			}
+		}
+	}
+	q.mu.RUnlock()
+	if !needed {
+		return
+	}
 	newConn, err := q.Dial()
 	if err != nil {
 		log.Printf("rpc: replace connection %d failed: %v", old.ID, err)
@@ -328,7 +473,9 @@ func (q *ConnQueue) replaceConn(old *ConnWrapper) {
 
 	for i, conn := range q.Conn {
 		if conn == old {
+			delete(q.idleSince, old)
 			newConn.ID = old.ID
+			newConn.surplus = old.surplus
 			q.Conn[i] = newConn
 			utils.Close(old)
 			log.Printf("replaced shutdown connection %d with new connection", old.ID)

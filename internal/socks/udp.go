@@ -1,6 +1,7 @@
 package socks
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -98,20 +99,20 @@ func orDefault(v, fallback int) int {
 	return v
 }
 
-// SetUDPSettings applies UDP relay settings. It replaces the process-wide
-// limiters, so it must be called during startup before any association exists —
-// counts held by live associations would otherwise be lost.
+// SetUDPSettings updates admission limits without losing live reservations.
+// Lowering a limit prevents new admissions until existing usage drains. Per-
+// association NAT limits apply to new associations; existing ones retain theirs.
 func SetUDPSettings(s UDPSettings) {
 	udpSettingsMu.Lock()
 	defer udpSettingsMu.Unlock()
 
 	udpDisabled = s.Disable
 	udpMaxNAT = orDefault(s.MaxNATEntries, defaultMaxNATEntries)
-	udpAssociationLimiter = newUDPResourceLimiter(
+	udpAssociationLimiter.setLimits(
 		orDefault(s.MaxAssociations, defaultMaxAssociations),
 		orDefault(s.MaxAssociationsPerClient, defaultMaxAssociationsPerClient),
 	)
-	udpNATLimiter = newUDPResourceLimiter(
+	udpNATLimiter.setLimits(
 		orDefault(s.MaxNATEntriesGlobal, defaultMaxNATEntriesGlobal),
 		orDefault(s.MaxNATEntriesPerClient, defaultMaxNATEntriesPerClient),
 	)
@@ -191,6 +192,12 @@ func (l *udpResourceLimiter) acquire(client string) bool {
 	l.total++
 	l.byClient[client]++
 	return true
+}
+
+func (l *udpResourceLimiter) setLimits(total, perClient int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.maxTotal, l.maxPerClient = total, perClient
 }
 
 func (l *udpResourceLimiter) release(client string) {
@@ -447,6 +454,8 @@ type udpPacket struct {
 
 // UDPRelay relays UDP packets between a SOCKS5 client and arbitrary targets.
 type UDPRelay struct {
+	ctx       context.Context
+	cancel    context.CancelFunc
 	relay     net.PacketConn // client-facing UDP socket
 	clientIP  net.IP         // allowed client IP (from TCP auth)
 	natTable  natTable       // target addr → *natEntry
@@ -529,7 +538,10 @@ func newUDPRelayWithListener(
 		_ = uc.SetWriteBuffer(udpSocketBuffer)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	return &UDPRelay{
+		ctx:                ctx,
+		cancel:             cancel,
 		relay:              relayConn,
 		clientIP:           clientIP,
 		jobs:               make(chan udpPacket, udpJobQueueSize),
@@ -724,7 +736,11 @@ func (r *UDPRelay) getOrCreateNAT(targetAddr string, clientAddr net.Addr) (*natE
 			return nil, ErrUDPNATLimit
 		}
 
-		outbound, resolved, err := dialPacketTarget(route, "udp", targetAddr)
+		ctx := r.ctx
+		if ctx == nil { // support directly constructed relays in tests
+			ctx = context.Background()
+		}
+		outbound, resolved, err := dialPacketTargetContext(ctx, route, "udp", targetAddr)
 		if err != nil {
 			limiter.release(r.clientKey)
 			_ = route.Close()
@@ -777,8 +793,22 @@ func (r *UDPRelay) getOrCreateNAT(targetAddr string, clientAddr net.Addr) (*natE
 // supports it. Proxy transports receive the unresolved domain address so DNS
 // resolution remains on the remote side.
 func dialPacketTarget(route transport.Transport, network, targetAddr string) (net.PacketConn, net.Addr, error) {
+	return dialPacketTargetContext(context.Background(), route, network, targetAddr)
+}
+
+func dialPacketTargetContext(ctx context.Context, route transport.Transport, network, targetAddr string) (net.PacketConn, net.Addr, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	if targetDialer, ok := route.(transport.PacketTargetDialer); ok {
-		conn, target, err := targetDialer.DialPacketTarget(network, targetAddr)
+		var conn net.PacketConn
+		var target net.Addr
+		var err error
+		if dialer, ok := route.(transport.ContextPacketTargetDialer); ok {
+			conn, target, err = dialer.DialPacketTargetContext(ctx, network, targetAddr)
+		} else {
+			conn, target, err = targetDialer.DialPacketTarget(network, targetAddr)
+		}
 		if err != nil {
 			if conn != nil {
 				_ = conn.Close()
@@ -799,7 +829,13 @@ func dialPacketTarget(route transport.Transport, network, targetAddr string) (ne
 	if !ok {
 		return nil, nil, fmt.Errorf("egress %s does not support UDP", route)
 	}
-	conn, err := packetDialer.DialPacket(network, targetAddr)
+	var conn net.PacketConn
+	var err error
+	if dialer, ok := route.(transport.ContextPacketDialer); ok {
+		conn, err = dialer.DialPacketContext(ctx, network, targetAddr)
+	} else {
+		conn, err = packetDialer.DialPacket(network, targetAddr)
+	}
 	if err != nil {
 		if conn != nil {
 			_ = conn.Close()
@@ -907,6 +943,9 @@ func (r *UDPRelay) reverseRelay(entry *natEntry, key string, clientAddr net.Addr
 // Close shuts down the UDP relay and all outbound connections.
 func (r *UDPRelay) Close() error {
 	r.once.Do(func() {
+		if r.cancel != nil {
+			r.cancel()
+		}
 		if r.done != nil {
 			close(r.done)
 		}

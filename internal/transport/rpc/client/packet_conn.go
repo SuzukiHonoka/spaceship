@@ -237,6 +237,7 @@ func (c *StreamPacketConn) SetWriteDeadline(t time.Time) error {
 type pipeDeadline struct {
 	mu     sync.Mutex
 	timer  *time.Timer
+	fired  chan struct{} // closed only after the entire callback has finished
 	cancel chan struct{} // closed when the deadline fires
 	// onFire, when set, runs each time the deadline expires, after cancel is
 	// closed. Set it before the deadline is first used.
@@ -253,7 +254,7 @@ func (d *pipeDeadline) set(t time.Time) {
 	defer d.mu.Unlock()
 
 	if d.timer != nil && !d.timer.Stop() {
-		<-d.cancel // wait for the timer callback to finish and close cancel
+		<-d.fired // cancel closes before onFire; a reset must wait for both
 	}
 	d.timer = nil
 
@@ -272,7 +273,16 @@ func (d *pipeDeadline) set(t time.Time) {
 			d.cancel = make(chan struct{})
 		}
 		cancel := d.cancel
+		// A stopped timer never ran its callback, so its completion channel can
+		// be reused. Deadline refreshes on the datagram hot path need no new
+		// channel allocation until a deadline actually fires.
+		fired := d.fired
+		if fired == nil || isClosedChan(fired) {
+			fired = make(chan struct{})
+		}
+		d.fired = fired
 		d.timer = time.AfterFunc(dur, func() {
+			defer close(fired)
 			close(cancel)
 			if d.onFire != nil {
 				d.onFire()

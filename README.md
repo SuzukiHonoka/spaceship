@@ -29,6 +29,33 @@ Usage of spaceship:
   -v    show spaceship version
 ```
 
+## SOCKS Resource Limits
+
+SOCKS listeners bound both pending handshakes and established sessions. Defaults
+are 4096 connections per listener and a 15-second deadline covering the greeting,
+authentication, and request. Excess connections are closed immediately; shutdown
+closes and drains accepted connections, including clients that sent no bytes.
+The handshake deadline is cleared before tunneling, so it is not a session TTL.
+
+```json
+"socks": {"max_connections": 4096, "handshake_timeout": 15}
+```
+
+Both settings use their defaults when zero; `handshake_timeout` is in seconds.
+The maximum accepted connection limit is 65536. TCP and Unix SOCKS listeners
+each have their own limit.
+
+Embedded callers reapplying configuration retain live UDP association/NAT
+reservations. Lowering global or per-client UDP limits blocks new admissions until
+usage drains; existing sessions are not evicted. Per-association NAT limits apply
+to newly created associations. Rejected configurations do not install UDP policy.
+Packet setup on built-in transports is canceled when its relay closes; custom
+transports should implement the context-aware packet-dial interfaces too.
+
+The local DNS listener caches an older server's missing `DnsExchange` capability
+for one minute, avoiding a failed RPC before every legacy query while periodically
+discovering server upgrades. Its fallback remains tunnel-only.
+
 ## Linux TCP Transparent Redirect
 
 On Linux, a client can accept TCP connections sent to it by the `REDIRECT`
@@ -190,6 +217,10 @@ validation. A non-zero `mux` is a warm minimum: the shared pool grows when all
 current connections reach Spaceship's native per-connection stream limit, up
 to 255 persistent connections. This lets TUN, SOCKS, HTTP, REDIRECT, and DNS
 share capacity without silently overloading the initial TUN-sized pool.
+Concurrent growth requests share one connection-creation path. Surplus wrappers
+with no reservations are retired after a one-minute idle grace period (within two
+minutes), even with `idle_timeout: 0`. The configured warm minimum and active
+streams are never retired by this policy.
 Outside TUN mode, `mux: 0` retains the legacy unpooled behavior.
 
 The growth threshold matches the native Spaceship server's HTTP/2 limit. If an

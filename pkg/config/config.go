@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/redirect"
@@ -61,6 +62,9 @@ func (c *MixedConfig) BypassMarkRequired() bool {
 }
 
 const maxIdleTimeoutSeconds = int64(1<<63-1) / int64(time.Second)
+
+// Apply mutates process-wide policy. Serialize writers, including rollback.
+var applyMu sync.Mutex
 
 func newMixedConfig() *MixedConfig {
 	return &MixedConfig{
@@ -128,7 +132,17 @@ func NewFromString(c string) (*MixedConfig, error) {
 
 // Apply applies the MixedConfig
 func (c *MixedConfig) Apply() error {
+	applyMu.Lock()
+	defer applyMu.Unlock()
 	c.ensureEmbeddedConfigs()
+	if c.SOCKS != nil {
+		if c.SOCKS.MaxConnections < 0 || c.SOCKS.MaxConnections > 1<<16 {
+			return errors.New("socks.max_connections must be between 0 and 65536")
+		}
+		if c.SOCKS.HandshakeTimeout < 0 || int64(c.SOCKS.HandshakeTimeout) > maxIdleTimeoutSeconds {
+			return errors.New("socks.handshake_timeout is out of range")
+		}
+	}
 
 	// role check
 	if c.Role != RoleClient && c.Role != RoleServer {
@@ -353,7 +367,7 @@ func (c *MixedConfig) Apply() error {
 			return err
 		}
 	} else {
-		dns.SetSystemDefault(tunConfig != nil)
+		dns.SetSystemDefault(bypassMark != 0)
 	}
 
 	// custom buffer size
@@ -365,8 +379,6 @@ func (c *MixedConfig) Apply() error {
 			return fmt.Errorf("buffer too large: %dK exceeds maximum %dK",
 				c.Buffer, rpc.MaxTransportBufferSize/1024)
 		}
-		log.Printf("custom buffer size: %dK", c.Buffer)
-		transport.SetBufferSize(c.Buffer)
 	}
 
 	// socks5 udp associate relay. Applied unconditionally so a reload that drops
@@ -397,24 +409,11 @@ func (c *MixedConfig) Apply() error {
 			MaxNATEntriesPerClient:   c.UDP.MaxNATEntriesPerClient,
 		}
 	}
-	socks.SetUDPSettings(udpSettings)
-	if udpSettings.Disable {
-		log.Println("socks5 udp associate disabled")
-	}
-
-	// custom grpc service name
-	if c.Path != "" {
-		log.Printf("custom service name: %s", c.Path)
-		// Use the new RPC configuration system
-		rpc.SetServiceName(c.Path)
-	}
-
 	// client uuid
 	if c.Role == RoleClient {
 		if c.UUID == "" {
 			return errors.New("client uuid empty")
 		}
-		rpcClient.SetUUID(c.UUID)
 	}
 
 	// Forward proxy. Apply this unconditionally so a later Apply that drops the
@@ -453,6 +452,22 @@ func (c *MixedConfig) Apply() error {
 	}
 	if err := router.SetRoutes(routes); err != nil {
 		return err
+	}
+
+	// No fallible preparation remains. Rejected configurations must not change
+	// UDP admission, the RPC identity/service, or transport buffer settings.
+	socks.SetUDPSettings(udpSettings)
+	if udpSettings.Disable {
+		log.Println("socks5 udp associate disabled")
+	}
+	if c.Buffer > 0 {
+		transport.SetBufferSize(c.Buffer)
+	}
+	if c.Path != "" {
+		rpc.SetServiceName(c.Path)
+	}
+	if c.Role == RoleClient {
+		rpcClient.SetUUID(c.UUID)
 	}
 
 	// Activate the prepared dialer only after route installation succeeds. A

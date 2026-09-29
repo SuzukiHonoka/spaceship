@@ -297,10 +297,12 @@ func BenchmarkEndToEnd_UDPTunnel(b *testing.B) {
 			b.ResetTimer()
 			for i := range b.N {
 				start := time.Now()
-				if _, err := pc.WriteTo(payload, target); err != nil {
+				// Exercise both deadline paths, including write callback/reset
+				// synchronization, rather than benchmarking unbounded sends.
+				if err := pc.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 					b.Fatal(err)
 				}
-				if err := pc.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				if _, err := pc.WriteTo(payload, target); err != nil {
 					b.Fatal(err)
 				}
 				n, _, err := pc.ReadFrom(buf)

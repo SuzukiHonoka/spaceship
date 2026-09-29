@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"testing"
+	"time"
 
 	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	mdns "github.com/miekg/dns"
@@ -53,6 +54,43 @@ func (r *responseRecorder) Hijack() {}
 
 type fakeWireExchanger struct {
 	exchange func(context.Context, []byte, proto.Network, bool) ([]byte, error)
+}
+
+func TestLegacyCapabilityCacheExpiresAfterUpgrade(t *testing.T) {
+	s, err := NewServer("127.0.0.1:0", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probes, legacyCalls := 0, 0
+	upgraded := false
+	s.exchanger = fakeWireExchanger{exchange: func(_ context.Context, wire []byte, _ proto.Network, _ bool) ([]byte, error) {
+		probes++
+		if !upgraded {
+			return nil, status.Error(codes.Unimplemented, "old server")
+		}
+		query := new(mdns.Msg)
+		if err := query.Unpack(wire); err != nil {
+			return nil, err
+		}
+		return new(mdns.Msg).SetReply(query).Pack()
+	}}
+	s.legacy = fakeLegacyResolver{resolve: func(context.Context, *mdns.Msg, bool) ([]mdns.RR, int, error) {
+		legacyCalls++
+		return nil, mdns.RcodeSuccess, nil
+	}}
+	query := new(mdns.Msg).SetQuestion("example.com.", mdns.TypeA)
+	for range 10 {
+		s.ServeDNS(new(responseRecorder), query)
+	}
+	if probes != 1 || legacyCalls != 10 {
+		t.Fatalf("probes=%d legacy=%d", probes, legacyCalls)
+	}
+	upgraded = true
+	s.legacyUntil.Store(time.Now().Add(-time.Second).UnixNano())
+	s.ServeDNS(new(responseRecorder), query)
+	if probes != 2 || legacyCalls != 10 {
+		t.Fatal("capability cache masked server upgrade")
+	}
 }
 
 func (e fakeWireExchanger) Exchange(

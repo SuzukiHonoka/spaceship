@@ -118,7 +118,7 @@ func resolveServerAddress(address string) (string, error) {
 }
 
 // SetSystemDefault restores the platform baseline resolver for ordinary
-// operation, or a mark-aware resolver for TUN operation. It is atomically
+// operation, or a mark-aware resolver for TUN/REDIRECT egress. It is atomically
 // swapped without mutating net.DefaultResolver, which would race with unrelated
 // concurrent network operations.
 func SetSystemDefault(markedSockets bool) {

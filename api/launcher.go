@@ -156,6 +156,10 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 	// create socks server
 	if cfg.ListenSocks != "" {
 		socksCfg := &socks.Config{Credentials: basicAuth}
+		if cfg.SOCKS != nil {
+			socksCfg.MaxConnections = cfg.SOCKS.MaxConnections
+			socksCfg.HandshakeTimeout = time.Duration(cfg.SOCKS.HandshakeTimeout) * time.Second
+		}
 		s := socks.New(ctx, socksCfg)
 
 		errGroup.Go(func() error {
@@ -173,6 +177,10 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 			cfg.ListenSocksUnix = "\x00" + cfg.ListenSocksUnix
 		}
 		socksCfg := &socks.Config{Credentials: basicAuth}
+		if cfg.SOCKS != nil {
+			socksCfg.MaxConnections = cfg.SOCKS.MaxConnections
+			socksCfg.HandshakeTimeout = time.Duration(cfg.SOCKS.HandshakeTimeout) * time.Second
+		}
 		s := socks.New(ctx, socksCfg)
 
 		errGroup.Go(func() error {

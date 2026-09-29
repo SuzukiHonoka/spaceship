@@ -30,13 +30,34 @@ records `SKIP` rather than failing, so a Darwin or unprivileged run still
 covers the portable suites. A full Linux pass under Docker looks like:
 
 ```bash
+docker build -f scripts/e2e/Dockerfile.linux -t spaceship-linux-test:local scripts/e2e
 docker run --rm --privileged --device /dev/net/tun \
-  -v "$PWD:/src:ro" -w /src golang:1.27-alpine \
-  sh -ec 'apk add --no-cache git gcc musl-dev iproute2 iptables util-linux >/dev/null
+  -v "$PWD:/src:ro" spaceship-linux-test:local \
+  sh -ec 'go test -race -count=1 ./...
+    SPACESHIP_REDIRECT_INTEGRATION=1 SPACESHIP_REDIRECT_INTEGRATION_IPV6=1 \
+      SPACESHIP_TUN_INTEGRATION=1 go test -race -count=1 -v \
+      ./internal/redirect ./internal/tun \
+      -run "TestNetfilterRedirectIntegration|TestKernelTUNIntegration"
     go build -o /tmp/spaceship ./cmd/spaceship
     mkdir -p /tmp/spaceship-e2e
     go run ./scripts/e2e /tmp/spaceship /tmp/spaceship-e2e'
 ```
+
+Run only trusted source with these privileges. The repository is mounted
+read-only, and network rules are installed in disposable network namespaces;
+do not use host networking or mount the Docker socket into this container.
+
+Performance regression checks cover ordinary/parallel pool checkouts, saturated
+pool growth, and legacy DNS capability caching:
+
+```bash
+go test ./internal/transport/rpc/client ./internal/dns -run '^$' \
+  -bench 'BenchmarkConnQueue|BenchmarkServeDNSLegacy' -benchmem -count=5
+```
+
+`new-conns/burst` should be 1 and cached `RPCs/query` should be 1 (versus 2
+without the cache). Compare timing on an otherwise idle host; the DNS mock
+measures allocations and RPC counts, not network latency.
 
 Coverage:
 
