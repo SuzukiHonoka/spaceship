@@ -44,7 +44,8 @@ const (
 	// initialStreamWindow / initialConnWindow raise HTTP/2 flow-control above
 	// the 64KiB spec default so several in-flight payload chunks (up to the
 	// transport buffer) do not stall waiting for WINDOW_UPDATE on loopback
-	// or LAN links. BDP estimation remains enabled (StaticWindowSize is unset).
+	// or LAN links. In the pinned grpc-go version, setting either initial
+	// window also disables BDP estimation: these are static windows.
 	initialStreamWindow = 4 << 20  // 4 MiB
 	initialConnWindow   = 16 << 20 // 16 MiB
 
@@ -161,8 +162,8 @@ func DialOptions() []grpc.DialOption {
 		grpc.WithContextDialer(dialContext),
 		grpc.WithWriteBufferSize(connBufferSize),
 		grpc.WithReadBufferSize(connBufferSize),
-		grpc.WithInitialWindowSize(initialStreamWindow),
-		grpc.WithInitialConnWindowSize(initialConnWindow),
+		grpc.WithStaticStreamWindowSize(initialStreamWindow),
+		grpc.WithStaticConnWindowSize(initialConnWindow),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(MaxMessageSize),
 			grpc.MaxCallSendMsgSize(MaxMessageSize),
@@ -203,8 +204,8 @@ func ServerOptions() []grpc.ServerOption {
 	return []grpc.ServerOption{
 		grpc.ReadBufferSize(connBufferSize),
 		grpc.WriteBufferSize(connBufferSize),
-		grpc.InitialWindowSize(initialStreamWindow),
-		grpc.InitialConnWindowSize(initialConnWindow),
+		grpc.StaticStreamWindowSize(initialStreamWindow),
+		grpc.StaticConnWindowSize(initialConnWindow),
 		grpc.MaxRecvMsgSize(MaxMessageSize),
 		grpc.MaxSendMsgSize(MaxMessageSize),
 		grpc.MaxConcurrentStreams(MaxConcurrentStreams),

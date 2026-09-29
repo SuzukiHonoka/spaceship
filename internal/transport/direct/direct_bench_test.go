@@ -10,7 +10,13 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/benchtest"
 )
+
+func BenchmarkDirect_TCPStream(b *testing.B) {
+	benchtest.Stream(b, New(), startEcho(b))
+}
 
 // opensslSpeedSizes mirrors `openssl speed`. Small sizes → ops/s (code path);
 // large sizes → MB/s (bulk copy through Direct.Proxy).
@@ -29,6 +35,7 @@ func BenchmarkDirect_Proxy(b *testing.B) {
 			}()
 
 			payload := bytes.Repeat([]byte{0x5a}, size)
+			warmEcho(b, srcWriter, dst, payload)
 			b.SetBytes(int64(size) * 2)
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -42,6 +49,7 @@ func BenchmarkDirect_Proxy(b *testing.B) {
 				}
 			}
 			reportOpsPerSec(b, start)
+			b.StopTimer()
 
 			_ = srcWriter.Close()
 			if err := <-errCh; err != nil && err != io.EOF {
@@ -66,6 +74,7 @@ func BenchmarkDirect_Proxy_Latency(b *testing.B) {
 			}()
 
 			payload := bytes.Repeat([]byte{0x5a}, size)
+			warmEcho(b, srcWriter, dst, payload)
 			samples := make([]time.Duration, b.N)
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -87,6 +96,20 @@ func BenchmarkDirect_Proxy_Latency(b *testing.B) {
 				b.Fatal(err)
 			}
 		})
+	}
+}
+
+func warmEcho(b *testing.B, writer io.Writer, gate *chunkGate, payload []byte) {
+	b.Helper()
+	// Keep connection setup and the first buffer-pool fills out of steady-state
+	// measurements. Use the same warm-up as the gRPC benchmark.
+	for range 4 {
+		if _, err := writer.Write(payload); err != nil {
+			b.Fatal(err)
+		}
+		if err := gate.WaitChunk(); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

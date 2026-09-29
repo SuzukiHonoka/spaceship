@@ -104,6 +104,39 @@ func TestProxyCodecUnmarshalZeroCopy(t *testing.T) {
 	}
 }
 
+func TestProxyCodecSmallPayloadRetainDoesNotAllocate(t *testing.T) {
+	for _, msg := range []proto.Message{new(proxy.ProxySRC), new(proxy.ProxyDST)} {
+		t.Run(fmt.Sprintf("%T", msg), func(t *testing.T) {
+			tag := srcPayloadTag
+			if _, ok := msg.(*proxy.ProxyDST); ok {
+				tag = dstPayloadTag
+			}
+			frame := mem.BufferSlice{mem.SliceBuffer{tag, 3, 1, 2, 3}}
+			RetainPayloadViews(msg)
+			defer ReleaseMessageBuffers(msg)
+			var codec proxyCodec
+			allocs := testing.AllocsPerRun(100, func() {
+				if err := codec.Unmarshal(frame, msg); err != nil {
+					t.Fatal(err)
+				}
+			})
+			if allocs != 0 {
+				t.Fatalf("retaining a small payload allocated %g times, want 0", allocs)
+			}
+			var payload []byte
+			switch m := msg.(type) {
+			case *proxy.ProxySRC:
+				payload = m.GetPayload()
+			case *proxy.ProxyDST:
+				payload = m.GetPayload()
+			}
+			if !bytes.Equal(payload, []byte{1, 2, 3}) || &payload[0] != &frame[0].ReadOnlyData()[2] {
+				t.Fatal("payload must alias the frame without exposing its protobuf header")
+			}
+		})
+	}
+}
+
 // countingPool records how many buffers were returned, so a test can observe
 // exactly when the codec drops its last reference to a receive frame.
 type countingPool struct {
@@ -451,30 +484,28 @@ func BenchmarkProxyCodec_UnmarshalPayload(b *testing.B) {
 				HeaderOrPayload: &proxy.ProxyDST_Payload{},
 			}
 			RetainPayloadViews(msg)
-			b.Cleanup(func() { ReleaseMessageBuffers(msg) })
+			pool := newDirtyTieredPool(size + 64)
+			buf := pool.Get(len(wire))
+			copy(*buf, wire)
+			frame := mem.NewBuffer(buf, pool)
+			data := mem.BufferSlice{frame}
+			b.Cleanup(func() {
+				ReleaseMessageBuffers(msg)
+				frame.Free()
+			})
 
 			b.SetBytes(int64(size))
 			b.ReportAllocs()
-			samples := make([]time.Duration, b.N)
+			// Reuse an immutable received frame. Per-iteration Stop/StartTimer,
+			// frame construction, and RTT sampling obscure the codec's steady-
+			// state operation cost and make short benchmarks take minutes.
 			b.ResetTimer()
-			for i := range b.N {
-				b.StopTimer()
-				frameBytes := append([]byte(nil), wire...)
-				frame := mem.NewBuffer(&frameBytes, nil)
-				b.StartTimer()
-
-				start := time.Now()
-				err := c.Unmarshal(mem.BufferSlice{frame}, msg)
-				samples[i] = time.Since(start)
-				if err != nil {
+			for range b.N {
+				if err := c.Unmarshal(data, msg); err != nil {
 					b.Fatal(err)
 				}
-				b.StopTimer()
-				frame.Free()
-				b.StartTimer()
 			}
 			b.StopTimer()
-			reportCodecRTT(b, samples)
 		})
 	}
 }

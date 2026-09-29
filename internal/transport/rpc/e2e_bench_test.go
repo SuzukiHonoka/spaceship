@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/benchtest"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/client"
 	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
@@ -23,14 +24,48 @@ import (
 
 var opensslSpeedSizes = []int{16, 64, 256, 1024, 8192, 16384, 1 << 20}
 
+func BenchmarkEndToEnd_TCPStream(b *testing.B) {
+	benchmarkTCPStream(b, false)
+}
+
+func BenchmarkEndToEnd_TCPStreamTLS(b *testing.B) {
+	benchmarkTCPStream(b, true)
+}
+
+func benchmarkTCPStream(b *testing.B, useTLS bool) {
+	quietLogs(b)
+	routeAllDirect(b)
+	echoAddr := startTCPEcho(b)
+	connectBenchmarkClient(b, useTLS)
+	benchtest.Stream(b, benchClient(b), echoAddr)
+}
+
+func connectBenchmarkClient(b *testing.B, useTLS bool) {
+	b.Helper()
+	if useTLS {
+		cert, key := generateTestCert(b)
+		connectClientTLS(b, startTLSProxyServer(b, cert, key), []string{cert})
+		return
+	}
+	connectClient(b, startProxyServer(b))
+}
+
 // BenchmarkEndToEnd_TCPTunnel sweeps openssl-style chunk sizes over one
 // long-lived client→gRPC→server→echo session. ops/s = chunk round-trips/sec
 // (code/path efficiency); MB/s = tunneled throughput at that chunk size.
 func BenchmarkEndToEnd_TCPTunnel(b *testing.B) {
+	benchmarkTCPTunnel(b, false)
+}
+
+func BenchmarkEndToEnd_TCPTunnelTLS(b *testing.B) {
+	benchmarkTCPTunnel(b, true)
+}
+
+func benchmarkTCPTunnel(b *testing.B, useTLS bool) {
 	quietLogs(b)
 	routeAllDirect(b)
 	echoAddr := startTCPEcho(b)
-	connectClient(b, startProxyServer(b))
+	connectBenchmarkClient(b, useTLS)
 	c := benchClient(b)
 
 	for _, size := range opensslSpeedSizes {
@@ -49,6 +84,7 @@ func BenchmarkEndToEnd_TCPTunnel(b *testing.B) {
 			}()
 
 			payload := bytes.Repeat([]byte{0x5a}, size)
+			warmEcho(b, srcWriter, dst, payload)
 			b.SetBytes(int64(size) * 2)
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -62,6 +98,7 @@ func BenchmarkEndToEnd_TCPTunnel(b *testing.B) {
 				}
 			}
 			elapsed := time.Since(start).Seconds()
+			b.StopTimer()
 			if elapsed > 0 {
 				b.ReportMetric(float64(b.N)/elapsed, "ops/s")
 			}
@@ -77,10 +114,18 @@ func BenchmarkEndToEnd_TCPTunnel(b *testing.B) {
 // BenchmarkEndToEnd_TCPTunnel_Latency measures per-chunk RTT over one long-lived
 // client→gRPC→server→echo session and reports avg/p50/p99 in microseconds.
 func BenchmarkEndToEnd_TCPTunnel_Latency(b *testing.B) {
+	benchmarkTCPTunnelLatency(b, false)
+}
+
+func BenchmarkEndToEnd_TCPTunnelTLS_Latency(b *testing.B) {
+	benchmarkTCPTunnelLatency(b, true)
+}
+
+func benchmarkTCPTunnelLatency(b *testing.B, useTLS bool) {
 	quietLogs(b)
 	routeAllDirect(b)
 	echoAddr := startTCPEcho(b)
-	connectClient(b, startProxyServer(b))
+	connectBenchmarkClient(b, useTLS)
 	c := benchClient(b)
 
 	for _, size := range opensslSpeedSizes {
@@ -99,6 +144,7 @@ func BenchmarkEndToEnd_TCPTunnel_Latency(b *testing.B) {
 			}()
 
 			payload := bytes.Repeat([]byte{0x5a}, size)
+			warmEcho(b, srcWriter, dst, payload)
 			samples := make([]time.Duration, b.N)
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -120,6 +166,19 @@ func BenchmarkEndToEnd_TCPTunnel_Latency(b *testing.B) {
 				b.Fatal(err)
 			}
 		})
+	}
+}
+
+func warmEcho(b *testing.B, writer io.Writer, gate *chunkGate, payload []byte) {
+	b.Helper()
+	// Match Direct.Proxy: exclude connection setup and initial pool fills.
+	for range 4 {
+		if _, err := writer.Write(payload); err != nil {
+			b.Fatal(err)
+		}
+		if err := gate.WaitChunk(); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

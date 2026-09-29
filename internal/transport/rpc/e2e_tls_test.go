@@ -27,7 +27,7 @@ const testTLSHost = "spaceship.test"
 // generateTestCert writes a self-signed certificate valid for testTLSHost and
 // loopback, returning the cert and key paths. It doubles as its own CA so the
 // client can trust it by passing the cert as a custom CA.
-func generateTestCert(t *testing.T) (certPath, keyPath string) {
+func generateTestCert(t testing.TB) (certPath, keyPath string) {
 	t.Helper()
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -78,7 +78,7 @@ func generateTestCert(t *testing.T) (certPath, keyPath string) {
 }
 
 // startTLSProxyServer runs a proxy server terminating TLS itself.
-func startTLSProxyServer(t *testing.T, certPath, keyPath string) string {
+func startTLSProxyServer(t testing.TB, certPath, keyPath string) string {
 	t.Helper()
 
 	addr := freeLoopbackAddr(t)
@@ -107,7 +107,7 @@ func startTLSProxyServer(t *testing.T, certPath, keyPath string) string {
 }
 
 // connectClientTLS initializes the pool with TLS enabled and the given CA list.
-func connectClientTLS(t *testing.T, addr string, cas []string) {
+func connectClientTLS(t testing.TB, addr string, cas []string) {
 	t.Helper()
 	client.SetUUID(testUUID)
 	if err := client.Init(addr, testTLSHost, true, 1, cas); err != nil {

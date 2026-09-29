@@ -59,6 +59,48 @@ go test ./internal/transport/rpc/client ./internal/dns -run '^$' \
 without the cache). Compare timing on an otherwise idle host; the DNS mock
 measures allocations and RPC counts, not network latency.
 
+Compare steady-state direct TCP forwarding with the real gRPC tunnel:
+
+```bash
+GOMAXPROCS=4 go test -p=1 ./internal/transport/direct ./internal/transport/rpc \
+  -run '^$' -bench 'BenchmarkDirect_Proxy|BenchmarkEndToEnd_TCPTunnel$|BenchmarkEndToEnd_TCPTunnel_Latency' \
+  -benchmem -benchtime=2s -count=5
+```
+
+Both paths warm up four round trips before timing and exclude teardown.
+An operation is one echoed chunk; MB/s counts request plus response bytes,
+not one-way link speed. Latency benchmarks report round-trip p50/p99 separately.
+Use the same Go version, CPU settings, and benchmark harness for before/after
+comparisons, alternate run order, and report medians and spread. These are h2c
+loopback measurements, not TLS/WAN capacity guarantees. Codec microbenchmarks
+measure encoding/decoding costs, not network throughput.
+The direct reference is `Direct.Proxy`, not a raw TCP socket. Both drivers feed
+an `io.Pipe` and consume an in-memory sink; Go's `ReaderFrom`/`WriterTo` paths
+can use different copy sizes than the configured transport buffer. These
+numbers do not describe socket-to-socket splice throughput or a real WAN.
+
+Measure continuous echoed traffic separately (no per-chunk round-trip barrier):
+
+```bash
+GOMAXPROCS=4 go test -p=1 ./internal/transport/direct ./internal/transport/rpc \
+  -run '^$' -bench 'TCPStream$' -benchmem -benchtime=3s -count=5
+```
+
+Both use the same workload driver, warm up 4 MiB, and wait for all echoed bytes
+before stopping the timer. One operation is a 1 MiB write and MB/s still counts
+both directions. The sink counts bytes without a per-operation timer; it does
+not check content integrity (the integration tests do that). Continuous-stream
+results must not be substituted for the stop-and-wait throughput or RTT results.
+`ops/s` is completed workload operations per second, **not** syscall count;
+`ns/op` is time per workload operation, and `allocs/op` counts heap allocations.
+
+Use `-bench 'TCPStream(TLS)?$'` to include the continuous-stream TLS variant.
+For encrypted stop-and-wait throughput and latency, use
+`-bench 'BenchmarkEndToEnd_TCPTunnelTLS($|_Latency)'`. These variants use the
+same workload and a verified local test certificate; TLS setup is outside the
+timed region. Compare TLS against TLS when evaluating a change, and identify
+the encryption difference when comparing it against unencrypted direct TCP.
+
 Coverage:
 
 - h2c and TLS tunnels: 4 MiB SOCKS5 round trip verified by SHA-256, 40

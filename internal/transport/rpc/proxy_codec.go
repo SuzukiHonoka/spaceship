@@ -25,7 +25,9 @@ import (
 //     written into a reserved prefix and the buffer is adopted with no copy;
 //   - unmarshals those messages into a message registered with
 //     RetainPayloadViews by retaining a refcounted view into the gRPC receive
-//     buffer (no per-chunk copy). ReleaseMessageBuffers must be called when
+//     buffer, avoiding the protobuf bytes-field copy. Messages split across
+//     receive buffers still require one coalescing copy. ReleaseMessageBuffers
+//     must be called when
 //     that message is retired so the view and the registration are freed.
 //     Messages that were not registered (for example the fresh message the
 //     generated Recv allocates per call) take the copying path, so they never
@@ -352,9 +354,10 @@ func unmarshalProxyDST(data mem.BufferSlice, m *proxy.ProxyDST) error {
 	return proto.Unmarshal(raw, m)
 }
 
-// tryPayloadView returns a refcounted view of the sole length-delimited bytes
-// field when the frame is a single payload chunk. The caller must Free view
-// (via heldView.replace/ReleaseMessageBuffers) after it is done aliasing payload.
+// tryPayloadView returns the sole bytes field and a refcounted buffer keeping
+// that payload alive. The retained buffer may also contain the envelope; only
+// payload is exposed to the caller. Free view via heldView.replace or
+// ReleaseMessageBuffers after it is done aliasing payload.
 func tryPayloadView(data mem.BufferSlice, tag byte) (payload []byte, view mem.Buffer, ok bool) {
 	if len(data) == 0 {
 		return nil, nil, false
@@ -378,11 +381,16 @@ func tryPayloadView(data mem.BufferSlice, tag byte) (payload []byte, view mem.Bu
 		return nil, nil, false
 	}
 
-	view = frame.Slice(start, end)
+	// Keep the frame itself alive and expose only its payload through the byte
+	// slice. Slice would allocate another interface-backed wrapper for small
+	// (unpooled) frames, and obtain a second pooled wrapper for larger ones.
+	// Both approaches retain the same backing storage; no extra view is needed.
+	frame.Ref()
+	payload = raw[start:end]
 	if freeFrame != nil {
 		freeFrame()
 	}
-	return view.ReadOnlyData(), view, true
+	return payload, frame, true
 }
 
 // frameBytes returns a contiguous view of the gRPC frame. The common case is a
