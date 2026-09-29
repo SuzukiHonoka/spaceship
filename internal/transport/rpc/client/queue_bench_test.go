@@ -43,8 +43,8 @@ func newBenchPooledQueue(b *testing.B) *ConnQueue {
 func BenchmarkConnQueueGetConn(b *testing.B) {
 	queue := newBenchPooledQueue(b)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
+
+	for b.Loop() {
 		_, done, err := queue.GetConn()
 		if err != nil {
 			b.Fatal(err)
