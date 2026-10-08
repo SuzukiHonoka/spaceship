@@ -221,6 +221,12 @@ Concurrent growth requests share one connection-creation path. Surplus wrappers
 with no reservations are retired after a one-minute idle grace period (within two
 minutes), even with `idle_timeout: 0`. The configured warm minimum and active
 streams are never retired by this policy.
+New sessions go to ready connections first; one that is reconnecting is used
+only when no ready connection has stream capacity. A pooled connection whose
+transport is lost (a TCP reset, or a keepalive timeout) is reconnected in the
+background instead of on the next session, with exponential backoff when new
+connections keep dropping. A connection idled by `idle_timeout` stays idle
+until it is next needed.
 Outside TUN mode, `mux: 0` retains the legacy unpooled behavior.
 
 The growth threshold matches the native Spaceship server's HTTP/2 limit. If an

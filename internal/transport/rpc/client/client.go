@@ -124,12 +124,14 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 		return fmt.Errorf("setup grpc credential failed: %w", err)
 	}
 
+	idleTimeout := transport.GetIdleTimeout()
 	params := NewParams(server, append(rpc.DialOptions(),
 		grpc.WithTransportCredentials(credential),
-		grpc.WithIdleTimeout(transport.GetIdleTimeout()),
+		grpc.WithIdleTimeout(idleTimeout),
 		grpc.WithUnaryInterceptor(rpc.UnaryClientAuthInterceptor(getUUID)),
 		grpc.WithStreamInterceptor(rpc.StreamClientAuthInterceptor(getUUID)),
 	)...)
+	params.IdleTimeout = idleTimeout
 	q := NewConnQueue(int(mux), params)
 	if err := q.Init(); err != nil {
 		return err

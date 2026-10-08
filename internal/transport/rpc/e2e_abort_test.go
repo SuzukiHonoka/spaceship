@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -100,6 +101,8 @@ func proxyThroughTunnel(t *testing.T, target string, closeAfter bool) (proxySide
 	done = make(chan error, 1)
 	go func() {
 		err := c.Proxy(context.Background(), target, make(chan string, 1), proxySide, proxySide)
+		// Release the pool reservation as front ends do once Proxy returns.
+		_ = c.Close()
 		if closeAfter {
 			_ = proxySide.Close()
 		}
@@ -187,7 +190,24 @@ func TestEndToEnd_RejectedSessionLeavesClientWritable(t *testing.T) {
 type testRelay struct {
 	listener net.Listener
 	mu       sync.Mutex
-	conns    []*net.TCPConn
+	conns    []*relayedConn
+}
+
+type relayedConn struct {
+	conn  *net.TCPConn
+	bytes atomic.Int64
+}
+
+// countingWriter counts bytes relayed through one connection.
+type countingWriter struct {
+	io.Writer
+	n *atomic.Int64
+}
+
+func (w countingWriter) Write(p []byte) (int, error) {
+	n, err := w.Writer.Write(p)
+	w.n.Add(int64(n))
+	return n, err
 }
 
 func startTestRelay(t testing.TB, server string) *testRelay {
@@ -214,15 +234,16 @@ func startTestRelay(t testing.TB, server string) *testRelay {
 				_ = conn.Close()
 				continue
 			}
+			relayed := &relayedConn{conn: conn.(*net.TCPConn)}
 			r.mu.Lock()
-			r.conns = append(r.conns, conn.(*net.TCPConn))
+			r.conns = append(r.conns, relayed)
 			r.mu.Unlock()
 			pipes.Go(func() {
-				_, _ = io.Copy(upstream, conn)
+				_, _ = io.Copy(countingWriter{upstream, &relayed.bytes}, conn)
 				_ = upstream.Close()
 			})
 			pipes.Go(func() {
-				_, _ = io.Copy(conn, upstream)
+				_, _ = io.Copy(countingWriter{conn, &relayed.bytes}, upstream)
 				_ = conn.Close()
 			})
 		}
@@ -238,8 +259,36 @@ func (r *testRelay) resetAll() {
 	conns := r.conns
 	r.conns = nil
 	r.mu.Unlock()
-	for _, conn := range conns {
-		_ = conn.SetLinger(0)
-		_ = conn.Close()
+	for _, relayed := range conns {
+		_ = relayed.conn.SetLinger(0)
+		_ = relayed.conn.Close()
 	}
+}
+
+// resetBusiest runs use, then resets the connection that carried the most
+// bytes while it ran: the one the pool picked for it.
+func (r *testRelay) resetBusiest(t testing.TB, use func()) {
+	t.Helper()
+	r.mu.Lock()
+	before := make([]int64, len(r.conns))
+	for i, relayed := range r.conns {
+		before[i] = relayed.bytes.Load()
+	}
+	r.mu.Unlock()
+	use()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	busiest, most := -1, int64(0)
+	for i := range before {
+		if delta := r.conns[i].bytes.Load() - before[i]; delta > most {
+			busiest, most = i, delta
+		}
+	}
+	if busiest < 0 {
+		t.Fatal("no relayed connection carried the session")
+	}
+	relayed := r.conns[busiest]
+	r.conns = append(r.conns[:busiest], r.conns[busiest+1:]...)
+	_ = relayed.conn.SetLinger(0)
+	_ = relayed.conn.Close()
 }
