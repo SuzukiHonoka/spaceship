@@ -8,7 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"testing"
 )
 
@@ -16,7 +16,9 @@ import (
 // FreeLoopbackAddr draws from.
 const reservedSpan = 16384
 
-var portSeq atomic.Uint32
+// handedOut holds the ports already returned in this process, so two calls
+// made before either caller binds never return the same one.
+var handedOut sync.Map
 
 // FreeLoopbackAddr returns a loopback TCP address that is free now, for code
 // under test that has to bind the address itself.
@@ -33,11 +35,13 @@ func FreeLoopbackAddr(t testing.TB) string {
 	t.Helper()
 	if low, ok := ephemeralLow(); ok {
 		first := max(1024, low-reservedSpan)
-		span := uint32(low - first)
-		if span > 0 {
-			start := rand.Uint32N(span) // #nosec G404 -- spreads test ports, not security
-			for range 128 {
-				port := first + int((start+portSeq.Add(1))%span)
+		if span := low - first; span > 0 {
+			start := rand.IntN(span) // #nosec G404 -- spreads test ports, not security
+			for i := range min(128, span) {
+				port := first + (start+i)%span
+				if _, taken := handedOut.LoadOrStore(port, struct{}{}); taken {
+					continue
+				}
 				addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 				if probe, err := net.Listen("tcp", addr); err == nil {
 					if err := probe.Close(); err != nil {
