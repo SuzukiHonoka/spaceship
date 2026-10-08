@@ -131,14 +131,7 @@ func kernelConn(v any) (net.Conn, bool) {
 // through the gate earlier would deliver tunnel bytes before the proxy reply.
 func copyStream(ctx context.Context, dst io.Writer, src io.Reader) (int64, error) {
 	if gate, ok := dst.(*ReplyGate); ok {
-		select {
-		case <-gate.ready:
-		case <-ctx.Done():
-			return 0, ctx.Err()
-		}
-		// Cancellation can coincide with Release. Do not forward withheld
-		// bytes when both were ready and the gate happened to win.
-		if err := ctx.Err(); err != nil {
+		if err := gate.wait(ctx); err != nil {
 			return 0, err
 		}
 		dst = gate.w

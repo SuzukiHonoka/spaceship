@@ -40,6 +40,13 @@ func (s *Statistic) AddRx(delta uint64) {
 	}
 }
 
+// contextWriter is a writer whose wait before writing can be cut short, such
+// as a transport.ReplyGate that withholds bytes until the front end's reply.
+// Cancelling the RPC stream alone cannot unblock a write waiting on it.
+type contextWriter interface {
+	WriteContext(ctx context.Context, p []byte) (int, error)
+}
+
 type Forwarder struct {
 	ctx context.Context
 	// cancel aborts the underlying stream. Used to unblock a handshake Send that
@@ -184,10 +191,10 @@ func (f *Forwarder) copyTargetToSRC(ctx context.Context, buf *proxy.ProxyDST) er
 		// data size already aligned with transport.bufferSize, skip copy in trunk
 		var n int
 		var err error
-		if gate, ok := f.writer.(*transport.ReplyGate); ok {
+		if cw, ok := f.writer.(contextWriter); ok {
 			// Use the errgroup's copy context, including upload failures that
 			// cancel it before the handshake address reaches the front end.
-			n, err = gate.WriteContext(ctx, v.Payload)
+			n, err = cw.WriteContext(ctx, v.Payload)
 		} else {
 			n, err = f.writer.Write(v.Payload)
 		}

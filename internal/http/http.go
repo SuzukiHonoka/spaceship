@@ -339,10 +339,6 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	})
 
 	errGroup.Go(func() error {
-		// Release on every exit. A dial failure never starts copying, but a
-		// copy that is already waiting must not stay blocked when this
-		// goroutine returns the handshake error.
-		defer downstream.Release()
 		// wait for proxy handshake
 		localAddr, ok := <-proxyLocalAddr
 		if !ok || localAddr == "" {
@@ -353,7 +349,11 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		if _, err = client.Write(MessageConnectionEstablished); err != nil {
 			return fmt.Errorf("send connection established failed: %w", err)
 		}
-
+		// Release only after the 200 is written. errgroup cancels the session
+		// after this function returns, so releasing on a failed exit would
+		// open a window for tunnel bytes to reach the client ahead of the
+		// cancellation; the cancellation and teardown unblock the copy instead.
+		downstream.Release()
 		return nil
 	})
 

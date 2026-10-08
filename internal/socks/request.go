@@ -160,7 +160,6 @@ func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Reques
 	})
 
 	errGroup.Go(func() (err error) {
-		defer downstream.Release()
 		local, ok := <-localAddr
 		if !ok || local == "" {
 			if err = sendReply(conn, networkUnreachable, nil); err != nil {
@@ -178,6 +177,11 @@ func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Reques
 		if err = sendReply(conn, successReply, &bind); err != nil {
 			return fmt.Errorf("failed to send reply: %v", err)
 		}
+		// Release only after the success reply is written. On any failed
+		// exit the gate stays shut: errgroup cancels the session once this
+		// function returns, and releasing first would let tunnel bytes reach
+		// a client that never received a success reply.
+		downstream.Release()
 		//log.Printf("proxy local addr: %s\n", local)
 		//log.Println("proxy local end")
 		return nil
