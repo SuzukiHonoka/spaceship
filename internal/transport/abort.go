@@ -2,6 +2,7 @@ package transport
 
 import (
 	"io"
+	"reflect"
 	"slices"
 )
 
@@ -39,14 +40,22 @@ func Abort(v any) {
 	}
 }
 
-// AbortAll aborts every distinct value, with the same dedupe as CloseAll.
+// AbortAll aborts every distinct value. HTTP CONNECT passes one connection as
+// both src and dst, so identical values are aborted once. Values whose
+// dynamic type is not comparable (comparing them would panic) are never
+// treated as duplicates.
 func AbortAll(values ...any) {
 	seen := make([]any, 0, len(values))
 	for _, value := range values {
-		if value == nil || slices.Contains(seen, value) {
+		if value == nil {
 			continue
 		}
-		seen = append(seen, value)
+		if reflect.TypeOf(value).Comparable() {
+			if slices.Contains(seen, value) {
+				continue
+			}
+			seen = append(seen, value)
+		}
 		Abort(value)
 	}
 }

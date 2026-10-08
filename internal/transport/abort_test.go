@@ -97,3 +97,23 @@ func TestAbortAllFallsBackToCloseAndDedupes(t *testing.T) {
 		t.Fatalf("closed %d times, want 1", closer.closed)
 	}
 }
+
+// uncomparableCloser has a slice field, so == on two of them panics.
+type uncomparableCloser struct {
+	closed *int
+	_      []byte
+}
+
+func (c uncomparableCloser) Close() error {
+	*c.closed++
+	return nil
+}
+
+func TestAbortAllToleratesUncomparableValues(t *testing.T) {
+	closed := 0
+	value := uncomparableCloser{closed: &closed}
+	AbortAll(value, value)
+	if closed != 2 {
+		t.Fatalf("closed %d times, want each uncomparable value closed", closed)
+	}
+}

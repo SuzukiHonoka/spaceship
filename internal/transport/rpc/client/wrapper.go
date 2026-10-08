@@ -147,46 +147,64 @@ func pickTier(state connectivity.State) int {
 	}
 }
 
-// pick returns the least-loaded connection from the best connectivity tier
-// that still has stream capacity below limit. Least load alone would favour a
-// connection whose transport was just reset: its sessions died with it, so it
-// reads as the emptiest, and the next session would pay its reconnect while
-// warm connections sit unused. When every usable connection is at limit, pick
-// returns the least-loaded one from the best tier so the caller can decide to
-// grow the pool.
+// pick returns the connection a new stream should use. See pickFrom.
 func (w ConnWrappers) pick(limit uint32) *ConnWrapper {
-	const tiers = 3
-	var (
-		withCapacity [tiers]*ConnWrapper
-		anyLoad      [tiers]*ConnWrapper
-	)
+	candidates := make([]pickCandidate, 0, len(w))
 	for _, c := range w {
 		if c == nil {
 			continue
 		}
-		tier := pickTier(c.getState())
+		candidates = append(candidates, pickCandidate{c, c.getState(), c.InUse.Load()})
+	}
+	return pickFrom(candidates, limit)
+}
+
+type pickCandidate struct {
+	conn  *ConnWrapper
+	state connectivity.State
+	load  uint32
+}
+
+// pickFrom chooses, in order:
+//
+//  1. the least-loaded ready connection with stream capacity below limit;
+//  2. the least-loaded idle or connecting one with capacity, which costs a
+//     handshake but no new connection;
+//  3. the least-loaded live connection, even at limit, so the caller grows
+//     the pool rather than fail the session;
+//  4. only when no live connection exists, the least-loaded one in transient
+//     failure, as before.
+//
+// Load alone would favour a connection whose transport was just reset: its
+// sessions died with it, so it reads as the emptiest, and the next session
+// would pay its reconnect while warm connections sit unused.
+func pickFrom(candidates []pickCandidate, limit uint32) *ConnWrapper {
+	const tiers = 3
+	var withCapacity, anyLoad [tiers]*pickCandidate
+	for i := range candidates {
+		c := &candidates[i]
+		tier := pickTier(c.state)
 		if tier < 0 {
 			continue
 		}
-		load := c.InUse.Load()
-		if best := anyLoad[tier]; best == nil || load < best.InUse.Load() {
+		if best := anyLoad[tier]; best == nil || c.load < best.load {
 			anyLoad[tier] = c
 		}
-		if load >= limit {
+		if c.load >= limit {
 			continue
 		}
-		if best := withCapacity[tier]; best == nil || load < best.InUse.Load() {
+		if best := withCapacity[tier]; best == nil || c.load < best.load {
 			withCapacity[tier] = c
 		}
 	}
-	for _, c := range withCapacity {
-		if c != nil {
-			return c
-		}
+	order := []*pickCandidate{
+		withCapacity[0], withCapacity[1], // 1, 2
+		anyLoad[0], anyLoad[1], // 3
+		withCapacity[2], anyLoad[2], // 4
 	}
-	for _, c := range anyLoad {
+	for _, c := range order {
 		if c != nil {
-			return c
+			return c.conn
 		}
 	}
 	return nil
