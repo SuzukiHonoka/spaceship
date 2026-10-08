@@ -13,8 +13,6 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
 	proxy "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	"golang.org/x/sync/errgroup"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // Sentinel errors for the TCP proxy handshake path. Outer layers (HTTP/SOCKS)
@@ -22,6 +20,7 @@ import (
 var (
 	errServerAckTimeout = errors.New("server ack timeout")
 	errServerRejected   = errors.New("server rejected connection")
+	errTunnelLost       = errors.New("tunnel lost")
 )
 
 type Statistic struct {
@@ -51,6 +50,9 @@ type Forwarder struct {
 	reader        io.Reader
 	localAddr     chan string
 	closeAddrOnce sync.Once
+	// accepted is set once the server acknowledges the session, after which
+	// the client connection carries tunnelled bytes.
+	accepted atomic.Bool
 
 	// Statistic for TX and RX
 	Statistic *Statistic
@@ -111,12 +113,14 @@ func (f *Forwarder) CopyTargetToSRC(ctx context.Context) error {
 		defer rpc.ReleaseMessageBuffers(dstData)
 		for {
 			if err := f.stream.RecvMsg(dstData); err != nil {
-				// gRPC transport breakdown (Unavailable) is a stream
-				// termination, same as EOF — the session is over.
-				if s, ok := status.FromError(err); ok && s.Code() == codes.Unavailable {
+				if errors.Is(err, io.EOF) {
+					// The server completed the RPC: an orderly end.
 					errCh <- io.EOF
 				} else {
-					errCh <- err
+					// The tunnel broke (a reset or timed-out transport surfaces
+					// as Unavailable) before the server ended the session, so
+					// the response the client has received is incomplete.
+					errCh <- fmt.Errorf("%w: %w", errTunnelLost, err)
 				}
 				return
 			}
@@ -129,6 +133,15 @@ func (f *Forwarder) CopyTargetToSRC(ctx context.Context) error {
 
 	select {
 	case err := <-errCh:
+		// Only the server's EOF status (or a completed RPC) proves the response
+		// is whole. Anything else, other than our own cancellation, leaves the
+		// client holding a truncated stream, so reset it instead of letting the
+		// caller close it in an orderly way.
+		// Before the server accepts the session the front end still owns the
+		// connection and must be able to write its own failure reply.
+		if f.accepted.Load() && !errors.Is(err, io.EOF) && ctx.Err() == nil {
+			transport.Abort(f.writer)
+		}
 		return err
 	case <-ctx.Done():
 		// Abort the stream so the receive goroutine unblocks from RecvMsg, then
@@ -177,6 +190,7 @@ func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) error {
 			return transport.ErrInvalidMessage
 		}
 
+		f.accepted.Store(true)
 		f.localAddr <- v.Header.Addr
 	case proxy.ProxyStatus_EOF:
 		return io.EOF

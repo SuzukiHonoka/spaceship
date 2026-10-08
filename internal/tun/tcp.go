@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"sync"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -36,7 +37,7 @@ func (s *Service) handleTCPRequest(request *tcp.ForwarderRequest) {
 	}
 	request.Complete(false)
 
-	conn := gonet.NewTCPConn(&waitQueue, endpoint)
+	conn := newTCPConn(gonet.NewTCPConn(&waitQueue, endpoint), endpoint)
 	defer utils.Close(conn)
 
 	if s.cfg.DNS.Enabled && id.LocalPort == 53 {
@@ -80,4 +81,33 @@ func endpointAddress(address tcpip.Address, port uint16) (netip.AddrPort, error)
 		return netip.AddrPort{}, fmt.Errorf("tun: invalid TCP destination %s:%d", address, port)
 	}
 	return netip.AddrPortFrom(addr.Unmap(), port), nil
+}
+
+// tcpConn lets a transport reset a netstack connection. gonet.TCPConn only
+// closes in an orderly way, so an upstream failure would otherwise reach the
+// application behind the TUN as a clean end of stream. Close and Abort share
+// one once: whichever runs first decides how the connection ends.
+type tcpConn struct {
+	*gonet.TCPConn
+	endpoint tcpip.Endpoint
+	once     sync.Once
+	err      error
+}
+
+func newTCPConn(conn *gonet.TCPConn, endpoint tcpip.Endpoint) *tcpConn {
+	return &tcpConn{TCPConn: conn, endpoint: endpoint}
+}
+
+func (c *tcpConn) Close() error {
+	c.once.Do(func() { c.err = c.TCPConn.Close() })
+	return c.err
+}
+
+// Abort resets the connection: netstack sends a TCP RST to the application.
+func (c *tcpConn) Abort() error {
+	c.once.Do(func() {
+		c.endpoint.Abort()
+		c.err = c.TCPConn.Close()
+	})
+	return c.err
 }

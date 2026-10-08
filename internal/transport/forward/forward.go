@@ -133,12 +133,23 @@ func (f *Forward) Proxy(ctx context.Context, addr string, localAddr chan<- strin
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// The first teardown decides how both sides end. A failed response stream
+	// is aborted so the client sees a reset rather than a clean EOF that would
+	// make the truncated response look complete; every other ending is
+	// orderly. A request-side failure stays orderly on purpose: a target that
+	// stops reading has usually already answered, and a reset could discard
+	// that answer before the client reads it.
 	var closeOnce sync.Once
-	closeSession := func() {
+	endSession := func(abort bool) {
 		closeOnce.Do(func() {
+			if abort {
+				transport.AbortAll(src, dst, conn)
+				return
+			}
 			transport.CloseAll(src, dst, conn)
 		})
 	}
+	closeSession := func() { endSession(false) }
 
 	var responseDone atomic.Bool
 	var errGroup errgroup.Group
@@ -155,11 +166,14 @@ func (f *Forward) Proxy(ctx context.Context, addr string, localAddr chan<- strin
 
 	errGroup.Go(func() error {
 		err := transport.CopyWithContext(sessionCtx, closeSession, dst, conn, transport.DirectionIn)
-		if err == nil || errors.Is(err, io.EOF) {
+		completed := err == nil || errors.Is(err, io.EOF)
+		if completed {
 			responseDone.Store(true)
 		}
+		// End the session before canceling: cancellation runs the request
+		// side's orderly unblock, which must not win against an abort.
+		endSession(!completed && sessionCtx.Err() == nil)
 		cancel()
-		closeSession()
 		return err
 	})
 

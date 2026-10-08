@@ -71,6 +71,24 @@ type Forwarder struct {
 	Ack          chan struct{}
 	closeOnce    sync.Once
 	closeErr     error
+	// targetFailed records that reading the target failed for a reason other
+	// than an orderly EOF or our own cancellation. Written only by the
+	// CopyTargetToClient goroutine; read after Start returns.
+	targetFailed bool
+}
+
+// errStreamSend marks a failure to send to the client, so it is not mistaken
+// for a target failure.
+type errStreamSend struct{ err error }
+
+func (e errStreamSend) Error() string { return e.err.Error() }
+func (e errStreamSend) Unwrap() error { return e.err }
+
+// TargetFailed reports whether a TCP session ended because reading the target
+// failed (for example, the target reset the connection), so the client must
+// be told its response is incomplete rather than complete.
+func (f *Forwarder) TargetFailed() bool {
+	return f.targetFailed
 }
 
 // Target returns the dial address from the last handshake, or empty if none.
@@ -153,6 +171,10 @@ func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			var sendErr errStreamSend
+			if !isUDPNetwork(f.network) && !errors.Is(err, io.EOF) && !errors.As(err, &sendErr) {
+				f.targetFailed = true
+			}
 			return err
 		}
 	}
@@ -165,7 +187,7 @@ func (f *Forwarder) copyTargetToClient(udpBuf []byte, dstData *proto.ProxyDST, p
 		if n > 0 || (n == 0 && err == nil) {
 			payload.Payload = udpBuf[:n]
 			if sendErr := f.Stream.Send(dstData); sendErr != nil {
-				return sendErr
+				return errStreamSend{sendErr}
 			}
 		}
 		return err
@@ -180,7 +202,7 @@ func (f *Forwarder) copyTargetToClient(udpBuf []byte, dstData *proto.ProxyDST, p
 		if sendErr := f.Stream.Send(dstData); sendErr != nil {
 			rpc.DiscardPayloadBuffer(dstData)
 			payload.Payload = nil
-			return sendErr
+			return errStreamSend{sendErr}
 		}
 		payload.Payload = nil
 	} else {
