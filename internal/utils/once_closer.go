@@ -37,6 +37,26 @@ func (c *onceConn) Close() error {
 	return c.err
 }
 
+// Abort closes the connection so the peer observes a reset rather than an
+// orderly end of stream. It shares Close's once, so whichever runs first
+// decides how the connection ends.
+func (c *onceConn) Abort() error {
+	c.once.Do(func() {
+		if c.Conn == nil {
+			return
+		}
+		switch inner := c.Conn.(type) {
+		case interface{ Abort() error }:
+			c.err = inner.Abort()
+			return
+		case interface{ SetLinger(int) error }:
+			_ = inner.SetLinger(0)
+		}
+		c.err = c.Conn.Close()
+	})
+	return c.err
+}
+
 // OnceReadWriteCloser returns an io.ReadWriteCloser whose Close is idempotent.
 func OnceReadWriteCloser(c io.ReadWriteCloser) io.ReadWriteCloser {
 	if c == nil {

@@ -237,8 +237,14 @@ func (s *Server) Proxy(stream proto.Proxy_ProxyServer) error {
 			log.Printf("rpc: proxy failed: %v", err)
 		}
 	}
-	// send session end to client
+	// Tell the client how the session ended. EOF means the response is
+	// complete; Error makes the client reset its side instead of closing it in
+	// an orderly way. Older clients treat both as the end of the session.
+	end := proto.ProxyStatus_EOF
+	if f.TargetFailed() {
+		end = proto.ProxyStatus_Error
+	}
 	return stream.Send(&proto.ProxyDST{
-		Status: proto.ProxyStatus_EOF,
+		Status: end,
 	})
 }

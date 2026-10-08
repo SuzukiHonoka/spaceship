@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/testutil"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/forward"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
@@ -33,20 +34,11 @@ import (
 
 const testUUID = "e2e-test-user"
 
-// freeLoopbackAddr reserves a loopback port and releases it. ListenAndServe
-// binds the address itself, so there is no way to hand it a listener; the small
-// reuse window is acceptable for a test.
+// freeLoopbackAddr returns an address for ListenAndServe, which binds it
+// itself. See testutil.FreeLoopbackAddr for why it avoids the ephemeral range.
 func freeLoopbackAddr(t testing.TB) string {
 	t.Helper()
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserving a loopback port: %v", err)
-	}
-	addr := probe.Addr().String()
-	if err := probe.Close(); err != nil {
-		t.Fatalf("releasing the reserved port: %v", err)
-	}
-	return addr
+	return testutil.FreeLoopbackAddr(t)
 }
 
 // startProxyServer runs a real gRPC proxy server and returns its address.

@@ -57,7 +57,19 @@ func (q *ConnQueue) Add(conn *ConnWrapper) {
 	}
 	conn.ID = q.nextIDLocked()
 	conn.surplus = len(q.Conn) >= q.Size
+	q.adoptLocked(conn)
 	q.Conn = append(q.Conn, conn)
+}
+
+// adoptLocked prepares a wrapper that is joining the pool. Unpooled wrappers
+// serve one session and are closed after it, so only pooled ones are kept
+// warm. q.mu must be held and w not yet published.
+func (q *ConnQueue) adoptLocked(w *ConnWrapper) {
+	var idleTimeout time.Duration
+	if q.Params != nil {
+		idleTimeout = q.Params.IdleTimeout
+	}
+	w.startKeepWarm(idleTimeout)
 }
 
 func (q *ConnQueue) Init() error {
@@ -163,7 +175,7 @@ retry:
 		return q.dialOutside()
 	}
 
-	el := q.Conn.PickLeastLoaded()
+	el := q.Conn.pick(q.streamLimit())
 	if el == nil {
 		if !slowHeld {
 			q.mu.Unlock()
@@ -190,7 +202,7 @@ retry:
 		el = q.installReplacementLocked(replaceIndex, replaceID, replacement)
 		if el == nil {
 			// Another goroutine repaired the slot; prefer any live wrapper.
-			el = q.Conn.PickLeastLoaded()
+			el = q.Conn.pick(q.streamLimit())
 			if el == nil {
 				q.mu.Unlock()
 				return nil, nil, fmt.Errorf("no available connections in pool")
@@ -224,7 +236,7 @@ retry:
 			utils.Close(grown)
 			return nil, nil, fmt.Errorf("connection queue is shutdown")
 		}
-		if existing := q.Conn.PickLeastLoaded(); existing != nil &&
+		if existing := q.Conn.pick(q.streamLimit()); existing != nil &&
 			existing.GetCurrentLoad() < q.streamLimit() {
 			// Capacity freed or another grower landed while we dialled.
 			utils.Close(grown)
@@ -240,6 +252,7 @@ retry:
 		} else {
 			grown.ID = q.nextIDLocked()
 			grown.surplus = true
+			q.adoptLocked(grown)
 			q.Conn = append(q.Conn, grown)
 			el = grown
 		}
@@ -420,6 +433,7 @@ func (q *ConnQueue) installReplacementLocked(
 	}
 	replacement.ID = replaceID
 	replacement.surplus = index >= q.Size
+	q.adoptLocked(replacement)
 	q.Conn[index] = replacement
 	delete(q.idleSince, old)
 	if old != nil {
@@ -476,6 +490,7 @@ func (q *ConnQueue) replaceConn(old *ConnWrapper) {
 			delete(q.idleSince, old)
 			newConn.ID = old.ID
 			newConn.surplus = old.surplus
+			q.adoptLocked(newConn)
 			q.Conn[i] = newConn
 			utils.Close(old)
 			log.Printf("replaced shutdown connection %d with new connection", old.ID)

@@ -1,12 +1,15 @@
 package client
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"net/url"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
@@ -28,6 +31,13 @@ type ConnWrapper struct {
 	surplus bool
 	ID      int           // Connection ID for display
 	InUse   atomic.Uint32 // How many external connections are currently using this gRPC connection
+
+	// lastActive is when a reservation last started or ended (Unix nanos), so
+	// the keep-warm loop can tell configured channel idleness from a lost
+	// transport.
+	lastActive atomic.Int64
+	// stopWarm ends the keep-warm loop. Set before publication.
+	stopWarm context.CancelFunc
 }
 
 func NewConnWrapper(p *Params) (*ConnWrapper, error) {
@@ -70,6 +80,11 @@ func controlTarget(address string) (string, error) {
 
 func (w *ConnWrapper) Use() {
 	w.InUse.Add(1)
+	w.touch()
+}
+
+func (w *ConnWrapper) touch() {
+	w.lastActive.Store(time.Now().UnixNano())
 }
 
 func (w *ConnWrapper) Done() error {
@@ -79,6 +94,7 @@ func (w *ConnWrapper) Done() error {
 			return fmt.Errorf("rpc connection %d has no reserved usage", w.ID)
 		}
 		if w.InUse.CompareAndSwap(current, current-1) {
+			w.touch()
 			return nil
 		}
 	}
@@ -97,6 +113,9 @@ func (w *ConnWrapper) getState() connectivity.State {
 }
 
 func (w *ConnWrapper) Close() error {
+	if w.stopWarm != nil {
+		w.stopWarm()
+	}
 	if w.ClientConn != nil {
 		return w.ClientConn.Close()
 	}
@@ -105,48 +124,90 @@ func (w *ConnWrapper) Close() error {
 
 type ConnWrappers []*ConnWrapper
 
+// PickLeastLoaded returns the least-loaded usable connection, preferring
+// ready transports. See pick.
 func (w ConnWrappers) PickLeastLoaded() *ConnWrapper {
-	if len(w) == 0 {
-		return nil
+	return w.pick(math.MaxUint32)
+}
+
+// pickTier orders connectivity states by how soon a new stream can start: a
+// ready transport at once, an idle or connecting one only after a TCP, TLS and
+// HTTP/2 handshake, and one in transient failure not at all (a fail-fast RPC
+// fails immediately). A shut-down connection is never usable.
+func pickTier(state connectivity.State) int {
+	switch state {
+	case connectivity.Ready:
+		return 0
+	case connectivity.Idle, connectivity.Connecting:
+		return 1
+	case connectivity.TransientFailure:
+		return 2
+	default:
+		return -1
 	}
+}
 
-	var (
-		conn             *ConnWrapper
-		minUsage         uint32
-		degraded         *ConnWrapper
-		minDegradedUsage uint32
-	)
-
+// pick returns the connection a new stream should use. See pickFrom.
+func (w ConnWrappers) pick(limit uint32) *ConnWrapper {
+	candidates := make([]pickCandidate, 0, len(w))
 	for _, c := range w {
-		// Skip permanently dead connections so they are never chosen.
-		// replaceConn() will swap them out asynchronously.
 		if c == nil {
 			continue
 		}
-		state := c.getState()
-		if state == connectivity.Shutdown {
+		candidates = append(candidates, pickCandidate{c, c.getState(), c.InUse.Load()})
+	}
+	return pickFrom(candidates, limit)
+}
+
+type pickCandidate struct {
+	conn  *ConnWrapper
+	state connectivity.State
+	load  uint32
+}
+
+// pickFrom chooses, in order:
+//
+//  1. the least-loaded ready connection with stream capacity below limit;
+//  2. the least-loaded idle or connecting one with capacity, which costs a
+//     handshake but no new connection;
+//  3. the least-loaded live connection, even at limit, so the caller grows
+//     the pool rather than fail the session;
+//  4. only when no live connection exists, the least-loaded one in transient
+//     failure, as before.
+//
+// Load alone would favour a connection whose transport was just reset: its
+// sessions died with it, so it reads as the emptiest, and the next session
+// would pay its reconnect while warm connections sit unused.
+func pickFrom(candidates []pickCandidate, limit uint32) *ConnWrapper {
+	const tiers = 3
+	var withCapacity, anyLoad [tiers]*pickCandidate
+	for i := range candidates {
+		c := &candidates[i]
+		tier := pickTier(c.state)
+		if tier < 0 {
 			continue
 		}
-		load := c.InUse.Load()
-		// A fail-fast RPC sent through TransientFailure fails immediately. Keep
-		// such a wrapper only as a fallback when every live connection is
-		// degraded; otherwise one broken, idle wrapper can mask healthy peers.
-		if state == connectivity.TransientFailure {
-			if degraded == nil || load < minDegradedUsage {
-				minDegradedUsage = load
-				degraded = c
-			}
+		if best := anyLoad[tier]; best == nil || c.load < best.load {
+			anyLoad[tier] = c
+		}
+		if c.load >= limit {
 			continue
 		}
-		if conn == nil || load < minUsage {
-			minUsage = load
-			conn = c
+		if best := withCapacity[tier]; best == nil || c.load < best.load {
+			withCapacity[tier] = c
 		}
 	}
-	if conn == nil {
-		return degraded
+	order := []*pickCandidate{
+		withCapacity[0], withCapacity[1], // 1, 2
+		anyLoad[0], anyLoad[1], // 3
+		withCapacity[2], anyLoad[2], // 4
 	}
-	return conn
+	for _, c := range order {
+		if c != nil {
+			return c.conn
+		}
+	}
+	return nil
 }
 
 func (w ConnWrappers) LogStatus() {

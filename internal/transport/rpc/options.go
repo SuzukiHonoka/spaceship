@@ -49,9 +49,15 @@ const (
 	initialStreamWindow = 4 << 20  // 4 MiB
 	initialConnWindow   = 16 << 20 // 16 MiB
 
-	// keepaliveTime is how often an idle connection is pinged to detect a peer
-	// that vanished without a FIN (NAT rebinding, silent middlebox drop).
-	keepaliveTime = 30 * time.Second
+	// keepaliveTime is how long a connection may receive nothing before it is
+	// pinged, to detect a peer that vanished without a FIN or RST (NAT
+	// rebinding, a middlebox silently dropping the flow). Together with
+	// GeneralTimeout (the ping timeout, which grpc-go also applies as
+	// TCP_USER_TIMEOUT) it bounds how long an idle or download-only session
+	// sits on a dead connection: 15s + 15s. It must stay clearly above
+	// keepaliveMinTime: pings sent at exactly the server's minimum can arrive
+	// early under jitter and earn a too_many_pings GOAWAY.
+	keepaliveTime = 15 * time.Second
 
 	// keepaliveMinTime is the smallest client ping interval the server tolerates
 	// before returning GOAWAY. Must stay below keepaliveTime or well-behaved

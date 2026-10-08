@@ -281,8 +281,14 @@ func startSystemClient(t *testing.T, serverAddr, certPath, clientUUID string, ep
 	})
 
 	launcher := api.NewLauncher()
-	launched := make(chan error, 1)
-	go func() { launched <- launcher.Launch(parsed) }()
+	// Closed when Launch returns, so both the early-exit check below and the
+	// cleanup can observe it; a value channel would be drained by the first.
+	launched := make(chan struct{})
+	var launchErr error
+	go func() {
+		defer close(launched)
+		launchErr = launcher.Launch(parsed)
+	}()
 	t.Cleanup(func() {
 		launcher.Stop()
 		select {
@@ -300,8 +306,8 @@ func startSystemClient(t *testing.T, serverAddr, certPath, clientUUID string, ep
 	} {
 		if err := listenerReadyNetwork(l.network, l.addr, 30*time.Second); err != nil {
 			select {
-			case lerr := <-launched:
-				t.Fatalf("client launcher exited early: %v", lerr)
+			case <-launched:
+				t.Fatalf("client launcher exited early: %v", launchErr)
 			default:
 			}
 			t.Fatalf("client front end %s/%s never came up: %v", l.network, l.addr, err)

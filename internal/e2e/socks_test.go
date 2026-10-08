@@ -8,13 +8,12 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/socks"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/testutil"
 )
 
 // SOCKS5 wire constants, spelled out rather than imported so these tests check
@@ -32,41 +31,12 @@ const (
 	repCommandNotSupported = 0x07
 )
 
-// freeLoopbackAddr reserves an ephemeral loopback port for a later Listen.
-//
-// Under go test ./... other packages may steal the port between Close and the
-// real bind, so we pick from the process-private high range first (much lower
-// collision rate than the shared ephemeral pool), fall back to :0, and verify
-// the address is free just before returning.
+// freeLoopbackAddr returns a loopback address the system can bind itself.
+// See testutil.FreeLoopbackAddr for why it avoids the ephemeral range.
 func freeLoopbackAddr(t *testing.T) string {
 	t.Helper()
-	for range 64 {
-		port := 40000 + int(freePortSeq.Add(1)%20000)
-		addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-		ln, err := net.Listen("tcp", addr)
-		if err != nil {
-			continue
-		}
-		if err := ln.Close(); err != nil {
-			t.Fatalf("releasing reserved port: %v", err)
-		}
-		return addr
-	}
-	// Last resort: OS ephemeral allocation.
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserving a loopback port: %v", err)
-	}
-	addr := probe.Addr().String()
-	if err := probe.Close(); err != nil {
-		t.Fatalf("releasing the reserved port: %v", err)
-	}
-	return addr
+	return testutil.FreeLoopbackAddr(t)
 }
-
-// freePortSeq is process-local so concurrent freeLoopbackAddr calls in this
-// test binary rarely collide with each other.
-var freePortSeq atomic.Uint64
 
 func waitForListener(t *testing.T, addr string) {
 	t.Helper()
