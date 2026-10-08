@@ -134,7 +134,7 @@ func (f *Forwarder) CopyTargetToSRC(ctx context.Context) error {
 				}
 				return
 			}
-			if readErr := f.copyTargetToSRC(dstData); readErr != nil {
+			if readErr := f.copyTargetToSRC(ctx, dstData); readErr != nil {
 				errCh <- readErr
 				return
 			}
@@ -166,7 +166,7 @@ func (f *Forwarder) CopyTargetToSRC(ctx context.Context) error {
 	}
 }
 
-func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) error {
+func (f *Forwarder) copyTargetToSRC(ctx context.Context, buf *proxy.ProxyDST) error {
 	//log.Println("rpc server reading...")
 	//log.Printf("rpc client on receive: %d", res.Status)
 	//fmt.Printf("----> \n%s\n", res.Data)
@@ -182,7 +182,15 @@ func (f *Forwarder) copyTargetToSRC(buf *proxy.ProxyDST) error {
 		}
 
 		// data size already aligned with transport.bufferSize, skip copy in trunk
-		n, err := f.writer.Write(v.Payload)
+		var n int
+		var err error
+		if gate, ok := f.writer.(*transport.ReplyGate); ok {
+			// Use the errgroup's copy context, including upload failures that
+			// cancel it before the handshake address reaches the front end.
+			n, err = gate.WriteContext(ctx, v.Payload)
+		} else {
+			n, err = f.writer.Write(v.Payload)
+		}
 		if err != nil {
 			// log.Printf("error when sending client request to target stream: %v", err)
 			return err

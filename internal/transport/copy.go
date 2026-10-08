@@ -136,6 +136,11 @@ func copyStream(ctx context.Context, dst io.Writer, src io.Reader) (int64, error
 		case <-ctx.Done():
 			return 0, ctx.Err()
 		}
+		// Cancellation can coincide with Release. Do not forward withheld
+		// bytes when both were ready and the gate happened to win.
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		dst = gate.w
 	}
 	var written int64

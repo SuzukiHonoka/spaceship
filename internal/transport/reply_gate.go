@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"io"
 	"sync"
 )
@@ -30,7 +31,25 @@ func (g *ReplyGate) Release() {
 }
 
 func (g *ReplyGate) Write(p []byte) (int, error) {
-	<-g.ready
+	return g.WriteContext(context.Background(), p)
+}
+
+// WriteContext waits for the proxy reply or session cancellation before
+// writing. RPC receivers use this with their copy context: cancelling the
+// RPC stream alone cannot unblock a receiver waiting on the reply gate.
+// Once released, a blocked underlying Write must still be unblocked by its
+// owner, just like a write without a gate.
+func (g *ReplyGate) WriteContext(ctx context.Context, p []byte) (int, error) {
+	select {
+	case <-g.ready:
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+	// Cancellation can coincide with Release. Do not forward withheld bytes
+	// when both select cases were ready and the gate happened to win.
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	return g.w.Write(p)
 }
 

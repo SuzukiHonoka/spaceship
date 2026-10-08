@@ -275,6 +275,23 @@ func TestCopyWithContextDefersWritesUntilReplyGateReleased(t *testing.T) {
 	}
 }
 
+func TestCopyWithContextCanceledGateDoesNotWrite(t *testing.T) {
+	for range 20 {
+		dst := &signalWriter{wrote: make(chan struct{})}
+		gate := NewReplyGate(dst)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		gate.Release()
+		err := CopyWithContext(ctx, nil, gate, strings.NewReader("abc"), DirectionOut)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("CopyWithContext() error = %v, want context.Canceled", err)
+		}
+		if dst.buf.Len() != 0 {
+			t.Fatal("copy wrote tunnel bytes after cancellation")
+		}
+	}
+}
+
 func TestCopyWithContextReplyGateUnblocksOnCancel(t *testing.T) {
 	gate := NewReplyGate(io.Discard)
 	ctx, cancel := context.WithCancel(context.Background())

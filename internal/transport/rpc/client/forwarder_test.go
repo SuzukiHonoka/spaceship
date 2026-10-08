@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	proxy "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
+	"google.golang.org/grpc"
 )
 
 // blockingRecvStream stays parked in RecvMsg until its context is canceled,
@@ -99,5 +101,108 @@ func TestForwarder_CopyTargetToSRCReturnsReceiveError(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("CopyTargetToSRC did not return on a receive error")
+	}
+}
+
+// earlyReplyStream delivers the acceptance and an origin's immediate response
+// before the front end has consumed the handshake address.
+type earlyReplyStream struct {
+	proxy.Proxy_ProxyClient
+	ctx     context.Context
+	calls   int
+	payload chan struct{}
+}
+
+func (s *earlyReplyStream) Send(*proxy.ProxySRC) error { return nil }
+
+func (s *earlyReplyStream) RecvMsg(v any) error {
+	m := v.(*proxy.ProxyDST)
+	s.calls++
+	switch s.calls {
+	case 1:
+		m.Status = proxy.ProxyStatus_Accepted
+		m.HeaderOrPayload = &proxy.ProxyDST_Header{
+			Header: &proxy.ProxyDST_ProxyHeader{Addr: "127.0.0.1:12345"},
+		}
+		return nil
+	case 2:
+		m.Status = proxy.ProxyStatus_Session
+		m.HeaderOrPayload = &proxy.ProxyDST_Payload{Payload: []byte("early response")}
+		close(s.payload)
+		return nil
+	default:
+		<-s.ctx.Done()
+		return s.ctx.Err()
+	}
+}
+
+type earlyReplyClient struct {
+	proxy.ProxyClient
+	stream *earlyReplyStream
+}
+
+func (c *earlyReplyClient) Proxy(ctx context.Context, _ ...grpc.CallOption) (proxy.Proxy_ProxyClient, error) {
+	c.stream.ctx = ctx
+	return c.stream, nil
+}
+
+type replyWriteRecorder struct{ calls atomic.Int32 }
+
+func (w *replyWriteRecorder) Write(p []byte) (int, error) {
+	w.calls.Add(1)
+	return len(p), nil
+}
+
+func TestClientProxyCancellationBeforeReplyUnblocksGate(t *testing.T) {
+	for _, end := range []string{"owner cancellation", "upload EOF"} {
+		t.Run(end, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			stream := &earlyReplyStream{payload: make(chan struct{})}
+			client := &Client{ProxyClient: &earlyReplyClient{stream: stream}}
+			dst := new(replyWriteRecorder)
+			gate := transport.NewReplyGate(dst)
+			reader, writer := io.Pipe()
+			done := make(chan error, 1)
+			t.Cleanup(func() {
+				cancel()
+				gate.Release()
+				_ = reader.Close()
+				_ = writer.Close()
+			})
+
+			// An unconsumed address forces the cancellation branch of the ack
+			// sender, modeling a front end that has not yet been scheduled.
+			localAddr := make(chan string)
+			go func() {
+				done <- client.Proxy(ctx, "example.com:443", localAddr, gate, reader)
+			}()
+			select {
+			case <-stream.payload:
+			case <-time.After(2 * time.Second):
+				t.Fatal("receiver did not reach the early response")
+			}
+
+			if end == "owner cancellation" {
+				cancel()
+			} else {
+				// EOF cancels the forwarder's errgroup while the owner context
+				// stays live. Waiting on the owner context alone is insufficient.
+				_ = writer.Close()
+			}
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("Proxy() error = %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("Proxy stayed blocked on the reply gate after the session ended")
+			}
+			if _, ok := <-localAddr; ok {
+				t.Fatal("handshake address channel remained open")
+			}
+			if got := dst.calls.Load(); got != 0 {
+				t.Fatalf("forwarded %d writes before the proxy reply", got)
+			}
+		})
 	}
 }
