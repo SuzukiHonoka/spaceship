@@ -3,6 +3,7 @@ package rpc
 import (
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 )
@@ -65,9 +66,16 @@ func TestKeepaliveNegotiation(t *testing.T) {
 	c := clientKeepaliveParams()
 	s := serverKeepaliveParams()
 
-	if c.Time < keepaliveMinTime {
-		t.Errorf("client ping interval %v is below the server's enforced minimum %v; "+
-			"the server would terminate its own clients", c.Time, keepaliveMinTime)
+	// Clients ping as often as their own Time, and a server running an older
+	// release enforces the same minimum, so equality is not enough: pings sent
+	// on the boundary arrive early under jitter and accumulate strikes.
+	if c.Time < keepaliveMinTime+keepaliveMinTime/4 {
+		t.Errorf("client ping interval %v leaves no margin over the server's enforced "+
+			"minimum %v; jitter would earn too_many_pings GOAWAYs", c.Time, keepaliveMinTime)
+	}
+	// Detection bound for a silently dropped idle or download-only connection.
+	if worst := c.Time + c.Timeout; worst > 30*time.Second {
+		t.Errorf("a silently dropped connection is detected after up to %v, want at most 30s", worst)
 	}
 	if !c.PermitWithoutStream {
 		t.Error("client PermitWithoutStream = false: an idle pooled connection would " +
