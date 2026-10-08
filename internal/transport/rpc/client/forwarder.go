@@ -118,14 +118,19 @@ func (f *Forwarder) CopyTargetToSRC(ctx context.Context) error {
 		defer rpc.ReleaseMessageBuffers(dstData)
 		for {
 			if err := f.stream.RecvMsg(dstData); err != nil {
-				if errors.Is(err, io.EOF) {
+				switch {
+				case errors.Is(err, io.EOF):
 					// The server completed the RPC: an orderly end.
 					errCh <- io.EOF
-				} else {
+				case f.accepted.Load():
 					// The tunnel broke (a reset or timed-out transport surfaces
-					// as Unavailable) before the server ended the session, so
-					// the response the client has received is incomplete.
+					// as Unavailable) after the session started and before the
+					// server ended it, so the client's response is incomplete.
 					errCh <- fmt.Errorf("%w: %w", errTunnelLost, err)
+				default:
+					// Refused before the session started (authentication,
+					// admission): report the server's reason as it is.
+					errCh <- err
 				}
 				return
 			}
