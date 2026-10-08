@@ -15,6 +15,12 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 )
 
+// request is what the application sends before the route answers, the way a
+// client speaks first in most protocols. The route waiting for it also keeps
+// the response (and any reset) from reaching the application before its dial
+// has returned, which gonet would otherwise report as a failed connect.
+const request = "request"
+
 // partialRoute delivers part of a response and then fails, the way a tunnel
 // does when its upstream resets. abort selects whether it resets the client
 // connection (what the transports now do) or leaves it to an orderly close.
@@ -31,10 +37,13 @@ func (r *partialRoute) Proxy(
 	_ string,
 	localAddr chan<- string,
 	dst io.Writer,
-	_ io.Reader,
+	src io.Reader,
 ) error {
 	defer close(localAddr)
 	localAddr <- "127.0.0.1:1"
+	if _, err := io.ReadFull(src, make([]byte, len(request))); err != nil {
+		return err
+	}
 	if _, err := dst.Write([]byte("partial")); err != nil {
 		return err
 	}
@@ -60,6 +69,9 @@ func readTUNStream(t *testing.T, route transport.Transport) error {
 		t.Fatalf("DialContextTCP() error = %v", err)
 	}
 	defer func() { _ = conn.Close() }()
+	if _, err := conn.Write([]byte(request)); err != nil {
+		t.Fatalf("sending request: %v", err)
+	}
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	_, err = io.ReadAll(conn)
 	return err
