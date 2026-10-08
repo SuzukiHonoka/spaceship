@@ -31,5 +31,11 @@ func TestFreeLoopbackAddrIsBindableAndNotRepeated(t *testing.T) {
 			t.Fatalf("binding %s: %v", addr, err)
 		}
 		_ = listener.Close()
+		// The DNS front end binds the same address as UDP.
+		packet, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			t.Fatalf("binding %s as udp: %v", addr, err)
+		}
+		_ = packet.Close()
 	}
 }

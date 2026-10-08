@@ -37,6 +37,14 @@ func (c *onceConn) Close() error {
 	return c.err
 }
 
+// Unwrap returns the wrapped connection. The wrapper only changes how Close
+// behaves, never the bytes, so a copy may drive the connection directly: on
+// Linux, transport.CopyWithContext splices between two such sockets in the
+// kernel.
+func (c *onceConn) Unwrap() net.Conn {
+	return c.Conn
+}
+
 // Abort closes the connection so the peer observes a reset rather than an
 // orderly end of stream. It shares Close's once, so whichever runs first
 // decides how the connection ends.

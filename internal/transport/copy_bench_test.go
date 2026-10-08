@@ -18,16 +18,9 @@ import (
 // per-chunk code path (ops/s); large sizes stress bulk copy (MB/s).
 var opensslSpeedSizes = []int{16, 64, 256, 1024, 8192, 16384, 1 << 20}
 
-// strip WriterTo/ReaderFrom so io.CopyBuffer takes the real buffered path
-// (bytes.Reader.WriteTo(io.Discard) is a no-touch fast path and fakes MB/s).
-type readerOnly struct{ r io.Reader }
-
-func (r readerOnly) Read(p []byte) (int, error) { return r.r.Read(p) }
-
-type writerOnly struct{ w io.Writer }
-
-func (w writerOnly) Write(p []byte) (int, error) { return w.w.Write(p) }
-
+// readerOnly/writerOnly (from copy.go) strip WriterTo/ReaderFrom so the copy
+// takes the real buffered path (bytes.Reader.WriteTo(io.Discard) is a no-touch
+// fast path and fakes MB/s).
 func BenchmarkCopyWithContext(b *testing.B) {
 	for _, size := range opensslSpeedSizes {
 		b.Run(fmt.Sprintf("%d", size), func(b *testing.B) {

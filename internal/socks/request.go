@@ -10,6 +10,7 @@ import (
 	"strconv"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"golang.org/x/sync/errgroup"
 )
@@ -148,15 +149,18 @@ func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Reques
 
 	log.Printf("socks: %s:%d -> %s", host, req.DestAddr.Port, route)
 
-	// start proxy
+	// start proxy. Early tunnel bytes can already be echoed when the dial
+	// returns; hold writes to the client until the SOCKS reply is queued.
 	addr := net.JoinHostPort(host, strconv.FormatUint(uint64(req.DestAddr.Port), 10))
+	downstream := transport.NewReplyGate(conn)
 	errGroup, ctx := errgroup.WithContext(ctx)
 	localAddr := make(chan string)
 	errGroup.Go(func() error {
-		return route.Proxy(ctx, addr, localAddr, conn, req.bufConn)
+		return route.Proxy(ctx, addr, localAddr, downstream, req.bufConn)
 	})
 
 	errGroup.Go(func() (err error) {
+		defer downstream.Release()
 		local, ok := <-localAddr
 		if !ok || local == "" {
 			if err = sendReply(conn, networkUnreachable, nil); err != nil {

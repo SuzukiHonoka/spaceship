@@ -20,8 +20,8 @@ const reservedSpan = 16384
 // made before either caller binds never return the same one.
 var handedOut sync.Map
 
-// FreeLoopbackAddr returns a loopback TCP address that is free now, for code
-// under test that has to bind the address itself.
+// FreeLoopbackAddr returns a loopback address whose port is free for both TCP
+// and UDP now, for code under test that has to bind the address itself.
 //
 // The address is released before the caller binds it, so something else can
 // take it in between. Asking the kernel for port 0 makes that likely: it
@@ -31,6 +31,10 @@ var handedOut sync.Map
 // bind, so they are drawn from there, starting at a random offset so that
 // test binaries running in parallel do not walk the same sequence. Where the
 // range is unknown, the kernel's choice is used as before.
+//
+// Both protocols are probed because callers such as the DNS front end bind
+// the returned address as UDP, and a port that is free for TCP says nothing
+// about UDP, whose ephemeral ports are drawn by every UDP test in the binary.
 func FreeLoopbackAddr(t testing.TB) string {
 	t.Helper()
 	if low, ok := ephemeralLow(); ok {
@@ -42,25 +46,53 @@ func FreeLoopbackAddr(t testing.TB) string {
 				if _, taken := handedOut.LoadOrStore(port, struct{}{}); taken {
 					continue
 				}
-				addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-				if probe, err := net.Listen("tcp", addr); err == nil {
-					if err := probe.Close(); err != nil {
-						t.Fatalf("releasing reserved port: %v", err)
-					}
+				if addr, ok := probeLoopbackPort(t, port); ok {
 					return addr
 				}
 			}
 		}
 	}
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserving a loopback port: %v", err)
+	for range 16 {
+		probe, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("reserving a loopback port: %v", err)
+		}
+		port := probe.Addr().(*net.TCPAddr).Port
+		if err := probe.Close(); err != nil {
+			t.Fatalf("releasing reserved port: %v", err)
+		}
+		if _, taken := handedOut.LoadOrStore(port, struct{}{}); taken {
+			continue
+		}
+		if addr, ok := probeLoopbackPort(t, port); ok {
+			return addr
+		}
 	}
-	addr := probe.Addr().String()
-	if err := probe.Close(); err != nil {
+	t.Fatal("reserving a loopback port free for both TCP and UDP")
+	return ""
+}
+
+// probeLoopbackPort reports whether port can be bound on loopback as both TCP
+// and UDP right now, returning the address to hand out when it can.
+func probeLoopbackPort(t testing.TB, port int) (string, bool) {
+	t.Helper()
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	tcpProbe, err := net.Listen("tcp", addr)
+	if err != nil {
+		return "", false
+	}
+	udpProbe, err := net.ListenPacket("udp", addr)
+	if err != nil {
+		_ = tcpProbe.Close()
+		return "", false
+	}
+	if err := udpProbe.Close(); err != nil {
 		t.Fatalf("releasing reserved port: %v", err)
 	}
-	return addr
+	if err := tcpProbe.Close(); err != nil {
+		t.Fatalf("releasing reserved port: %v", err)
+	}
+	return addr, true
 }
 
 // ephemeralLow returns the first port of Linux's ephemeral range.

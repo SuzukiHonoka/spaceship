@@ -79,6 +79,22 @@ an `io.Pipe` and consume an in-memory sink; Go's `ReaderFrom`/`WriterTo` paths
 can use different copy sizes than the configured transport buffer. These
 numbers do not describe socket-to-socket splice throughput or a real WAN.
 
+Measure the front-end shape (a real client TCP socket relayed to the egress
+socket, as SOCKS5, HTTP CONNECT, and redirect hand it to `Proxy`) with the
+`Relay` benchmarks:
+
+```bash
+GOMAXPROCS=4 go test -p=1 ./internal/transport/direct ./internal/transport/forward \
+  ./internal/transport/rpc -run '^$' -bench 'Relay' -benchmem -benchtime=2s -count=5
+```
+
+These use the same echo workload but no `io.Pipe`, so the copy loop sees kernel
+sockets on both ends. On Linux `direct`/`forward` take the `splice(2)` path and
+report 0 allocs/op; elsewhere they use the pooled transport buffer. The `rpc`
+variant (`BenchmarkEndToEnd_TCPRelay(TLS)?`) is the full client-socket → gRPC →
+server → egress path. Sub-benchmarks are 16 KiB (TLS-record sized) and 1 MiB
+writes. Run on Linux when evaluating copy-path changes; macOS has no splice.
+
 Measure continuous echoed traffic separately (no per-chunk round-trip barrier):
 
 ```bash

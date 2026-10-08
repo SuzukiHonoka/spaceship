@@ -40,6 +40,26 @@ func benchmarkTCPStream(b *testing.B, useTLS bool) {
 	benchtest.Stream(b, benchClient(b), echoAddr)
 }
 
+// BenchmarkEndToEnd_TCPRelay is the full production shape for the rpc route:
+// a real client socket → gRPC client → gRPC server → direct egress → echo.
+// Compared with TCPStream it includes the front-end socket on the client side,
+// so it also covers the client-side copy loop reading from a kernel socket.
+func BenchmarkEndToEnd_TCPRelay(b *testing.B) {
+	benchmarkTCPRelay(b, false)
+}
+
+func BenchmarkEndToEnd_TCPRelayTLS(b *testing.B) {
+	benchmarkTCPRelay(b, true)
+}
+
+func benchmarkTCPRelay(b *testing.B, useTLS bool) {
+	quietLogs(b)
+	routeAllDirect(b)
+	echoAddr := startTCPEcho(b)
+	connectBenchmarkClient(b, useTLS)
+	benchtest.RelaySweep(b, benchClient(b), echoAddr)
+}
+
 func connectBenchmarkClient(b *testing.B, useTLS bool) {
 	b.Helper()
 	if useTLS {

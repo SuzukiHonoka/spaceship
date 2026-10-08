@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -234,6 +235,21 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// hijackedBytes returns the bytes net/http read from the client beyond the
+// request it parsed, which Hijack leaves in the returned reader.
+func hijackedBytes(rw *bufio.ReadWriter) []byte {
+	if rw == nil || rw.Reader == nil {
+		return nil
+	}
+	n := rw.Reader.Buffered() // Writer.Buffered also exists; be explicit.
+	if n == 0 {
+		return nil
+	}
+	// Peek never blocks or fails for a count within what is buffered.
+	pending, _ := rw.Peek(n)
+	return pending
+}
+
 func writeForwardRequest(w io.Writer, r *http.Request, host string) error {
 	forward := r.Clone(r.Context())
 	forward.RequestURI = ""
@@ -288,7 +304,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		ServeProxyError(w, r.Host, errors.New("hijack not supported"))
 		return
 	}
-	conn, _, err := hj.Hijack()
+	conn, buffered, err := hj.Hijack()
 	if err != nil {
 		ServeProxyError(w, r.Host, fmt.Errorf("hijack: %w", err))
 		return
@@ -298,6 +314,14 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// "use of closed network connection" from that intentional overlap.
 	client := utils.OnceNetConn(conn)
 	defer utils.Close(client)
+	// A client need not wait for the 200 before sending tunnel bytes (a TLS
+	// ClientHello, typically). Whatever arrived with the request is already
+	// in net/http's read buffer and belongs to the tunnel.
+	//
+	// Those bytes can be echoed before this goroutine writes the 200. Hold
+	// writes to the client until that reply is queued.
+	src := transport.WithPrefix(client, hijackedBytes(buffered))
+	downstream := transport.NewReplyGate(client)
 
 	// build remote addr
 	_, addr, err := BuildRemoteAddr(r)
@@ -311,10 +335,14 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	proxyLocalAddr := make(chan string)
 	errGroup.Go(func() error {
-		return route.Proxy(ctx, addr, proxyLocalAddr, client, client)
+		return route.Proxy(ctx, addr, proxyLocalAddr, downstream, src)
 	})
 
 	errGroup.Go(func() error {
+		// Release on every exit. A dial failure never starts copying, but a
+		// copy that is already waiting must not stay blocked when this
+		// goroutine returns the handshake error.
+		defer downstream.Release()
 		// wait for proxy handshake
 		localAddr, ok := <-proxyLocalAddr
 		if !ok || localAddr == "" {

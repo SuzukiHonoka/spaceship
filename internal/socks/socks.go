@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 )
 
@@ -238,6 +239,12 @@ func (s *Server) serveConn(conn net.Conn) error {
 		return fmt.Errorf("read request: %w", err)
 	}
 	request.AuthContext = authContext
+	// The handshake is over, so hand the connection itself to the transport
+	// rather than the buffered reader: a copy between two bare sockets can run
+	// in the kernel, and the transport buffer is honored otherwise. Bytes the
+	// client sent after its request without waiting for the reply are already
+	// in the buffered reader and go first.
+	request.bufConn = transport.WithPrefix(conn, bufferedBytes(bufConn))
 	// The handshake budget must not become a lifetime limit on the tunnel.
 	if err := conn.SetDeadline(time.Time{}); err != nil {
 		return err
@@ -257,4 +264,16 @@ func (s *Server) serveConn(conn net.Conn) error {
 	}
 
 	return nil
+}
+
+// bufferedBytes returns the bytes r has read from its connection but not yet
+// handed out.
+func bufferedBytes(r *bufio.Reader) []byte {
+	n := r.Buffered()
+	if n == 0 {
+		return nil
+	}
+	// Peek never blocks or fails for a count within what is buffered.
+	pending, _ := r.Peek(n)
+	return pending
 }

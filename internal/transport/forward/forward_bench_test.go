@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/benchtest"
 )
 
 var opensslSpeedSizes = []int{16, 64, 256, 1024, 8192, 16384, 1 << 20}
@@ -24,6 +26,20 @@ func (d *liveDialer) Dial(_, _ string) (net.Conn, error) {
 
 func (d *liveDialer) DialContext(ctx context.Context, _, _ string) (net.Conn, error) {
 	return (&net.Dialer{}).DialContext(ctx, "tcp", d.addr)
+}
+
+// BenchmarkForward_Relay is the front-end shape: a real client socket relayed
+// to the upstream-dialed socket (splice path on Linux). Forward hands the
+// dialer's conn straight to the copy loop, so this also guards against a
+// future dialer wrapper hiding the kernel socket.
+func BenchmarkForward_Relay(b *testing.B) {
+	echoAddr := startEcho(b)
+	f := New().(*Forward)
+	if err := f.Attach(&liveDialer{addr: echoAddr}); err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = f.Close() })
+	benchtest.RelaySweep(b, f, echoAddr)
 }
 
 func BenchmarkForward_Proxy(b *testing.B) {

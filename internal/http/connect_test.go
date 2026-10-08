@@ -110,6 +110,87 @@ func TestHandleConnect_RoundTrip(t *testing.T) {
 	}
 }
 
+// A client may send tunnel bytes right after the CONNECT request without
+// waiting for the 200 (TLS ClientHello, "optimistic" SOCKS/HTTP clients). When
+// those bytes arrive in the same segments as the request, net/http has already
+// buffered them when the handler hijacks the connection, so the hijacked
+// bufio.Reader must be drained into the tunnel rather than discarded.
+func TestHandleConnect_EarlyDataBufferedByHijack(t *testing.T) {
+	if err := router.SetRoutes(router.Routes{
+		{MatchType: router.TypeDefault, Destination: router.EgressDirect},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	origin, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = origin.Close() })
+	go func() {
+		c, err := origin.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.Close() }()
+		_, _ = io.Copy(c, c)
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	proxy := New(ctx, &Config{})
+
+	addr := freeHTTPAddr(t)
+	errCh := make(chan error, 1)
+	go func() { errCh <- proxy.ListenAndServe("tcp", addr) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(2 * time.Second):
+		}
+	})
+	waitHTTP(t, addr)
+
+	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	target := origin.Addr().String()
+	early := []byte("early-tunnel-bytes")
+	request := []byte("CONNECT " + target + " HTTP/1.1\r\nHost: " + target + "\r\n\r\n")
+	// One write, so the early bytes share a segment with the request headers
+	// and land in net/http's read buffer.
+	if _, err := conn.Write(append(request, early...)); err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(conn)
+	resp, err := nethttp.ReadResponse(br, &nethttp.Request{Method: nethttp.MethodConnect})
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != nethttp.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	late := []byte("-then-more")
+	if _, err := conn.Write(late); err != nil {
+		t.Fatal(err)
+	}
+	want := append(append([]byte(nil), early...), late...)
+	got := make([]byte, len(want))
+	if _, err := io.ReadFull(br, got); err != nil {
+		t.Fatalf("read echo: %v (got %q so far)", err, got)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("echo = %q, want %q", got, want)
+	}
+}
+
 func TestHandleConnect_InvalidHost(t *testing.T) {
 	s := New(context.Background(), &Config{})
 	req := httptest.NewRequest(nethttp.MethodConnect, "http://example.com", nil)

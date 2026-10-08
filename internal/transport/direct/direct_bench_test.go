@@ -18,6 +18,12 @@ func BenchmarkDirect_TCPStream(b *testing.B) {
 	benchtest.Stream(b, New(), startEcho(b))
 }
 
+// BenchmarkDirect_Relay is the front-end shape: a real client socket on one
+// side and the dialed egress socket on the other (splice path on Linux).
+func BenchmarkDirect_Relay(b *testing.B) {
+	benchtest.RelaySweep(b, New(), startEcho(b))
+}
+
 // opensslSpeedSizes mirrors `openssl speed`. Small sizes → ops/s (code path);
 // large sizes → MB/s (bulk copy through Direct.Proxy).
 var opensslSpeedSizes = []int{16, 64, 256, 1024, 8192, 16384, 1 << 20}
