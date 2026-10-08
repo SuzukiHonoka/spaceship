@@ -32,9 +32,11 @@ type ConnWrapper struct {
 	ID      int           // Connection ID for display
 	InUse   atomic.Uint32 // How many external connections are currently using this gRPC connection
 
-	// lastActive is when a reservation last started or ended (Unix nanos), so
+	// lastActive is when the connection last became unused (Unix nanos), so
 	// the keep-warm loop can tell configured channel idleness from a lost
-	// transport.
+	// transport. Only that moment matters: while a reservation is held the
+	// connection is not idle. Checkouts and releases that leave it in use
+	// never read the clock.
 	lastActive atomic.Int64
 	// stopWarm ends the keep-warm loop. Set before publication.
 	stopWarm context.CancelFunc
@@ -80,7 +82,6 @@ func controlTarget(address string) (string, error) {
 
 func (w *ConnWrapper) Use() {
 	w.InUse.Add(1)
-	w.touch()
 }
 
 func (w *ConnWrapper) touch() {
@@ -94,7 +95,9 @@ func (w *ConnWrapper) Done() error {
 			return fmt.Errorf("rpc connection %d has no reserved usage", w.ID)
 		}
 		if w.InUse.CompareAndSwap(current, current-1) {
-			w.touch()
+			if current == 1 {
+				w.touch()
+			}
 			return nil
 		}
 	}
@@ -147,25 +150,18 @@ func pickTier(state connectivity.State) int {
 	}
 }
 
-// pick returns the connection a new stream should use. See pickFrom.
+// pick returns the connection a new stream should use. See picker.
 func (w ConnWrappers) pick(limit uint32) *ConnWrapper {
-	candidates := make([]pickCandidate, 0, len(w))
+	p := picker{limit: limit}
 	for _, c := range w {
-		if c == nil {
-			continue
+		if c != nil {
+			p.consider(c, c.getState(), c.InUse.Load())
 		}
-		candidates = append(candidates, pickCandidate{c, c.getState(), c.InUse.Load()})
 	}
-	return pickFrom(candidates, limit)
+	return p.choice()
 }
 
-type pickCandidate struct {
-	conn  *ConnWrapper
-	state connectivity.State
-	load  uint32
-}
-
-// pickFrom chooses, in order:
+// picker chooses, in order:
 //
 //  1. the least-loaded ready connection with stream capacity below limit;
 //  2. the least-loaded idle or connecting one with capacity, which costs a
@@ -178,32 +174,42 @@ type pickCandidate struct {
 // Load alone would favour a connection whose transport was just reset: its
 // sessions died with it, so it reads as the emptiest, and the next session
 // would pay its reconnect while warm connections sit unused.
-func pickFrom(candidates []pickCandidate, limit uint32) *ConnWrapper {
-	const tiers = 3
-	var withCapacity, anyLoad [tiers]*pickCandidate
-	for i := range candidates {
-		c := &candidates[i]
-		tier := pickTier(c.state)
-		if tier < 0 {
-			continue
-		}
-		if best := anyLoad[tier]; best == nil || c.load < best.load {
-			anyLoad[tier] = c
-		}
-		if c.load >= limit {
-			continue
-		}
-		if best := withCapacity[tier]; best == nil || c.load < best.load {
-			withCapacity[tier] = c
-		}
+//
+// It keeps only the best connection per tier, so a checkout allocates nothing
+// whatever the pool size. Ties keep the earlier connection.
+type picker struct {
+	limit                 uint32
+	withCapacity, anyLoad [3]pickChoice // indexed by pickTier
+}
+
+type pickChoice struct {
+	conn *ConnWrapper
+	load uint32
+}
+
+func (p *picker) consider(conn *ConnWrapper, state connectivity.State, load uint32) {
+	tier := pickTier(state)
+	if tier < 0 {
+		return
 	}
-	order := []*pickCandidate{
-		withCapacity[0], withCapacity[1], // 1, 2
-		anyLoad[0], anyLoad[1], // 3
-		withCapacity[2], anyLoad[2], // 4
+	if best := &p.anyLoad[tier]; best.conn == nil || load < best.load {
+		*best = pickChoice{conn, load}
 	}
-	for _, c := range order {
-		if c != nil {
+	if load >= p.limit {
+		return
+	}
+	if best := &p.withCapacity[tier]; best.conn == nil || load < best.load {
+		*best = pickChoice{conn, load}
+	}
+}
+
+func (p *picker) choice() *ConnWrapper {
+	for _, c := range [...]pickChoice{
+		p.withCapacity[0], p.withCapacity[1], // 1, 2
+		p.anyLoad[0], p.anyLoad[1], // 3
+		p.withCapacity[2], p.anyLoad[2], // 4
+	} {
+		if c.conn != nil {
 			return c.conn
 		}
 	}

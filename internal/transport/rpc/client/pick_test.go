@@ -6,7 +6,7 @@ import (
 	"google.golang.org/grpc/connectivity"
 )
 
-func TestPickFrom(t *testing.T) {
+func TestPicker(t *testing.T) {
 	const limit = 10
 	type c struct {
 		state connectivity.State
@@ -58,12 +58,12 @@ func TestPickFrom(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			wrappers := make([]*ConnWrapper, len(tc.conns))
-			candidates := make([]pickCandidate, len(tc.conns))
+			p := picker{limit: limit}
 			for i, conn := range tc.conns {
 				wrappers[i] = &ConnWrapper{ID: i + 1}
-				candidates[i] = pickCandidate{wrappers[i], conn.state, conn.load}
+				p.consider(wrappers[i], conn.state, conn.load)
 			}
-			got := pickFrom(candidates, limit)
+			got := p.choice()
 			var want *ConnWrapper
 			if tc.want >= 0 {
 				want = wrappers[tc.want]

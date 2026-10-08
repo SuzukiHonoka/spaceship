@@ -74,6 +74,27 @@ func BenchmarkConnQueueGetConnParallel(b *testing.B) {
 	})
 }
 
+// BenchmarkConnQueueGetConnBusy checks out from connections that already
+// carry other sessions, as a pool under load does: a release that leaves a
+// connection in use skips the idle bookkeeping an emptying release does.
+func BenchmarkConnQueueGetConnBusy(b *testing.B) {
+	queue := newBenchPooledQueue(b)
+	for _, conn := range queue.Conn {
+		conn.InUse.Store(8)
+	}
+	b.ReportAllocs()
+
+	for b.Loop() {
+		_, done, err := queue.GetConn()
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := done(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // The existing hot-checkout benches never fill a wrapper. Exercise an actual
 // burst at the growth boundary and report wasted creation explicitly.
 func BenchmarkConnQueueGrowthBurst(b *testing.B) {
