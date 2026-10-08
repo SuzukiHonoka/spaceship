@@ -53,6 +53,11 @@ type Forwarder struct {
 	// accepted is set once the server acknowledges the session, after which
 	// the client connection carries tunnelled bytes.
 	accepted atomic.Bool
+	// abortCause is the response-side failure that made the forwarder reset
+	// the client connection. Start reports it in preference to the upload
+	// error that the reset itself provokes. Written by the download goroutine
+	// before it returns; read after the errgroup has finished.
+	abortCause error
 
 	// Statistic for TX and RX
 	Statistic *Statistic
@@ -140,6 +145,7 @@ func (f *Forwarder) CopyTargetToSRC(ctx context.Context) error {
 		// Before the server accepts the session the front end still owns the
 		// connection and must be able to write its own failure reply.
 		if f.accepted.Load() && !errors.Is(err, io.EOF) && ctx.Err() == nil {
+			f.abortCause = err
 			transport.Abort(f.writer)
 		}
 		return err
@@ -308,7 +314,13 @@ func (f *Forwarder) Start(addr string, localAddrChan chan<- string) error {
 		return nil
 	})
 
-	if err := errGroup.Wait(); err != io.EOF {
+	err := errGroup.Wait()
+	if f.abortCause != nil {
+		// Resetting the client fails the upload read too, and that error can
+		// reach the errgroup first; the response failure is the real cause.
+		return fmt.Errorf("download: %w", f.abortCause)
+	}
+	if err != io.EOF {
 		return err
 	}
 	return nil

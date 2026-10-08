@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -154,8 +155,8 @@ func TestEndToEnd_TunnelLossReachesClientAsReset(t *testing.T) {
 	if _, err := readEnd(app); !errors.Is(err, syscall.ECONNRESET) {
 		t.Fatalf("client saw %v after the tunnel was reset, want a connection reset", err)
 	}
-	if err := <-done; err == nil {
-		t.Fatal("Proxy reported success for a session whose tunnel was lost")
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "tunnel lost") {
+		t.Fatalf("Proxy() error = %v, want the tunnel loss as the cause", err)
 	}
 }
 
