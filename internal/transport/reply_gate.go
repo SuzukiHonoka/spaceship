@@ -12,8 +12,9 @@ import (
 // after the egress dial returns, while the transport copies as soon as that
 // dial succeeds. A client that sent tunnel bytes with its request can
 // otherwise have the origin's answer written ahead of the proxy reply.
-// Release must be called, including on the failure path; Close and Abort do
-// so the copy cannot stay blocked when the session ends first.
+// Release only once the reply is written. On a failed handshake leave the gate
+// shut: the session's cancellation unblocks copies waiting on it, and Close
+// and Abort release it so a plain Write cannot stay blocked at teardown.
 type ReplyGate struct {
 	w     io.Writer
 	ready chan struct{}
@@ -40,17 +41,23 @@ func (g *ReplyGate) Write(p []byte) (int, error) {
 // Once released, a blocked underlying Write must still be unblocked by its
 // owner, just like a write without a gate.
 func (g *ReplyGate) WriteContext(ctx context.Context, p []byte) (int, error) {
-	select {
-	case <-g.ready:
-	case <-ctx.Done():
-		return 0, ctx.Err()
-	}
-	// Cancellation can coincide with Release. Do not forward withheld bytes
-	// when both select cases were ready and the gate happened to win.
-	if err := ctx.Err(); err != nil {
+	if err := g.wait(ctx); err != nil {
 		return 0, err
 	}
 	return g.w.Write(p)
+}
+
+// wait blocks until Release or ctx is done, and reports ctx's error when the
+// session was cancelled.
+func (g *ReplyGate) wait(ctx context.Context) error {
+	select {
+	case <-g.ready:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	// Cancellation can coincide with Release. Do not forward withheld bytes
+	// when both select cases were ready and the gate happened to win.
+	return ctx.Err()
 }
 
 // Close releases withheld writes and closes the underlying writer when it
