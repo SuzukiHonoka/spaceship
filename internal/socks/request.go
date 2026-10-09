@@ -202,11 +202,12 @@ func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Reques
 	return nil
 }
 
-// handleConnectIP replies before reading the client flight. SOCKS clients do
-// not send HTTP or TLS until they have the success reply, and the recovered
-// name is what domain rules match. Direct and blackhole dial the IP the
-// client resolved. Any other egress receives the name and resolves it. The
-// peeked bytes are replayed ahead of the rest of the stream.
+// handleConnectIP answers an IP destination. When every route that can still
+// match uses the tunnel, the far end authenticates and admits the session
+// before the success reply, so a rejection is visible to the client. The
+// reply is what lets a normal client send HTTP or TLS. That flight is peeked,
+// and a recovered name is what the tunnel dials unless the egress is direct
+// or blackhole. Bytes already read are replayed.
 func (s *Server) handleConnectIP(ctx context.Context, conn ConnWriter, req *Request) error {
 	dialHost := req.DestAddr.IP.String()
 	port := req.DestAddr.Port
@@ -220,30 +221,46 @@ func (s *Server) handleConnectIP(ctx context.Context, conn ConnWriter, req *Requ
 		}
 		return nil
 	}
+
+	var admitted transport.AdmittedSession
+	if router.AdmitProxyFirst(dialHost) {
+		var err error
+		admitted, err = router.AdmitProxy(ctx)
+		if err != nil {
+			log.Printf("socks: %s rejected: %v", dialHost, err)
+			if err = sendReply(conn, networkUnreachable, nil); err != nil {
+				return fmt.Errorf("failed to send reply: %w", err)
+			}
+			return nil
+		}
+	}
+	defer utils.Close(admitted)
+
 	if err := sendReply(conn, successReply, nil); err != nil {
 		return fmt.Errorf("failed to send reply: %w", err)
 	}
 
 	name, src := sniff.Peek(req.bufConn, sniff.Timeout)
-	route, err := router.GetRouteObserved(dialHost, name)
-	if err != nil {
+	egress, err := router.MatchEgress(dialHost, name)
+	if err != nil || egress == router.EgressBlock {
+		if err == nil {
+			err = transport.ErrBlocked
+		}
 		log.Printf("socks: no route for %s: %v", dialHost, err)
 		return nil
 	}
-	defer utils.Close(route)
-
-	host := router.DialHost(route, dialHost, name)
+	host := router.HostForEgress(egress, dialHost, name)
 	if name != "" && host != dialHost {
-		log.Printf("socks: %s:%d name %q dial %s -> %s", dialHost, port, name, host, route) // #nosec G706 -- name is a validated hostname, %q quotes it
+		log.Printf("socks: %s:%d name %q dial %s -> %s", dialHost, port, name, host, egress.TransportName()) // #nosec G706 -- name is a validated hostname, %q quotes it
 	} else if name != "" {
-		log.Printf("socks: %s:%d name %q -> %s", dialHost, port, name, route) // #nosec G706 -- name is a validated hostname, %q quotes it
+		log.Printf("socks: %s:%d name %q -> %s", dialHost, port, name, egress.TransportName()) // #nosec G706 -- name is a validated hostname, %q quotes it
 	} else {
-		log.Printf("socks: %s:%d -> %s", dialHost, port, route)
+		log.Printf("socks: %s:%d -> %s", dialHost, port, egress.TransportName())
 	}
 
 	addr := net.JoinHostPort(host, strconv.FormatUint(uint64(port), 10))
 	localAddr := make(chan string, 1)
-	err = route.Proxy(ctx, addr, localAddr, conn, src)
+	err = router.DialEgress(ctx, admitted, egress, addr, localAddr, conn, src)
 	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
 		log.Printf("socks: %s failed: %v", addr, err)
 	}

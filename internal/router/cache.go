@@ -85,6 +85,38 @@ func GetRouteObserved(dialHost, name string) (transport.Transport, error) {
 	return routesCache.getObserved(key, ipKey, nameKey)
 }
 
+// MatchEgress is the egress GetRouteObserved would select, without constructing
+// its transport. Front ends that already hold an admitted proxy session use it
+// so a proxy match does not check another connection out of the pool.
+func MatchEgress(dialHost, name string) (Egress, error) {
+	ipKey := normalizeRouteKey(dialHost)
+	nameKey := normalizeRouteKey(name)
+	if nameKey == "" || nameKey == ipKey {
+		return matchEgress(ipKey)
+	}
+	if _, err := netip.ParseAddr(nameKey); err == nil {
+		return matchEgress(ipKey)
+	}
+	key := nameKey + "\x00" + ipKey
+	routesMu.RLock()
+	defer routesMu.RUnlock()
+	if egress, ok := table.Get(key); ok {
+		return egress, nil
+	}
+	return routesCache.findEgress(key, nameKey, func(route *Route) bool {
+		return matchObserved(route, ipKey, nameKey)
+	})
+}
+
+func matchEgress(key string) (Egress, error) {
+	routesMu.RLock()
+	defer routesMu.RUnlock()
+	if egress, ok := table.Get(key); ok {
+		return egress, nil
+	}
+	return routesCache.findEgress(key, key, func(route *Route) bool { return route.Match(key) })
+}
+
 // AnyRouteSupportsUDP reports whether any installed route has an egress capable
 // of carrying UDP. When none can, SOCKS5 UDP ASSOCIATE is refused up front so
 // clients fall back to TCP rather than holding an association whose every

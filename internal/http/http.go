@@ -295,7 +295,16 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 			ServeProxyError(w, r.Host, fmt.Errorf("blocked"))
 			return
 		}
-		s.handleConnectIP(w, r, host)
+		var admitted transport.AdmittedSession
+		if router.AdmitProxyFirst(host) {
+			var admitErr error
+			admitted, admitErr = router.AdmitProxy(s.ctx)
+			if admitErr != nil {
+				ServeProxyError(w, r.Host, admitErr)
+				return
+			}
+		}
+		s.handleConnectIP(w, r, host, admitted)
 		return
 	}
 
@@ -375,10 +384,12 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleConnectIP acknowledges CONNECT before reading the tunneled flight.
-// The recovered name selects the route. Direct and blackhole dial the IP in
-// the request. Any other egress receives the name and resolves it. The peeked
-// bytes are replayed into that connection.
-func (s *Server) handleConnectIP(w http.ResponseWriter, r *http.Request, host string) {
+// When the route will use the tunnel, admitted is a session the server has
+// already authenticated. The recovered name selects the route. Direct and
+// blackhole dial the IP in the request. Any other egress receives the name
+// and resolves it. The peeked bytes are replayed into that connection.
+func (s *Server) handleConnectIP(w http.ResponseWriter, r *http.Request, host string, admitted transport.AdmittedSession) {
+	defer utils.Close(admitted)
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		ServeProxyError(w, r.Host, errors.New("hijack not supported"))
@@ -398,19 +409,21 @@ func (s *Server) handleConnectIP(w http.ResponseWriter, r *http.Request, host st
 
 	src := transport.WithPrefix(client, hijackedBytes(buffered))
 	name, src := sniff.Peek(src, sniff.Timeout)
-	route, err := router.GetRouteObserved(host, name)
-	if err != nil {
+	egress, err := router.MatchEgress(host, name)
+	if err != nil || egress == router.EgressBlock {
+		if err == nil {
+			err = transport.ErrBlocked
+		}
 		log.Printf("http: CONNECT %q no route: %v", r.Host, err) // #nosec G706 -- %q escapes request-controlled log characters
 		return
 	}
-	defer utils.Close(route)
 
 	_, addr, err := BuildRemoteAddr(r)
 	if err != nil {
 		log.Printf("http: CONNECT %q failed: %v", r.Host, err) // #nosec G706 -- %q escapes request-controlled log characters
 		return
 	}
-	dialHost := router.DialHost(route, host, name)
+	dialHost := router.HostForEgress(egress, host, name)
 	if dialHost != host {
 		_, port, splitErr := net.SplitHostPort(addr)
 		if splitErr != nil {
@@ -420,14 +433,14 @@ func (s *Server) handleConnectIP(w http.ResponseWriter, r *http.Request, host st
 		addr = net.JoinHostPort(dialHost, port)
 	}
 	if name != "" && dialHost != host {
-		log.Printf("http: CONNECT %q name %q dial %s -> %s", r.Host, name, dialHost, route) // #nosec G706 -- both client-controlled values are quoted
+		log.Printf("http: CONNECT %q name %q dial %s -> %s", r.Host, name, dialHost, egress.TransportName()) // #nosec G706 -- both client-controlled values are quoted
 	} else if name != "" {
-		log.Printf("http: CONNECT %q name %q -> %s", r.Host, name, route) // #nosec G706 -- both client-controlled values are quoted
+		log.Printf("http: CONNECT %q name %q -> %s", r.Host, name, egress.TransportName()) // #nosec G706 -- both client-controlled values are quoted
 	} else {
-		log.Printf("http: CONNECT %q -> %s", r.Host, route) // #nosec G706 -- %q escapes request-controlled log characters
+		log.Printf("http: CONNECT %q -> %s", r.Host, egress.TransportName()) // #nosec G706 -- %q escapes request-controlled log characters
 	}
 	localAddr := make(chan string, 1)
-	if err = route.Proxy(s.ctx, addr, localAddr, client, src); err != nil &&
+	if err = router.DialEgress(s.ctx, admitted, egress, addr, localAddr, client, src); err != nil &&
 		!errors.Is(err, context.Canceled) &&
 		!errors.Is(err, io.EOF) {
 		ServeProxyError(client, r.Host, err)

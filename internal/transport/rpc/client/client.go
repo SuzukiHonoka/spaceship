@@ -291,12 +291,15 @@ func (c *Client) Proxy(ctx context.Context, addr string, localAddr chan<- string
 	if err != nil {
 		return err
 	}
+	return c.proxyStream(sessionCtx, cancel, stream, addr, localAddr, w, r)
+}
 
+func (c *Client) proxyStream(ctx context.Context, cancel context.CancelFunc, stream proto.Proxy_ProxyClient, addr string, localAddr chan<- string, w io.Writer, r io.Reader) error {
 	start := time.Now()
 
 	//log.Printf("sending proto to rpc: %s", req.Host)
-	f := NewForwarder(sessionCtx, cancel, stream, w, r)
-	if err = f.Start(addr, localAddr); err != nil && !errors.Is(err, context.Canceled) {
+	f := NewForwarder(ctx, cancel, stream, w, r)
+	if err := f.Start(addr, localAddr); err != nil && !errors.Is(err, context.Canceled) {
 		// Pass the forwarder error through; outer layers (http/socks) add the
 		// front-end context. Avoid "rpc client: proto failed: rpc: …" chains.
 		return err

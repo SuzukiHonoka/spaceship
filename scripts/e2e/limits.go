@@ -99,9 +99,8 @@ func runLimitSuite(bin, workDir string) {
 			refused++
 			continue
 		}
-		// The SOCKS success reply is sent before the server admits the
-		// session, so the handshake can succeed for a connection the ceiling
-		// then refuses. A round trip is what shows the session was admitted.
+		// A session counts only when the tunnel carries a round trip. A SOCKS
+		// refusal and a tunnel that dies before the echo are both not established.
 		if err := probeTunnel(conn); err != nil {
 			_ = conn.Close()
 			refused++
