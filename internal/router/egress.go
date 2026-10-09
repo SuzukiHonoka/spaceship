@@ -36,6 +36,26 @@ func (e Egress) SupportsUDP() bool {
 	}
 }
 
+// DialHost is the host to pass to route.Proxy. Direct and blackhole keep the
+// IP the client resolved. Every other egress receives a recovered hostname so
+// that egress resolves it: a proxy route uses the Spaceship server's DNS. An
+// empty name keeps the IP.
+func DialHost(route transport.Transport, ip, name string) string {
+	if name == "" || resolvesLocally(route) {
+		return ip
+	}
+	return name
+}
+
+func resolvesLocally(route transport.Transport) bool {
+	switch route.(type) {
+	case nil, *direct.Direct, *blackhole.BlackHole:
+		return true
+	default:
+		return false
+	}
+}
+
 func (e Egress) GetTransport() (transport.Transport, error) {
 	switch e {
 	case EgressUnknown:

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/sniff"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"golang.org/x/sync/errgroup"
@@ -287,6 +288,12 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		ServeProxyError(w, r.Host, fmt.Errorf("invalid host: %w", err))
 		return
 	}
+	// CONNECT to an IP has no name until the tunneled HTTP request or TLS
+	// ClientHello arrives. Reply first so the client sends that flight.
+	if net.ParseIP(host) != nil {
+		s.handleConnectIP(w, r, host)
+		return
+	}
 
 	// get route for host
 	route, err := router.GetRoute(host)
@@ -359,6 +366,66 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	// wait for proxy to finish
 	if err = errGroup.Wait(); err != nil {
+		ServeProxyError(client, r.Host, err)
+	}
+}
+
+// handleConnectIP acknowledges CONNECT before reading the tunneled flight.
+// The recovered name selects the route. Direct and blackhole dial the IP in
+// the request. Any other egress receives the name and resolves it. The peeked
+// bytes are replayed into that connection.
+func (s *Server) handleConnectIP(w http.ResponseWriter, r *http.Request, host string) {
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		ServeProxyError(w, r.Host, errors.New("hijack not supported"))
+		return
+	}
+	conn, buffered, err := hj.Hijack()
+	if err != nil {
+		ServeProxyError(w, r.Host, fmt.Errorf("hijack: %w", err))
+		return
+	}
+	client := utils.OnceNetConn(conn)
+	defer utils.Close(client)
+	if _, err = client.Write(MessageConnectionEstablished); err != nil {
+		log.Printf("http: CONNECT %q failed: %v", r.Host, err) // #nosec G706 -- %q escapes request-controlled log characters
+		return
+	}
+
+	src := transport.WithPrefix(client, hijackedBytes(buffered))
+	name, src := sniff.Peek(src, sniff.Timeout)
+	route, err := router.GetRouteObserved(host, name)
+	if err != nil {
+		log.Printf("http: CONNECT %q no route: %v", r.Host, err) // #nosec G706 -- %q escapes request-controlled log characters
+		return
+	}
+	defer utils.Close(route)
+
+	_, addr, err := BuildRemoteAddr(r)
+	if err != nil {
+		log.Printf("http: CONNECT %q failed: %v", r.Host, err) // #nosec G706 -- %q escapes request-controlled log characters
+		return
+	}
+	dialHost := router.DialHost(route, host, name)
+	if dialHost != host {
+		_, port, splitErr := net.SplitHostPort(addr)
+		if splitErr != nil {
+			log.Printf("http: CONNECT %q failed: %v", r.Host, splitErr) // #nosec G706 -- %q escapes request-controlled log characters
+			return
+		}
+		addr = net.JoinHostPort(dialHost, port)
+	}
+	if name != "" && dialHost != host {
+		log.Printf("http: CONNECT %q name %q dial %s -> %s", r.Host, name, dialHost, route) // #nosec G706 -- both client-controlled values are quoted
+	} else if name != "" {
+		log.Printf("http: CONNECT %q name %q -> %s", r.Host, name, route) // #nosec G706 -- both client-controlled values are quoted
+	} else {
+		log.Printf("http: CONNECT %q -> %s", r.Host, route) // #nosec G706 -- %q escapes request-controlled log characters
+	}
+	localAddr := make(chan string, 1)
+	if err = route.Proxy(s.ctx, addr, localAddr, client, src); err != nil &&
+		!errors.Is(err, context.Canceled) &&
+		!errors.Is(err, io.EOF) {
 		ServeProxyError(client, r.Host, err)
 	}
 }

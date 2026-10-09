@@ -8,8 +8,11 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"strconv"
 	"sync"
 
+	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/sniff"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
@@ -59,14 +62,26 @@ func (s *Service) proxyTCP(conn net.Conn, id stack.TransportEndpointID) error {
 		return err
 	}
 
-	route, err := s.getResolveRoute()(destination.Addr().String())
+	ip := destination.Addr().String()
+	// A recovered HTTP Host or TLS SNI selects the route. Direct and blackhole
+	// dial the original IP. Any other egress receives the name and resolves
+	// it. The peeked bytes are replayed.
+	name, src := sniff.Peek(conn, sniff.Timeout)
+	route, err := s.routeTCP(ip, name)
 	if err != nil {
 		return fmt.Errorf("route %s: %w", destination, err)
 	}
 	defer utils.Close(route)
+	targetHost := router.DialHost(route, ip, name)
+	target := net.JoinHostPort(targetHost, strconv.Itoa(int(destination.Port())))
+	if name != "" && targetHost != ip {
+		log.Printf("tun: %s name %q dial %s -> %s", destination, name, targetHost, route) // #nosec G706 -- name is a validated hostname, %q quotes it
+	} else if name != "" {
+		log.Printf("tun: %s name %q -> %s", destination, name, route) // #nosec G706 -- name is a validated hostname, %q quotes it
+	}
 
 	localAddr := make(chan string, 1)
-	if err := route.Proxy(s.ctx, destination.String(), localAddr, conn, conn); err != nil &&
+	if err := route.Proxy(s.ctx, target, localAddr, conn, src); err != nil &&
 		!errors.Is(err, context.Canceled) &&
 		!errors.Is(err, io.EOF) {
 		return fmt.Errorf("proxy %s via %s: %w", destination, route, err)

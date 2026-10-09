@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/sniff"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/forward"
 )
@@ -110,6 +112,176 @@ func TestServeConnRoutesOriginalDestination(t *testing.T) {
 	}
 	if got := tr.closeCount.Load(); got != 1 {
 		t.Fatalf("transport Close count = %d, want 1", got)
+	}
+}
+
+func TestServeConnRoutesSniffedNameAndReplaysFlight(t *testing.T) {
+	hello := sniff.BuildClientHello("sniff.example")
+	received := make(chan []byte, 1)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() {
+		c, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer func() { _ = c.Close() }()
+		_ = c.SetDeadline(time.Now().Add(3 * time.Second))
+		buf := make([]byte, len(hello))
+		if _, readErr := io.ReadFull(c, buf); readErr != nil {
+			return
+		}
+		received <- buf
+	}()
+
+	if err := router.SetRoutes(router.Routes{{
+		MatchType:   router.TypeExact,
+		Sources:     []string{"sniff.example"},
+		Destination: router.EgressDirect,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = router.SetRoutes(router.Routes{{
+			MatchType:   router.TypeDefault,
+			Destination: router.EgressDirect,
+		}})
+	})
+
+	dst := ln.Addr().(*net.TCPAddr)
+	s := newTestServer(t, context.Background(), nil)
+	s.resolveDestination = func(net.Conn) (*net.TCPAddr, error) {
+		return dst, nil
+	}
+
+	serverSide, clientSide := net.Pipe()
+	defer func() { _ = clientSide.Close() }()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.ServeConn(serverSide)
+	}()
+	go func() {
+		_, _ = clientSide.Write(hello)
+		_ = clientSide.Close()
+	}()
+
+	select {
+	case got := <-received:
+		if !bytes.Equal(got, hello) {
+			t.Fatalf("origin received %d bytes, want the ClientHello", len(got))
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("origin did not receive the replayed ClientHello")
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("ServeConn() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ServeConn() did not return")
+	}
+}
+
+type recordDialer struct {
+	addr string
+	dest string
+}
+
+func (d *recordDialer) Dial(network, addr string) (net.Conn, error) {
+	return d.DialContext(context.Background(), network, addr)
+}
+
+func (d *recordDialer) DialContext(ctx context.Context, _, addr string) (net.Conn, error) {
+	d.addr = addr
+	var dialer net.Dialer
+	return dialer.DialContext(ctx, "tcp", d.dest)
+}
+
+func TestServeConnDialsRecoveredNameForForward(t *testing.T) {
+	hello := sniff.BuildClientHello("sniff.example")
+	received := make(chan []byte, 1)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() {
+		c, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer func() { _ = c.Close() }()
+		_ = c.SetDeadline(time.Now().Add(3 * time.Second))
+		buf := make([]byte, len(hello))
+		if _, readErr := io.ReadFull(c, buf); readErr != nil {
+			return
+		}
+		received <- buf
+	}()
+
+	dialer := &recordDialer{dest: ln.Addr().String()}
+	if err := forward.Attach(dialer); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := forward.Attach(nil); err != nil {
+			t.Errorf("detach forward dialer: %v", err)
+		}
+	})
+	if err := router.SetRoutes(router.Routes{{
+		MatchType:   router.TypeExact,
+		Sources:     []string{"sniff.example"},
+		Destination: router.EgressForward,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = router.SetRoutes(router.Routes{{
+			MatchType:   router.TypeDefault,
+			Destination: router.EgressDirect,
+		}})
+	})
+
+	dst := ln.Addr().(*net.TCPAddr)
+	s := newTestServer(t, context.Background(), nil)
+	s.resolveDestination = func(net.Conn) (*net.TCPAddr, error) {
+		return dst, nil
+	}
+
+	serverSide, clientSide := net.Pipe()
+	defer func() { _ = clientSide.Close() }()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.ServeConn(serverSide)
+	}()
+	go func() {
+		_, _ = clientSide.Write(hello)
+		_ = clientSide.Close()
+	}()
+
+	select {
+	case got := <-received:
+		if !bytes.Equal(got, hello) {
+			t.Fatalf("origin received %d bytes, want the ClientHello", len(got))
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("origin did not receive the replayed ClientHello")
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("ServeConn() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ServeConn() did not return")
+	}
+	want := net.JoinHostPort("sniff.example", strconv.Itoa(dst.Port))
+	if dialer.addr != want {
+		t.Fatalf("dial address = %q, want %q", dialer.addr, want)
 	}
 }
 

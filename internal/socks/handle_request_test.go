@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/sniff"
 )
 
 func TestHandleRequest_BindUnsupported(t *testing.T) {
@@ -94,6 +95,91 @@ func TestHandleConnect_NoRoute(t *testing.T) {
 	}
 	if buf.Len() < 2 || buf.Bytes()[1] != ruleFailure {
 		t.Fatalf("reply = %v, want ruleFailure", buf.Bytes())
+	}
+}
+
+func TestHandleConnectIP_SniffedNameReplayedToOriginalIP(t *testing.T) {
+	hello := sniff.BuildClientHello("sniff.example")
+	received := make(chan []byte, 1)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() {
+		c, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer func() { _ = c.Close() }()
+		_ = c.SetDeadline(time.Now().Add(3 * time.Second))
+		buf := make([]byte, len(hello))
+		if _, readErr := io.ReadFull(c, buf); readErr != nil {
+			return
+		}
+		received <- buf
+	}()
+
+	if err := router.SetRoutes(router.Routes{{
+		MatchType:   router.TypeExact,
+		Sources:     []string{"sniff.example"},
+		Destination: router.EgressDirect,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = router.SetRoutes(router.Routes{{
+			MatchType:   router.TypeDefault,
+			Destination: router.EgressDirect,
+		}})
+	})
+
+	dst := ln.Addr().(*net.TCPAddr)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := New(ctx, &Config{})
+	serverSide, clientSide := net.Pipe()
+	defer func() { _ = serverSide.Close() }()
+	defer func() { _ = clientSide.Close() }()
+
+	req := &Request{
+		Command:  ConnectCommand,
+		DestAddr: &AddrSpec{IP: dst.IP, Port: uint16(dst.Port)},
+		bufConn:  serverSide,
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.handleConnect(ctx, serverSide, req)
+	}()
+
+	_ = clientSide.SetDeadline(time.Now().Add(3 * time.Second))
+	head := make([]byte, 10)
+	if _, err := io.ReadFull(clientSide, head); err != nil {
+		t.Fatalf("read reply: %v", err)
+	}
+	if head[1] != successReply {
+		t.Fatalf("reply code = %d, want success", head[1])
+	}
+	if _, err := clientSide.Write(hello); err != nil {
+		t.Fatal(err)
+	}
+	_ = clientSide.Close()
+
+	select {
+	case got := <-received:
+		if !bytes.Equal(got, hello) {
+			t.Fatal("origin did not receive the replayed ClientHello")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("origin did not receive the replayed ClientHello")
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("handleConnect() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("handleConnect() did not return")
 	}
 }
 

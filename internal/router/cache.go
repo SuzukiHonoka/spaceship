@@ -1,6 +1,7 @@
 package router
 
 import (
+	"net/netip"
 	"sync"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
@@ -58,6 +59,30 @@ func GetRoute(dst string) (transport.Transport, error) {
 		return route.GetTransport()
 	}
 	return routesCache.GetRoute(key)
+}
+
+// GetRouteObserved selects a route when dialHost is the IP the client asked
+// to reach and name is a hostname recovered from that connection's first
+// flight. CIDR rules match the IP. Exact, domain, and regex rules match the
+// name, and still match the IP so a literal address in those rules keeps
+// working. The first matching rule wins. An empty name, or a name that is
+// itself an IP, selects the same route as GetRoute(dialHost).
+func GetRouteObserved(dialHost, name string) (transport.Transport, error) {
+	ipKey := normalizeRouteKey(dialHost)
+	nameKey := normalizeRouteKey(name)
+	if nameKey == "" || nameKey == ipKey {
+		return GetRoute(ipKey)
+	}
+	if _, err := netip.ParseAddr(nameKey); err == nil {
+		return GetRoute(ipKey)
+	}
+	key := nameKey + "\x00" + ipKey
+	routesMu.RLock()
+	defer routesMu.RUnlock()
+	if route, ok := table.Get(key); ok {
+		return route.GetTransport()
+	}
+	return routesCache.getObserved(key, ipKey, nameKey)
 }
 
 // AnyRouteSupportsUDP reports whether any installed route has an egress capable

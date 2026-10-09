@@ -90,6 +90,11 @@ type Config struct {
 	// supplied to New rather than assigned on Service afterwards: CreateNIC
 	// starts gVisor's packet processors before New returns, so a later write
 	// races with handleTCPRequest.
+	//
+	// The function receives a recovered HTTP Host or TLS server name when the
+	// client flight has one, and the destination IP otherwise. The default
+	// router instead matches CIDR rules against that IP and name rules against
+	// the recovered host in one pass.
 	ResolveRoute func(string) (transport.Transport, error)
 }
 

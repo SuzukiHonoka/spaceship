@@ -79,9 +79,17 @@ target in the `iptables` or `ip6tables` `nat` table. Enable the listener with
 The listener reads `SO_ORIGINAL_DST` from each accepted socket, routes the
 recovered destination IP through the configured Spaceship routes, and carries
 the TCP stream through the selected egress. It is Linux-only and TCP-only.
-Because REDIRECT supplies an IP address rather than a hostname, `cidr`, `exact`
-IP, and `default` routes are useful here; domain routes cannot match unless a
-separate future traffic-sniffing feature recovers a hostname.
+REDIRECT, like a SOCKS client that resolved the name itself and a TUN flow,
+supplies an IP rather than a hostname. Spaceship peeks the first client flight
+and, for HTTP/1, reads the Host header; for TLS 1.0–1.3, it reads a cleartext
+Server Name Indication. An Encrypted Client Hello, or the earlier encrypted
+server-name extension, hides the origin name, so the outer placeholder is
+ignored. That recovered name is what `domain`, `exact`, and `regex` rules match.
+`cidr` rules still match the original IP, and the first matching rule wins.
+Anything other than HTTP/1 or TLS keeps the IP as its only route key. Direct
+and blackhole dial the IP the client supplied. Every other egress receives the
+recovered name and resolves it there, so a proxy route uses the Spaceship
+server's DNS. The peeked bytes are replayed on that connection.
 
 `redirect.max_connections` bounds accepted sessions and their proxy goroutines.
 Omit it or set it to `0` to use the default of 1024; the accepted maximum is

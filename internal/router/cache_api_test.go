@@ -1,6 +1,8 @@
 package router
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestAddToFirstAndLastRoute(t *testing.T) {
 	// Start without a default so later AddToLast can append a catch-all.
@@ -59,6 +61,50 @@ func TestAddToFirstAndLastRoute(t *testing.T) {
 		t.Fatalf("route = %s, want blackHole", tr)
 	}
 	_ = tr.Close()
+}
+
+func TestGetRouteObservedPrefersEarlierRule(t *testing.T) {
+	if err := SetRoutes(Routes{
+		{MatchType: TypeCIDR, Sources: []string{"203.0.113.0/24"}, Destination: EgressBlackHole},
+		{MatchType: TypeExact, Sources: []string{"sniff.example"}, Destination: EgressDirect},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = SetRoutes(Routes{{MatchType: TypeDefault, Destination: EgressDirect}})
+	})
+
+	tr, err := GetRouteObserved("203.0.113.10", "sniff.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.String() != "blackHole" {
+		t.Fatalf("cidr-first route = %s, want blackHole", tr)
+	}
+	_ = tr.Close()
+
+	tr, err = GetRouteObserved("198.51.100.10", "sniff.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.String() != "direct" {
+		t.Fatalf("name route = %s, want direct", tr)
+	}
+	_ = tr.Close()
+
+	// A second lookup hits the observed cache and still returns direct.
+	tr, err = GetRouteObserved("198.51.100.10", "sniff.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.String() != "direct" {
+		t.Fatalf("cached name route = %s, want direct", tr)
+	}
+	_ = tr.Close()
+
+	if _, err = GetRouteObserved("198.51.100.10", ""); err == nil {
+		t.Fatal("ip with no recovered name matched a domain rule")
+	}
 }
 
 func TestGenerateCacheRebuilds(t *testing.T) {

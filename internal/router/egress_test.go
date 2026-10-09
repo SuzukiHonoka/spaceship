@@ -4,6 +4,9 @@ import (
 	"testing"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/blackhole"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/direct"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/forward"
 )
 
 // TestEgressSupportsUDPMatchesTransports guards SupportsUDP against drifting from
@@ -26,6 +29,32 @@ func TestEgressSupportsUDPMatchesTransports(t *testing.T) {
 		if err := tr.Close(); err != nil {
 			t.Errorf("%s: Close() error = %v", egress, err)
 		}
+	}
+}
+
+func TestDialHost(t *testing.T) {
+	const (
+		ip   = "203.0.113.10"
+		name = "sniff.example"
+	)
+	tests := []struct {
+		name  string
+		route transport.Transport
+		host  string
+		want  string
+	}{
+		{name: "direct keeps the client IP", route: direct.New(), host: name, want: ip},
+		{name: "blackhole keeps the client IP", route: blackhole.New(), host: name, want: ip},
+		{name: "forward resolves the name", route: forward.New(), host: name, want: name},
+		{name: "empty name keeps the client IP", route: forward.New(), want: ip},
+		{name: "nil route keeps the client IP", host: name, want: ip},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := DialHost(tt.route, ip, tt.host); got != tt.want {
+				t.Fatalf("DialHost() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
