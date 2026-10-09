@@ -3,9 +3,9 @@
 //
 // Plain HTTP yields the Host header. HTTPS yields the TLS Server Name
 // Indication. Every other protocol is left alone. Peek replays the bytes it
-// read, in order, so the origin still sees the original flight. The dial
-// target stays the client-supplied IP: a later step can resolve the recovered
-// name through Spaceship and send this same flight there.
+// read, in order, so the origin still sees the original flight. Direct and
+// blackhole dial the IP the client supplied. Every other egress dials the
+// recovered name, so a proxy route resolves it on the Spaceship server.
 //
 // A server name is taken from a TLS 1.0–1.3 ClientHello. TLS 1.3 leaves that
 // name in cleartext unless the client sends Encrypted Client Hello (or the

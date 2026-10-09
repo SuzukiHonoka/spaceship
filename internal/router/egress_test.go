@@ -32,6 +32,35 @@ func TestEgressSupportsUDPMatchesTransports(t *testing.T) {
 	}
 }
 
+func TestIPBlockDecisive(t *testing.T) {
+	if err := SetRoutes(Routes{
+		{MatchType: TypeCIDR, Sources: []string{"::/0"}, Destination: EgressBlock},
+		{MatchType: TypeCIDR, Sources: []string{"127.0.0.1/32"}, Destination: EgressBlock},
+		{MatchType: TypeDefault, Destination: EgressDirect},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = SetRoutes(Routes{{MatchType: TypeDefault, Destination: EgressDirect}})
+	})
+	if !IPBlockDecisive("127.0.0.1") {
+		t.Fatal("127.0.0.1 was not blocked")
+	}
+	if IPBlockDecisive("203.0.113.10") {
+		t.Fatal("an address outside the block rule was blocked")
+	}
+
+	if err := SetRoutes(Routes{
+		{MatchType: TypeExact, Sources: []string{"sniff.example"}, Destination: EgressDirect},
+		{MatchType: TypeCIDR, Sources: []string{"203.0.113.0/24"}, Destination: EgressBlock},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if IPBlockDecisive("203.0.113.10") {
+		t.Fatal("a CIDR block behind a name rule was treated as decided")
+	}
+}
+
 func TestDialHost(t *testing.T) {
 	const (
 		ip   = "203.0.113.10"

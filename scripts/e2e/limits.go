@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"time"
@@ -98,6 +99,14 @@ func runLimitSuite(bin, workDir string) {
 			refused++
 			continue
 		}
+		// The SOCKS success reply is sent before the server admits the
+		// session, so the handshake can succeed for a connection the ceiling
+		// then refuses. A round trip is what shows the session was admitted.
+		if err := probeTunnel(conn); err != nil {
+			_ = conn.Close()
+			refused++
+			continue
+		}
 		held = append(held, conn)
 	}
 
@@ -125,11 +134,33 @@ func runLimitSuite(bin, workDir string) {
 		time.Sleep(100 * time.Millisecond)
 		conn, err := socks5Connect(socksAddr, echo.addr, "", "")
 		if err == nil {
+			err = probeTunnel(conn)
 			_ = conn.Close()
-			recovered = nil
-			break
+			if err == nil {
+				recovered = nil
+				break
+			}
 		}
 		recovered = fmt.Errorf("attempt %d: %w", i+1, err)
 	}
 	checkf("limits/capacity returns after sessions end", recovered, "new session admitted")
+}
+
+// probeTunnel writes a non-HTTP payload and reads the echo. The bytes are not
+// a ClientHello, so sniff replays them and the dial still uses the original IP.
+func probeTunnel(conn net.Conn) error {
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	payload := []byte("ping")
+	if _, err := conn.Write(payload); err != nil {
+		return err
+	}
+	buf := make([]byte, len(payload))
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		return err
+	}
+	if string(buf) != "ping" {
+		return fmt.Errorf("echo = %q", buf)
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return nil
 }

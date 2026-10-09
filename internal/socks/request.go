@@ -210,6 +210,16 @@ func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Reques
 func (s *Server) handleConnectIP(ctx context.Context, conn ConnWriter, req *Request) error {
 	dialHost := req.DestAddr.IP.String()
 	port := req.DestAddr.Port
+	// A CIDR or address rule can block this IP before the client sends a
+	// flight. Refuse in the SOCKS reply. A name rule earlier in the list can
+	// still match, so that case waits for the flight.
+	if router.IPBlockDecisive(dialHost) {
+		log.Printf("socks: %s blocked", dialHost)
+		if err := sendReply(conn, ruleFailure, nil); err != nil {
+			return fmt.Errorf("failed to send reply: %w", err)
+		}
+		return nil
+	}
 	if err := sendReply(conn, successReply, nil); err != nil {
 		return fmt.Errorf("failed to send reply: %w", err)
 	}

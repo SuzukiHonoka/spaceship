@@ -291,6 +291,10 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// CONNECT to an IP has no name until the tunneled HTTP request or TLS
 	// ClientHello arrives. Reply first so the client sends that flight.
 	if net.ParseIP(host) != nil {
+		if router.IPBlockDecisive(host) {
+			ServeProxyError(w, r.Host, fmt.Errorf("blocked"))
+			return
+		}
 		s.handleConnectIP(w, r, host)
 		return
 	}

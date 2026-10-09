@@ -52,6 +52,34 @@ func (r Routes) getObserved(cacheKey, ipKey, nameKey string) (transport.Transpor
 	return nil, fmt.Errorf("route not found: %s -> nil", nameKey)
 }
 
+// IPBlockDecisive reports whether ip is blocked by a rule a recovered name
+// cannot outrank. An earlier name rule might still match that name and win,
+// so this is false until the flight has been read.
+func IPBlockDecisive(ip string) bool {
+	key := normalizeRouteKey(ip)
+	routesMu.RLock()
+	defer routesMu.RUnlock()
+	for _, route := range routesCache {
+		if route == nil {
+			continue
+		}
+		switch route.MatchType {
+		case TypeCIDR:
+			if route.Match(key) {
+				return route.Destination == EgressBlock
+			}
+		case TypeDefault:
+			return route.Destination == EgressBlock
+		default:
+			if route.Match(key) {
+				return route.Destination == EgressBlock
+			}
+			return false
+		}
+	}
+	return false
+}
+
 func matchObserved(route *Route, ipKey, nameKey string) bool {
 	switch route.MatchType {
 	case TypeCIDR:
