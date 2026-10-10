@@ -295,10 +295,17 @@ func (s *Server) ServeConn(conn net.Conn) error {
 	}
 
 	host := dst.IP.String()
-	// Recover a name before choosing a route. Direct and blackhole dial the
-	// original IP. Any other egress receives the name and resolves it. Peek
-	// replays the flight it read.
-	name, src := sniff.Peek(client, sniff.Timeout)
+	// Recover a name before choosing a route when it can still change the
+	// egress or the dial host. Direct and blackhole dial the original IP.
+	// Any other egress receives the name and resolves it. Peek replays the
+	// flight it read. An IP that already matches direct, blackhole, or block,
+	// with no earlier name rule that can outrank it, is not peeked: name
+	// stays empty and lookupRoute uses resolveRoute.
+	name := ""
+	src := io.Reader(client)
+	if router.IPNeedsSniff(host) {
+		name, src = sniff.Peek(client, sniff.Timeout)
+	}
 	route, err := s.lookupRoute(host, name)
 	if err != nil {
 		return fmt.Errorf("route %s: %w", host, err)

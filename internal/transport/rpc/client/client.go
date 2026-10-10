@@ -140,6 +140,7 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 	clientMu.Lock()
 	queueVal = q
 	clientMu.Unlock()
+	resetEarlyAdmitLegacy()
 	return nil
 }
 
@@ -151,6 +152,7 @@ func Destroy() {
 	if q != nil {
 		q.Destroy()
 	}
+	resetEarlyAdmitLegacy()
 }
 
 // GetConnectionStatus returns the current connection pool status

@@ -59,10 +59,11 @@ func (r Routes) getObserved(cacheKey, ipKey, nameKey string) (transport.Transpor
 	return egress.GetTransport()
 }
 
-// IPBlockDecisive reports whether ip is blocked by a rule a recovered name
-// cannot outrank. An earlier name rule might still match that name and win,
-// so this is false until the flight has been read.
-func IPBlockDecisive(ip string) bool {
+// decidedIPEgress is the egress an IP already selects when no earlier name
+// rule can outrank that choice. The second result is false when the list ends
+// without a decision, and when an exact, domain, or regex rule does not match
+// the IP: the recovered name might still match that rule.
+func decidedIPEgress(ip string) (Egress, bool) {
 	key := normalizeRouteKey(ip)
 	routesMu.RLock()
 	defer routesMu.RUnlock()
@@ -73,18 +74,39 @@ func IPBlockDecisive(ip string) bool {
 		switch route.MatchType {
 		case TypeCIDR:
 			if route.Match(key) {
-				return route.Destination == EgressBlock
+				return route.Destination, true
 			}
 		case TypeDefault:
-			return route.Destination == EgressBlock
+			return route.Destination, true
 		default:
 			if route.Match(key) {
-				return route.Destination == EgressBlock
+				return route.Destination, true
 			}
-			return false
+			return "", false
 		}
 	}
-	return false
+	return "", false
+}
+
+// IPBlockDecisive reports whether ip is blocked by a rule a recovered name
+// cannot outrank. An earlier name rule might still match that name and win,
+// so this is false until the flight has been read.
+func IPBlockDecisive(ip string) bool {
+	egress, ok := decidedIPEgress(ip)
+	return ok && egress == EgressBlock
+}
+
+// IPNeedsSniff reports whether a front end must read the first client flight
+// before dialing or refusing ip. An undecided IP might match an earlier name
+// rule once the name is known. Proxy and forward dial that name. Direct,
+// blackhole, and block are already settled, so the connection is dialed or
+// refused immediately.
+func IPNeedsSniff(ip string) bool {
+	egress, ok := decidedIPEgress(ip)
+	if !ok {
+		return true
+	}
+	return egress == EgressProxy || egress == EgressForward
 }
 
 // AdmitProxyFirst reports whether an IP connection should be authenticated to

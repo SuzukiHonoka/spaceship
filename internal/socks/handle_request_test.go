@@ -98,6 +98,82 @@ func TestHandleConnect_NoRoute(t *testing.T) {
 	}
 }
 
+func TestHandleConnect_DecidedDirectClosedPort(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, portStr, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		_ = ln.Close()
+		t.Fatal(err)
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var port uint16
+	for _, ch := range portStr {
+		if ch < '0' || ch > '9' {
+			t.Fatalf("port %q", portStr)
+		}
+		port = port*10 + uint16(ch-'0')
+	}
+
+	if err := router.SetRoutes(router.Routes{
+		{MatchType: router.TypeDefault, Destination: router.EgressDirect},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = router.SetRoutes(router.Routes{
+			{MatchType: router.TypeDefault, Destination: router.EgressDirect},
+		})
+	})
+
+	ctx := t.Context()
+	s := New(ctx, &Config{})
+	serverSide, clientSide := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverSide.Close()
+		_ = clientSide.Close()
+	})
+
+	req := &Request{
+		Command:  ConnectCommand,
+		DestAddr: &AddrSpec{IP: net.ParseIP(host), Port: port},
+		bufConn:  serverSide,
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.handleConnect(ctx, serverSide, req)
+	}()
+
+	if err := clientSide.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	// A sniff-first path writes success (0) before it dials. The classic path
+	// dials the closed port first and reports that failure.
+	head := make([]byte, 10)
+	if _, err := io.ReadFull(clientSide, head); err != nil {
+		t.Fatalf("read reply: %v", err)
+	}
+	if head[1] == successReply {
+		t.Fatal("handleConnect replied success before the dial failed")
+	}
+	if head[1] != networkUnreachable {
+		t.Fatalf("reply code = %d, want networkUnreachable (%d)", head[1], networkUnreachable)
+	}
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("handleConnect() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleConnect() did not return")
+	}
+}
+
 func TestHandleConnectIP_SniffedNameReplayedToOriginalIP(t *testing.T) {
 	hello := sniff.BuildClientHello("sniff.example")
 	received := make(chan []byte, 1)

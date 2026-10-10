@@ -65,8 +65,17 @@ func (s *Service) proxyTCP(conn net.Conn, id stack.TransportEndpointID) error {
 	ip := destination.Addr().String()
 	// A recovered HTTP Host or TLS SNI selects the route. Direct and blackhole
 	// dial the original IP. Any other egress receives the name and resolves
-	// it. The peeked bytes are replayed.
-	name, src := sniff.Peek(conn, sniff.Timeout)
+	// it. The peeked bytes are replayed. Skip the peek when the IP already
+	// settles direct, blackhole, or block, unless a custom resolver still
+	// needs the recovered name.
+	name := ""
+	src := io.Reader(conn)
+	s.hooksMu.RLock()
+	custom := s.customRoute
+	s.hooksMu.RUnlock()
+	if custom || router.IPNeedsSniff(ip) {
+		name, src = sniff.Peek(conn, sniff.Timeout)
+	}
 	route, err := s.routeTCP(ip, name)
 	if err != nil {
 		return fmt.Errorf("route %s: %w", destination, err)

@@ -187,10 +187,25 @@ func TestPeekTLSVersionAndEncryptedServerName(t *testing.T) {
 		{
 			name: "encrypted client hello outer name",
 			raw:  testClientHello(tls12, append(append(tls13, publicSNI...), extension(extEncryptedClientHello, outerECH())...)),
+			want: "public.example",
+		},
+		{
+			name: "browser ech grease",
+			raw:  testClientHello(tls12, append(append(tls13, sni...), extension(extEncryptedClientHello, greaseECH())...)),
+			want: "origin.example",
+		},
+		{
+			name: "encrypted client hello inner name",
+			raw:  testClientHello(tls12, append(append(tls13, sni...), extension(extEncryptedClientHello, []byte{1})...)),
+			want: "origin.example",
 		},
 		{
 			name: "legacy encrypted server name",
 			raw:  testClientHello(tls12, append(sni, extension(extEncryptedServerName, []byte{0})...)),
+		},
+		{
+			name: "malformed extension block",
+			raw:  testClientHello(tls12, append(append([]byte(nil), sni...), 0x00, 0x0b, 0x00, 0x08)),
 		},
 		{
 			name: "malformed supported versions",
@@ -270,6 +285,33 @@ func outerECH() []byte {
 		0x00, 0x01, // payload length
 		0xff, // encrypted inner hello
 	}
+}
+
+// greaseECH is a ClientHelloOuter-shaped encrypted_client_hello body of the
+// kind BoringSSL sends as GREASE: HKDF-SHA256 + AES-128-GCM, plus a fixed
+// stand-in for the random config_id, enc, and payload. It is intentionally
+// indistinguishable from a real outer hello.
+func greaseECH() []byte {
+	enc := []byte{
+		0x2a, 0x91, 0xc4, 0x07, 0x58, 0xe3, 0x1b, 0x6d,
+		0xf0, 0x44, 0x9a, 0x12, 0x77, 0xab, 0x30, 0x5e,
+		0x88, 0x19, 0xc6, 0x4f, 0xd2, 0x63, 0x0b, 0xae,
+		0x71, 0x95, 0x28, 0xfc, 0x53, 0x14, 0xbe, 0x60,
+	}
+	payload := []byte{
+		0x11, 0x8c, 0x3e, 0x70, 0xa4, 0x55, 0xd9, 0x02,
+		0x6b, 0xe7, 0x18, 0x9f, 0x4c, 0x33, 0xca, 0x81,
+	}
+	out := []byte{
+		0,          // outer
+		0x00, 0x01, // HKDF-SHA256
+		0x00, 0x01, // AES-128-GCM
+		0x4e, // config_id
+		0x00, byte(len(enc)),
+	}
+	out = append(out, enc...)
+	out = append(out, byte(len(payload)>>8), byte(len(payload)))
+	return append(out, payload...)
 }
 
 func TestAcceptName(t *testing.T) {

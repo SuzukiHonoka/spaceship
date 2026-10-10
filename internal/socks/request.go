@@ -134,8 +134,11 @@ func (s *Server) handleRequest(req *Request, conn ConnWriter) error {
 func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Request) error {
 	// An IP destination has no name to route on until the client sends HTTP or
 	// TLS. That flight arrives only after the SOCKS success reply, so reply
-	// first, then recover the name.
-	if req.DestAddr.FQDN == "" && len(req.DestAddr.IP) > 0 {
+	// first, then recover the name, when the name can still change the route
+	// or the dial host. Direct, blackhole, and block that no earlier name
+	// rule can outrank stay on the classic path: dial or refuse first, and
+	// report failure in the SOCKS reply.
+	if req.DestAddr.FQDN == "" && len(req.DestAddr.IP) > 0 && router.IPNeedsSniff(req.DestAddr.IP.String()) {
 		return s.handleConnectIP(ctx, conn, req)
 	}
 

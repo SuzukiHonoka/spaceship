@@ -8,10 +8,13 @@
 // recovered name, so a proxy route resolves it on the Spaceship server.
 //
 // A server name is taken from a TLS 1.0–1.3 ClientHello. TLS 1.3 leaves that
-// name in cleartext unless the client sends Encrypted Client Hello (or the
-// earlier encrypted_server_name extension). The outer name is then only the
-// public client-facing placeholder, so Peek ignores it. HTTP/2 without TLS
-// and QUIC are not inspected.
+// name in cleartext. encrypted_client_hello (0xfe0d) does not suppress it.
+// Browsers send that extension as GREASE on ordinary handshakes, and BoringSSL
+// builds the GREASE with a real HPKE cipher suite plus random config_id, enc,
+// and payload, so it is indistinguishable from a real ClientHelloOuter. A real
+// outer name is only the public client-facing placeholder; Peek still returns
+// the cleartext SNI. The earlier encrypted_server_name extension encrypts the
+// name, and Peek ignores it. HTTP/2 without TLS and QUIC are not inspected.
 package sniff
 
 import (
@@ -49,8 +52,9 @@ const (
 	tls13 = 0x0304
 
 	extSupportedVersions = 0x002b
-	// RFC 9849. On the wire this is ClientHelloOuter: the real server name
-	// is inside the encrypted payload.
+	// RFC 9849. Browser GREASE and a real ClientHelloOuter share this type.
+	// It does not mean the cleartext SNI is a cover name. A real outer name
+	// is only the public client-facing placeholder.
 	extEncryptedClientHello = 0xfe0d
 	// draft-ietf-tls-esni. The server name is encrypted and any cleartext
 	// SNI beside it is not the origin name.
@@ -332,36 +336,30 @@ func supportedVersions(exts []byte) (versions []uint16, present, ok bool) {
 	return versions, present, true
 }
 
-// serverNameEncrypted reports whether this ClientHello hides the origin name.
-// ClientHelloOuter carries encrypted_client_hello; the cleartext SNI is then
-// the public client-facing name. encrypted_server_name is the earlier form.
+// serverNameEncrypted reports whether the cleartext SNI must be ignored.
+// encrypted_server_name (0xffce) encrypts the name, so the cleartext SNI
+// beside it is not the origin. A malformed extension block is unusable.
+//
+// encrypted_client_hello (0xfe0d) does not suppress SNI. Browsers send a
+// ClientHelloOuter-shaped GREASE extension on ordinary handshakes. BoringSSL
+// GREASE uses a real HPKE cipher suite plus random config_id, enc, and
+// payload, so it is indistinguishable from a real ClientHelloOuter. The
+// extension is not proof the cleartext name is a cover name. A real Encrypted
+// Client Hello outer name is only the public client-facing placeholder; Peek
+// still returns that cleartext name. An inner ECH hello (type 1, empty body)
+// exists only after decryption and may keep its SNI.
 func serverNameEncrypted(exts []byte) bool {
 	encrypted := false
-	if !forEachExtension(exts, func(typ int, data []byte) bool {
-		switch typ {
-		case extEncryptedClientHello:
-			encrypted = echOuter(data)
-			return !encrypted
-		case extEncryptedServerName:
+	if !forEachExtension(exts, func(typ int, _ []byte) bool {
+		if typ == extEncryptedServerName {
 			encrypted = true
 			return false
-		default:
-			return true
 		}
+		return true
 	}) {
 		return true
 	}
 	return encrypted
-}
-
-// echOuter reports whether data is a ClientHelloOuter ECH extension (RFC 9849).
-// A truncated or unknown form is treated as outer: the name is not usable.
-func echOuter(data []byte) bool {
-	if len(data) < 1 || data[0] != 1 {
-		return true
-	}
-	// inner(1) has an empty body. That hello only exists after decryption.
-	return len(data) != 1
 }
 
 func forEachExtension(exts []byte, fn func(typ int, data []byte) bool) bool {

@@ -80,11 +80,16 @@ The listener reads `SO_ORIGINAL_DST` from each accepted socket, routes the
 recovered destination IP through the configured Spaceship routes, and carries
 the TCP stream through the selected egress. It is Linux-only and TCP-only.
 REDIRECT, like a SOCKS client that resolved the name itself and a TUN flow,
-supplies an IP rather than a hostname. Spaceship peeks the first client flight
-and, for HTTP/1, reads the Host header; for TLS 1.0–1.3, it reads a cleartext
-Server Name Indication. An Encrypted Client Hello, or the earlier encrypted
-server-name extension, hides the origin name, so the outer placeholder is
-ignored. That recovered name is what `domain`, `exact`, and `regex` rules match.
+supplies an IP rather than a hostname. When the IP already matches a direct,
+blackhole, or block rule that no earlier name rule can outrank, the connection
+is not peeked and is dialed or refused immediately. Otherwise Spaceship peeks
+the first client flight and, for HTTP/1, reads the Host header; for TLS 1.0–1.3,
+it reads a cleartext Server Name Indication. Cleartext SNI is used even when
+encrypted_client_hello is present, because browsers send it as GREASE and it
+cannot be distinguished from a real outer hello. A real Encrypted Client Hello
+outer name is only the public placeholder. The earlier encrypted_server_name
+extension still hides the origin. That recovered name is what `domain`,
+`exact`, and `regex` rules match.
 `cidr` rules still match the original IP, and the first matching rule wins.
 Anything other than HTTP/1 or TLS keeps the IP as its only route key. Direct
 and blackhole dial the IP the client supplied. Every other egress receives the

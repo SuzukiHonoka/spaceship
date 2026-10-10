@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	nethttp "net/http"
 	"net/http/httptest"
+	"syscall"
 	"testing"
 	"time"
 
@@ -108,6 +110,71 @@ func TestHandleConnect_RoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("echo = %q, want %q", got, payload)
+	}
+}
+
+func TestHandleConnect_DecidedDirectClosedPort(t *testing.T) {
+	if err := router.SetRoutes(router.Routes{
+		{MatchType: router.TypeDefault, Destination: router.EgressDirect},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = router.SetRoutes(router.Routes{{
+			MatchType:   router.TypeDefault,
+			Destination: router.EgressDirect,
+		}})
+	})
+
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := closed.Addr().String()
+	if err := closed.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	proxy := New(ctx, &Config{})
+
+	addr := freeHTTPAddr(t)
+	errCh := make(chan error, 1)
+	go func() { errCh <- proxy.ListenAndServe("tcp", addr) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(2 * time.Second):
+		}
+	})
+	waitHTTP(t, addr)
+
+	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	request := "CONNECT " + target + " HTTP/1.1\r\nHost: " + target + "\r\n\r\n"
+	if _, err := conn.Write([]byte(request)); err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(conn)
+	resp, err := nethttp.ReadResponse(br, &nethttp.Request{Method: nethttp.MethodConnect})
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == nethttp.StatusOK {
+		t.Fatal("CONNECT replied 200 before the dial failed")
+	}
+	if resp.StatusCode != nethttp.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", resp.StatusCode)
 	}
 }
 
@@ -275,6 +342,92 @@ func TestHandleConnectIP_SniffedNameReplayedToOriginalIP(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("origin did not receive the replayed ClientHello")
+	}
+}
+
+// An exact name rule does not match the CONNECT target IP, so the sniff path
+// answers 200 before dialing. A closed port then fails the dial. The bytes
+// after that 200 must not be a second HTTP response.
+func TestHandleConnectIP_DialFailureAfterEstablishedIsNotHTTP(t *testing.T) {
+	hello := sniff.BuildClientHello("sniff.example")
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := closed.Addr().String()
+	if err := closed.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := router.SetRoutes(router.Routes{{
+		MatchType:   router.TypeExact,
+		Sources:     []string{"sniff.example"},
+		Destination: router.EgressDirect,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = router.SetRoutes(router.Routes{{
+			MatchType:   router.TypeDefault,
+			Destination: router.EgressDirect,
+		}})
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	proxy := New(ctx, &Config{})
+	addr := freeHTTPAddr(t)
+	errCh := make(chan error, 1)
+	go func() { errCh <- proxy.ListenAndServe("tcp", addr) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(2 * time.Second):
+		}
+	})
+	waitHTTP(t, addr)
+
+	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	request := "CONNECT " + target + " HTTP/1.1\r\nHost: " + target + "\r\n\r\n"
+	if _, err := conn.Write([]byte(request)); err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(conn)
+	resp, err := nethttp.ReadResponse(br, &nethttp.Request{Method: nethttp.MethodConnect})
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != nethttp.StatusOK {
+		t.Fatalf("status = %d, want 200 before the dial", resp.StatusCode)
+	}
+	if _, err := conn.Write(hello); err != nil {
+		t.Fatal(err)
+	}
+
+	buf := make([]byte, 256)
+	n, readErr := br.Read(buf)
+	got := buf[:n]
+	if bytes.HasPrefix(got, []byte("HTTP/1.")) || bytes.Contains(got, []byte("503 Service Unavailable")) {
+		t.Fatalf("bytes after 200 = %q, want no second HTTP response", got)
+	}
+	if n == 0 {
+		var netErr net.Error
+		if errors.As(readErr, &netErr) && netErr.Timeout() {
+			t.Fatal("timed out reading after CONNECT 200")
+		}
+		if !errors.Is(readErr, syscall.ECONNRESET) {
+			t.Fatalf("connection ended with %v, want a reset", readErr)
+		}
 	}
 }
 

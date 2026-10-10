@@ -289,8 +289,11 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// CONNECT to an IP has no name until the tunneled HTTP request or TLS
-	// ClientHello arrives. Reply first so the client sends that flight.
-	if net.ParseIP(host) != nil {
+	// ClientHello arrives. Reply first so the client sends that flight when
+	// the recovered name can still change the route or the dial host. Direct,
+	// blackhole, and block that no earlier name rule can outrank fall through
+	// and are dialed or refused before any 200.
+	if net.ParseIP(host) != nil && router.IPNeedsSniff(host) {
 		if router.IPBlockDecisive(host) {
 			ServeProxyError(w, r.Host, fmt.Errorf("blocked"))
 			return
@@ -443,6 +446,9 @@ func (s *Server) handleConnectIP(w http.ResponseWriter, r *http.Request, host st
 	if err = router.DialEgress(s.ctx, admitted, egress, addr, localAddr, client, src); err != nil &&
 		!errors.Is(err, context.Canceled) &&
 		!errors.Is(err, io.EOF) {
-		ServeProxyError(client, r.Host, err)
+		// The 200 already ended HTTP framing. Another status line would be
+		// delivered as tunnel payload, so reset the client instead.
+		log.Printf("http: CONNECT %q failed: %v", r.Host, err) // #nosec G706 -- %q escapes request-controlled log characters
+		transport.Abort(client)
 	}
 }

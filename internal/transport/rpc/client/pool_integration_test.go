@@ -82,6 +82,11 @@ func (s *stubProxy) DnsResolve(_ context.Context, req *proto.DnsRequest) (*proto
 
 func startStubProxy(t *testing.T) string {
 	t.Helper()
+	return startProxyServer(t, &stubProxy{})
+}
+
+func startProxyServer(t *testing.T, srv proto.ProxyServer) string {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +103,7 @@ func startStubProxy(t *testing.T) string {
 			}),
 		)...,
 	)
-	proto.RegisterProxyServer(s, &stubProxy{})
+	proto.RegisterProxyServer(s, srv)
 	go func() { _ = s.Serve(ln) }()
 	t.Cleanup(func() {
 		s.Stop()

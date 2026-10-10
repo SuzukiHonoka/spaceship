@@ -90,7 +90,9 @@ type proxyAdmitter interface {
 
 // AdmitProxy checks a pooled tunnel connection out and waits until the server
 // has authenticated and admitted the session. The caller closes the session,
-// which returns the connection to the pool.
+// which returns the connection to the pool. A nil session and a nil error mean
+// the server does not admit before the target address; the caller dials with
+// GetTransport after answering its own client.
 func AdmitProxy(ctx context.Context) (transport.AdmittedSession, error) {
 	tr, err := EgressProxy.GetTransport()
 	if err != nil {
@@ -101,7 +103,11 @@ func AdmitProxy(ctx context.Context) (transport.AdmittedSession, error) {
 		utils.Close(tr)
 		return nil, errors.New("proxy egress cannot admit a session")
 	}
-	return admitter.Admit(ctx)
+	session, err := admitter.Admit(ctx)
+	if errors.Is(err, rpcClient.ErrEarlyAdmitUnavailable) {
+		return nil, nil
+	}
+	return session, err
 }
 
 // DialEgress carries addr on an admitted proxy session when egress is the

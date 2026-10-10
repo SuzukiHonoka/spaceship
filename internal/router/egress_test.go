@@ -69,6 +69,74 @@ func TestIPBlockDecisive(t *testing.T) {
 	}
 }
 
+func TestIPNeedsSniff(t *testing.T) {
+	tests := []struct {
+		name   string
+		routes Routes
+		ip     string
+		want   bool
+	}{
+		{
+			name:   "default direct",
+			routes: Routes{{MatchType: TypeDefault, Destination: EgressDirect}},
+			ip:     "127.0.0.1",
+			want:   false,
+		},
+		{
+			name:   "default block",
+			routes: Routes{{MatchType: TypeDefault, Destination: EgressBlock}},
+			ip:     "127.0.0.1",
+			want:   false,
+		},
+		{
+			name:   "default proxy",
+			routes: Routes{{MatchType: TypeDefault, Destination: EgressProxy}},
+			ip:     "127.0.0.1",
+			want:   true,
+		},
+		{
+			name: "name rule before default proxy",
+			routes: Routes{
+				{MatchType: TypeExact, Sources: []string{"sniff.example"}, Destination: EgressDirect},
+				{MatchType: TypeDefault, Destination: EgressProxy},
+			},
+			ip:   "127.0.0.1",
+			want: true,
+		},
+		{
+			name: "matching CIDR direct",
+			routes: Routes{
+				{MatchType: TypeCIDR, Sources: []string{"127.0.0.1/32"}, Destination: EgressDirect},
+				{MatchType: TypeDefault, Destination: EgressProxy},
+			},
+			ip:   "127.0.0.1",
+			want: false,
+		},
+		{
+			name: "matching CIDR proxy",
+			routes: Routes{
+				{MatchType: TypeCIDR, Sources: []string{"10.0.0.0/8"}, Destination: EgressProxy},
+				{MatchType: TypeDefault, Destination: EgressDirect},
+			},
+			ip:   "10.1.2.3",
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := SetRoutes(tt.routes); err != nil {
+				t.Fatalf("SetRoutes() error = %v", err)
+			}
+			t.Cleanup(func() {
+				_ = SetRoutes(Routes{{MatchType: TypeDefault, Destination: EgressDirect}})
+			})
+			if got := IPNeedsSniff(tt.ip); got != tt.want {
+				t.Fatalf("IPNeedsSniff(%s) = %v, want %v", tt.ip, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAdmitProxyFirst(t *testing.T) {
 	tests := []struct {
 		name   string
