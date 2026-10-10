@@ -24,15 +24,132 @@ func (r Routes) GetRoute(dst string) (transport.Transport, error) {
 	// dst is expected to already be a normalizeRouteKey result when called from
 	// the package GetRoute entrypoint; normalize again so direct callers are safe.
 	key := normalizeRouteKey(dst)
+	egress, err := r.findEgress(key, key, func(route *Route) bool { return route.Match(key) })
+	if err != nil {
+		return nil, err
+	}
+	return egress.GetTransport()
+}
+
+// findEgress returns the first route for which match reports true and caches
+// that egress under cacheKey. errKey is the destination named in the error
+// when nothing matches. The caller holds routesMu for reading.
+func (r Routes) findEgress(cacheKey, errKey string, match func(*Route) bool) (Egress, error) {
 	for i, route := range r {
 		if route == nil {
-			return nil, fmt.Errorf("route %d is nil", i)
+			return "", fmt.Errorf("route %d is nil", i)
 		}
-		if route.Match(key) {
-			table.Set(key, route.Destination)
-			//log.Printf("route cached: %s -> %s", key, route.Destination)
-			return route.Destination.GetTransport()
+		if match(route) {
+			table.Set(cacheKey, route.Destination)
+			return route.Destination, nil
 		}
 	}
-	return nil, fmt.Errorf("route not found: %s -> nil", key)
+	return "", fmt.Errorf("route not found: %s -> nil", errKey)
+}
+
+// getObserved matches name rules against nameKey and CIDR rules against ipKey.
+// The caller holds routesMu for reading.
+func (r Routes) getObserved(cacheKey, ipKey, nameKey string) (transport.Transport, error) {
+	egress, err := r.findEgress(cacheKey, nameKey, func(route *Route) bool {
+		return matchObserved(route, ipKey, nameKey)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return egress.GetTransport()
+}
+
+// IPBlockDecisive reports whether ip is blocked by a rule a recovered name
+// cannot outrank. An earlier name rule might still match that name and win,
+// so this is false until the flight has been read.
+func IPBlockDecisive(ip string) bool {
+	key := normalizeRouteKey(ip)
+	routesMu.RLock()
+	defer routesMu.RUnlock()
+	for _, route := range routesCache {
+		if route == nil {
+			continue
+		}
+		switch route.MatchType {
+		case TypeCIDR:
+			if route.Match(key) {
+				return route.Destination == EgressBlock
+			}
+		case TypeDefault:
+			return route.Destination == EgressBlock
+		default:
+			if route.Match(key) {
+				return route.Destination == EgressBlock
+			}
+			return false
+		}
+	}
+	return false
+}
+
+// AdmitProxyFirst reports whether an IP connection should be authenticated to
+// the tunnel before the front end tells the client that connection is open.
+// A recovered name may still change which host is dialed. It cannot select
+// direct, blackhole, or forward from this table; those wait for the flight,
+// because that flight can choose an egress that never touches the tunnel.
+func AdmitProxyFirst(ip string) bool {
+	key := normalizeRouteKey(ip)
+	routesMu.RLock()
+	defer routesMu.RUnlock()
+	var proxyPossible, skipsTunnel bool
+	for _, route := range routesCache {
+		if route == nil {
+			continue
+		}
+		switch route.MatchType {
+		case TypeCIDR:
+			if !route.Match(key) {
+				continue
+			}
+			return admitProxyDecision(route.Destination, proxyPossible, skipsTunnel)
+		case TypeDefault:
+			return admitProxyDecision(route.Destination, proxyPossible, skipsTunnel)
+		default:
+			if route.Match(key) {
+				return admitProxyDecision(route.Destination, proxyPossible, skipsTunnel)
+			}
+			switch route.Destination {
+			case EgressProxy:
+				proxyPossible = true
+			case EgressBlock:
+				// Block refuses the name. It does not dial locally.
+			default:
+				skipsTunnel = true
+			}
+		}
+	}
+	if skipsTunnel {
+		return false
+	}
+	return proxyPossible
+}
+
+func admitProxyDecision(dest Egress, proxyPossible, skipsTunnel bool) bool {
+	if skipsTunnel {
+		return false
+	}
+	switch dest {
+	case EgressProxy:
+		return true
+	case EgressBlock:
+		return proxyPossible
+	default:
+		return false
+	}
+}
+
+func matchObserved(route *Route, ipKey, nameKey string) bool {
+	switch route.MatchType {
+	case TypeCIDR:
+		return route.Match(ipKey)
+	case TypeDefault:
+		return true
+	default:
+		return route.Match(nameKey) || route.Match(ipKey)
+	}
 }

@@ -49,7 +49,12 @@ type Service struct {
 	// New without racing gVisor packet goroutines started by CreateNIC.
 	hooksMu      sync.RWMutex
 	resolveRoute routeResolver
-	exchanger    spaceshipDNS.WireExchanger
+	// customRoute is set when a caller replaces the process-global router.
+	// A recovered hostname is then passed to that function. The default
+	// router matches CIDR rules against the IP and name rules against the
+	// recovered host.
+	customRoute bool
+	exchanger   spaceshipDNS.WireExchanger
 
 	linkErrors chan error
 
@@ -136,6 +141,7 @@ func newService(ctx context.Context, cfg Config, device openedDevice, linkErrors
 	}
 	if cfg.ResolveRoute != nil {
 		s.resolveRoute = cfg.ResolveRoute
+		s.customRoute = true
 	}
 
 	transportProtocols := []stack.TransportProtocolFactory{
@@ -397,6 +403,28 @@ func (s *Service) setResolveRoute(fn routeResolver) {
 	s.hooksMu.Lock()
 	defer s.hooksMu.Unlock()
 	s.resolveRoute = fn
+	s.customRoute = true
+}
+
+// routeTCP selects the egress for one TCP flow. dialHost is the original
+// destination IP. name is empty unless the client flight carried an HTTP Host
+// or a TLS server name.
+func (s *Service) routeTCP(dialHost, name string) (transport.Transport, error) {
+	s.hooksMu.RLock()
+	fn := s.resolveRoute
+	custom := s.customRoute
+	s.hooksMu.RUnlock()
+	if fn == nil {
+		return nil, errors.New("tun: no route resolver")
+	}
+	if name != "" && !custom {
+		return router.GetRouteObserved(dialHost, name)
+	}
+	key := dialHost
+	if name != "" {
+		key = name
+	}
+	return fn(key)
 }
 
 func (s *Service) getExchanger() spaceshipDNS.WireExchanger {

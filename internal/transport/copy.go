@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"slices"
+	"time"
 )
 
 type closeWriter interface {
@@ -40,6 +41,62 @@ func WithPrefix(conn net.Conn, prefix []byte) io.Reader {
 	return &PrefixedConn{prefix: slices.Clone(prefix), conn: conn}
 }
 
+// Prepend returns a reader that yields prefix and then the rest of r.
+// A PrefixedConn is flattened into one prefix so the underlying connection
+// stays visible to a kernel splice after those bytes are written. A net.Conn
+// becomes a PrefixedConn. Any other reader is wrapped without changing how
+// it is closed.
+func Prepend(r io.Reader, prefix []byte) io.Reader {
+	if r == nil || len(prefix) == 0 {
+		return r
+	}
+	prefix = slices.Clone(prefix)
+	if p, ok := r.(*PrefixedConn); ok {
+		if len(p.prefix) > 0 {
+			merged := make([]byte, 0, len(prefix)+len(p.prefix))
+			merged = append(merged, prefix...)
+			merged = append(merged, p.prefix...)
+			prefix = merged
+			p.prefix = nil
+		}
+		return WithPrefix(p.conn, prefix)
+	}
+	if c, ok := r.(net.Conn); ok {
+		return WithPrefix(c, prefix)
+	}
+	return &pendingReader{pending: prefix, r: r}
+}
+
+// pendingReader replays bytes pulled off a reader that is not a net.Conn.
+type pendingReader struct {
+	pending []byte
+	r       io.Reader
+}
+
+func (p *pendingReader) Read(b []byte) (int, error) {
+	if len(p.pending) > 0 {
+		n := copy(b, p.pending)
+		p.pending = p.pending[n:]
+		if len(p.pending) == 0 {
+			p.pending = nil
+		}
+		return n, nil
+	}
+	return p.r.Read(b)
+}
+
+func (p *pendingReader) Close() error {
+	if c, ok := p.r.(io.Closer); ok {
+		return c.Close()
+	}
+	return nil
+}
+
+func (p *pendingReader) Abort() error {
+	Abort(p.r)
+	return nil
+}
+
 func (p *PrefixedConn) Read(b []byte) (int, error) {
 	if len(p.prefix) > 0 {
 		n := copy(b, p.prefix)
@@ -50,6 +107,16 @@ func (p *PrefixedConn) Read(b []byte) (int, error) {
 		return n, nil
 	}
 	return p.conn.Read(b)
+}
+
+// SetReadDeadline sets the deadline on the underlying connection. Bytes still
+// sitting in the prefix are returned without waiting, and the deadline applies
+// to the following read from the connection.
+func (p *PrefixedConn) SetReadDeadline(t time.Time) error {
+	if d, ok := p.conn.(interface{ SetReadDeadline(time.Time) error }); ok {
+		return d.SetReadDeadline(t)
+	}
+	return nil
 }
 
 // Close closes the connection. Any prefix not yet read is dropped with it.

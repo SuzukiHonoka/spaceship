@@ -1,6 +1,7 @@
 package router
 
 import (
+	"net/netip"
 	"sync"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
@@ -58,6 +59,62 @@ func GetRoute(dst string) (transport.Transport, error) {
 		return route.GetTransport()
 	}
 	return routesCache.GetRoute(key)
+}
+
+// GetRouteObserved selects a route when dialHost is the IP the client asked
+// to reach and name is a hostname recovered from that connection's first
+// flight. CIDR rules match the IP. Exact, domain, and regex rules match the
+// name, and still match the IP so a literal address in those rules keeps
+// working. The first matching rule wins. An empty name, or a name that is
+// itself an IP, selects the same route as GetRoute(dialHost).
+func GetRouteObserved(dialHost, name string) (transport.Transport, error) {
+	ipKey := normalizeRouteKey(dialHost)
+	nameKey := normalizeRouteKey(name)
+	if nameKey == "" || nameKey == ipKey {
+		return GetRoute(ipKey)
+	}
+	if _, err := netip.ParseAddr(nameKey); err == nil {
+		return GetRoute(ipKey)
+	}
+	key := nameKey + "\x00" + ipKey
+	routesMu.RLock()
+	defer routesMu.RUnlock()
+	if route, ok := table.Get(key); ok {
+		return route.GetTransport()
+	}
+	return routesCache.getObserved(key, ipKey, nameKey)
+}
+
+// MatchEgress is the egress GetRouteObserved would select, without constructing
+// its transport. Front ends that already hold an admitted proxy session use it
+// so a proxy match does not check another connection out of the pool.
+func MatchEgress(dialHost, name string) (Egress, error) {
+	ipKey := normalizeRouteKey(dialHost)
+	nameKey := normalizeRouteKey(name)
+	if nameKey == "" || nameKey == ipKey {
+		return matchEgress(ipKey)
+	}
+	if _, err := netip.ParseAddr(nameKey); err == nil {
+		return matchEgress(ipKey)
+	}
+	key := nameKey + "\x00" + ipKey
+	routesMu.RLock()
+	defer routesMu.RUnlock()
+	if egress, ok := table.Get(key); ok {
+		return egress, nil
+	}
+	return routesCache.findEgress(key, nameKey, func(route *Route) bool {
+		return matchObserved(route, ipKey, nameKey)
+	})
+}
+
+func matchEgress(key string) (Egress, error) {
+	routesMu.RLock()
+	defer routesMu.RUnlock()
+	if egress, ok := table.Get(key); ok {
+		return egress, nil
+	}
+	return routesCache.findEgress(key, key, func(route *Route) bool { return route.Match(key) })
 }
 
 // AnyRouteSupportsUDP reports whether any installed route has an egress capable

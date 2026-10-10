@@ -10,6 +10,7 @@ import (
 	"strconv"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/sniff"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"golang.org/x/sync/errgroup"
@@ -131,6 +132,13 @@ func (s *Server) handleRequest(req *Request, conn ConnWriter) error {
 
 // handleConnect is used to handle a connect command
 func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Request) error {
+	// An IP destination has no name to route on until the client sends HTTP or
+	// TLS. That flight arrives only after the SOCKS success reply, so reply
+	// first, then recover the name.
+	if req.DestAddr.FQDN == "" && len(req.DestAddr.IP) > 0 {
+		return s.handleConnectIP(ctx, conn, req)
+	}
+
 	// set host dst
 	host := req.DestAddr.FQDN
 	if host == "" {
@@ -189,6 +197,71 @@ func (s *Server) handleConnect(ctx context.Context, conn ConnWriter, req *Reques
 
 	if err = errGroup.Wait(); err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
 		// One short line: host already logged on the route line above.
+		log.Printf("socks: %s failed: %v", addr, err)
+	}
+	return nil
+}
+
+// handleConnectIP answers an IP destination. When every route that can still
+// match uses the tunnel, the far end authenticates and admits the session
+// before the success reply, so a rejection is visible to the client. The
+// reply is what lets a normal client send HTTP or TLS. That flight is peeked,
+// and a recovered name is what the tunnel dials unless the egress is direct
+// or blackhole. Bytes already read are replayed.
+func (s *Server) handleConnectIP(ctx context.Context, conn ConnWriter, req *Request) error {
+	dialHost := req.DestAddr.IP.String()
+	port := req.DestAddr.Port
+	// A CIDR or address rule can block this IP before the client sends a
+	// flight. Refuse in the SOCKS reply. A name rule earlier in the list can
+	// still match, so that case waits for the flight.
+	if router.IPBlockDecisive(dialHost) {
+		log.Printf("socks: %s blocked", dialHost)
+		if err := sendReply(conn, ruleFailure, nil); err != nil {
+			return fmt.Errorf("failed to send reply: %w", err)
+		}
+		return nil
+	}
+
+	var admitted transport.AdmittedSession
+	if router.AdmitProxyFirst(dialHost) {
+		var err error
+		admitted, err = router.AdmitProxy(ctx)
+		if err != nil {
+			log.Printf("socks: %s rejected: %v", dialHost, err)
+			if err = sendReply(conn, networkUnreachable, nil); err != nil {
+				return fmt.Errorf("failed to send reply: %w", err)
+			}
+			return nil
+		}
+	}
+	defer utils.Close(admitted)
+
+	if err := sendReply(conn, successReply, nil); err != nil {
+		return fmt.Errorf("failed to send reply: %w", err)
+	}
+
+	name, src := sniff.Peek(req.bufConn, sniff.Timeout)
+	egress, err := router.MatchEgress(dialHost, name)
+	if err != nil || egress == router.EgressBlock {
+		if err == nil {
+			err = transport.ErrBlocked
+		}
+		log.Printf("socks: no route for %s: %v", dialHost, err)
+		return nil
+	}
+	host := router.HostForEgress(egress, dialHost, name)
+	if name != "" && host != dialHost {
+		log.Printf("socks: %s:%d name %q dial %s -> %s", dialHost, port, name, host, egress.TransportName()) // #nosec G706 -- name is a validated hostname, %q quotes it
+	} else if name != "" {
+		log.Printf("socks: %s:%d name %q -> %s", dialHost, port, name, egress.TransportName()) // #nosec G706 -- name is a validated hostname, %q quotes it
+	} else {
+		log.Printf("socks: %s:%d -> %s", dialHost, port, egress.TransportName())
+	}
+
+	addr := net.JoinHostPort(host, strconv.FormatUint(uint64(port), 10))
+	localAddr := make(chan string, 1)
+	err = router.DialEgress(ctx, admitted, egress, addr, localAddr, conn, src)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
 		log.Printf("socks: %s failed: %v", addr, err)
 	}
 	return nil

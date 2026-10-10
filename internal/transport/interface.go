@@ -13,6 +13,14 @@ type Transport interface {
 	Close() error
 }
 
+// AdmittedSession is a tunnel the far end has already authenticated and
+// admitted. The target address is sent when Proxy is called, so a front end
+// can answer its own client before that address is known.
+type AdmittedSession interface {
+	Proxy(ctx context.Context, addr string, localAddr chan<- string, w io.Writer, r io.Reader) error
+	Close() error
+}
+
 // ContextDialer is implemented by transports whose connection establishment can
 // be canceled. Long-lived frontends should prefer it so shutdown is not held by
 // an in-progress network dial.

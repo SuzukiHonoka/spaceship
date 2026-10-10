@@ -89,6 +89,7 @@ func main() {
 	runDNSSuite(bin, workDir)
 	runLimitSuite(bin, workDir)
 	runRouteSuite(bin, workDir)
+	runSniffSuite(bin, workDir)
 	runRedirectSuite(bin, workDir)
 	runTUNSuite(bin, workDir)
 	runShutdownSuite(bin, workDir)

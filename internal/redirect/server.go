@@ -7,10 +7,12 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/sniff"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"golang.org/x/sync/semaphore"
@@ -293,25 +295,47 @@ func (s *Server) ServeConn(conn net.Conn) error {
 	}
 
 	host := dst.IP.String()
-	route, err := s.resolveRoute(host)
+	// Recover a name before choosing a route. Direct and blackhole dial the
+	// original IP. Any other egress receives the name and resolves it. Peek
+	// replays the flight it read.
+	name, src := sniff.Peek(client, sniff.Timeout)
+	route, err := s.lookupRoute(host, name)
 	if err != nil {
 		return fmt.Errorf("route %s: %w", host, err)
 	}
 	defer utils.Close(route)
 
-	target := dst.String()
-	log.Printf("redirect: %s -> %s -> %s", rawConn.RemoteAddr(), target, route)
+	targetHost := router.DialHost(route, host, name)
+	target := net.JoinHostPort(targetHost, strconv.Itoa(dst.Port))
+	if name != "" && targetHost != host {
+		log.Printf("redirect: %s -> %s name %q dial %s -> %s", rawConn.RemoteAddr(), dst, name, targetHost, route) // #nosec G706 -- name is a validated hostname, %q quotes it
+	} else if name != "" {
+		log.Printf("redirect: %s -> %s name %q -> %s", rawConn.RemoteAddr(), target, name, route) // #nosec G706 -- name is a validated hostname, %q quotes it
+	} else {
+		log.Printf("redirect: %s -> %s -> %s", rawConn.RemoteAddr(), target, route)
+	}
 
 	// Redirect has no application-layer handshake to acknowledge. A one-element
 	// buffer lets every transport publish its single dial result without
 	// requiring an otherwise-useless waiter goroutine.
 	localAddr := make(chan string, 1)
-	if err := route.Proxy(s.ctx, target, localAddr, client, client); err != nil &&
+	if err := route.Proxy(s.ctx, target, localAddr, client, src); err != nil &&
 		!errors.Is(err, context.Canceled) &&
 		!errors.Is(err, io.EOF) {
 		return fmt.Errorf("proxy %s: %w", target, err)
 	}
 	return nil
+}
+
+// lookupRoute applies domain rules to a recovered name and CIDR rules to the
+// original IP. A test hook that replaces resolveRoute still sees plain IP
+// flows; a recovered name uses the process route table so both rule kinds
+// participate.
+func (s *Server) lookupRoute(ip, name string) (transport.Transport, error) {
+	if name != "" {
+		return router.GetRouteObserved(ip, name)
+	}
+	return s.resolveRoute(ip)
 }
 
 func validateDestination(dst *net.TCPAddr) error {

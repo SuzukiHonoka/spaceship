@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -204,6 +205,16 @@ func (s *Server) Proxy(stream proto.Proxy_ProxyServer) error {
 	stopServerCancel := context.AfterFunc(serverCtx, cancel)
 	defer stopServerCancel()
 	defer cancel()
+
+	// Headers are the admission acknowledgement. A front end that still has to
+	// read the client flight waits for them before telling that client the
+	// connection is open, then sends the target. Clients that already know
+	// the target send it immediately and never look at these headers.
+	// A non-empty map is required. The client's Header call reports a nil map
+	// both for an empty admission and for a refusal whose status it swallowed.
+	if err := stream.SendHeader(metadata.Pairs("x-spaceship-admitted", "1")); err != nil {
+		return err
+	}
 
 	handshakeTimeout := s.proxyHandshakeTimeout
 	if handshakeTimeout <= 0 {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/sniff"
 )
 
 func freeHTTPAddr(t *testing.T) string {
@@ -188,6 +189,92 @@ func TestHandleConnect_EarlyDataBufferedByHijack(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("echo = %q, want %q", got, want)
+	}
+}
+
+func TestHandleConnectIP_SniffedNameReplayedToOriginalIP(t *testing.T) {
+	hello := sniff.BuildClientHello("sniff.example")
+	received := make(chan []byte, 1)
+	origin, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = origin.Close() })
+	go func() {
+		c, acceptErr := origin.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer func() { _ = c.Close() }()
+		_ = c.SetDeadline(time.Now().Add(3 * time.Second))
+		buf := make([]byte, len(hello))
+		if _, readErr := io.ReadFull(c, buf); readErr != nil {
+			return
+		}
+		received <- buf
+	}()
+
+	if err := router.SetRoutes(router.Routes{{
+		MatchType:   router.TypeExact,
+		Sources:     []string{"sniff.example"},
+		Destination: router.EgressDirect,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = router.SetRoutes(router.Routes{{
+			MatchType:   router.TypeDefault,
+			Destination: router.EgressDirect,
+		}})
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	proxy := New(ctx, &Config{})
+	addr := freeHTTPAddr(t)
+	errCh := make(chan error, 1)
+	go func() { errCh <- proxy.ListenAndServe("tcp", addr) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(2 * time.Second):
+		}
+	})
+	waitHTTP(t, addr)
+
+	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+
+	target := origin.Addr().String()
+	request := "CONNECT " + target + " HTTP/1.1\r\nHost: " + target + "\r\n\r\n"
+	if _, err := conn.Write([]byte(request)); err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(conn)
+	resp, err := nethttp.ReadResponse(br, &nethttp.Request{Method: nethttp.MethodConnect})
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != nethttp.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if _, err := conn.Write(hello); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-received:
+		if !bytes.Equal(got, hello) {
+			t.Fatal("origin did not receive the replayed ClientHello")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("origin did not receive the replayed ClientHello")
 	}
 }
 
