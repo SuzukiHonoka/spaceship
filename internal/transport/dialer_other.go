@@ -7,11 +7,21 @@ import (
 	"syscall"
 )
 
-func outboundSocketControl(_, _ string, _ syscall.RawConn) error {
+func outboundSocketControl(_, _ string, raw syscall.RawConn) error {
 	if mark := bypassMark.Load(); mark != 0 {
 		return fmt.Errorf("outbound socket mark %#x is unsupported on this platform", mark)
 	}
-	return nil
+	if socketProtectorHook() == nil {
+		return nil
+	}
+
+	var socketErr error
+	if err := raw.Control(func(fd uintptr) {
+		socketErr = protectOutboundSocket(int(fd))
+	}); err != nil {
+		return fmt.Errorf("access outbound socket: %w", err)
+	}
+	return socketErr
 }
 
 func verifyBypassMark(mark uint32) error {

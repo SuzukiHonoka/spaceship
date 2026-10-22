@@ -20,8 +20,9 @@ import (
 )
 
 // handleUDPDNSPacket admits destination port 53 into the DNS hijack path.
-// Non-DNS UDP is dropped without cloning so promiscuous capture cannot leak
-// PacketBuffers for QUIC, scans, or other UDP through the TUN.
+// The protocol handler is handleUDPPacket, which sends every other datagram
+// to the general UDP forwarder. This function still ignores non-53 traffic so
+// a direct call cannot capture it.
 func (s *Service) handleUDPDNSPacket(id stack.TransportEndpointID, pkt *stack.PacketBuffer) bool {
 	if id.LocalPort != 53 || !s.cfg.DNS.Enabled || pkt == nil {
 		return false

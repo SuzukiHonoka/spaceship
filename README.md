@@ -152,9 +152,10 @@ a requirement instead: startup then fails with one clear error if it cannot be
 applied. Set it to `0` to disable marking deliberately and silence the warning.
 When TUN is also enabled its `bypass_mark` is inherited automatically, because a
 process has exactly one outbound socket mark. Stating a value here that TUN
-contradicts is rejected rather than silently resolved — including `0`, since
-TUN cannot run unmarked, so disabling the mark and enabling TUN cannot both be
-honoured.
+contradicts is rejected rather than silently resolved. On Linux that includes
+`0`, since that TUN cannot run unmarked. An Android TUN may omit the mark;
+that explicit 0 is authoritative, and a defaulted redirect mark does not turn
+marking back on.
 
 Replace `192.0.2.10` with every IP used by `server_addr`; do not use the
 documentation address literally. Add explicit exclusions for management and
@@ -186,11 +187,17 @@ go test -count=1 -run '^TestNetfilterRedirectIntegration$' ./internal/redirect
 
 ## Linux TUN Frontend
 
-The client can terminate IP packets from a Linux TUN interface in its own
-gVisor network stack. Spaceship implements this frontend directly; it does not
-embed or invoke `tun2socks`. General TUN traffic is TCP-only. When DNS hijacking
-is enabled, UDP is admitted only for destination port 53 so classic DNS works
-without enabling a general UDP tunnel.
+The client can terminate IP packets from a TUN interface in its own gVisor
+network stack. Spaceship implements this frontend directly; it does not embed
+or invoke `tun2socks`. General TUN traffic is TCP and UDP. Each UDP 4-tuple is
+one session, closed after 60 seconds without a datagram in either direction.
+UDP sessions count against `max_connections` but may hold at most
+`max_udp_sessions` of it, so TCP always keeps the rest. At that cap a new
+4-tuple replaces the least recently active UDP session instead of being
+refused. An idle session holds no datagram buffer; one is borrowed only while
+a datagram is being forwarded. When `dns_hijack` is enabled, TCP and
+UDP destination port 53 stay on the authenticated DNS RPC. When it is
+disabled, port 53 is an ordinary UDP flow.
 
 ```json
 {
@@ -208,6 +215,7 @@ without enabling a general UDP tunnel.
     "bypass_mark": 21328,
     "max_connections": 4096,
     "max_pending_connections": 1024,
+    "max_udp_sessions": 1024,
     "dns_hijack": {
       "enabled": true,
       "query_timeout_seconds": 5,
@@ -219,10 +227,15 @@ without enabling a general UDP tunnel.
 }
 ```
 
-Zero-valued limits select the values shown above. `dns_hijack.max_in_flight`
+Zero-valued limits select the values shown above; an omitted
+`max_udp_sessions` is a quarter of `max_connections`, and at least one.
+`dns_hijack.max_in_flight`
 has a hard maximum of 1024 because every active UDP DNS flow owns a receive
 buffer of up to 64 KiB for its idle lifetime; the ceiling bounds those buffers
-to about 64 MiB. `bypass_mark` also defaults to decimal `21328` (`0x5350`).
+to about 64 MiB. On Linux, `bypass_mark` defaults to decimal `21328`
+(`0x5350`) when the field is omitted or set to 0, and that mark is required.
+On Android, omitting it or setting it to 0 installs no mark. An explicit
+non-zero value is installed on both and startup fails if it cannot be set.
 With TUN enabled, an omitted or zero `mux` selects the minimum persistent gRPC
 pool needed for the configured TCP and DNS concurrency; the defaults above
 require two connections. An explicit smaller value is rejected during config
@@ -284,10 +297,26 @@ Creating the interface and setting `SO_MARK` require Linux network
 administration capability (normally `CAP_NET_ADMIN`) and access to
 `/dev/net/tun`. The process also needs enough file descriptors for the
 configured connection limit. An externally provisioned descriptor may be
-passed as `tun.file_descriptor`; Spaceship duplicates it, validates that it is
-a single-queue `IFF_TUN|IFF_NO_PI` device without a virtio-net header, uses the
-interface's actual MTU, and closes only its duplicate. The descriptor's shared
-file status is made nonblocking as required by the gVisor endpoint.
+passed as `tun.file_descriptor`; Spaceship duplicates it and closes only the
+duplicate. On Linux it must be a single-queue `IFF_TUN|IFF_NO_PI` device
+without a virtio-net header, and Spaceship uses the interface's actual MTU.
+On Android the descriptor is the raw IP fd from `VpnService`. Spaceship does
+not create `/dev/net/tun` and does not call `TUNGETIFF` or `SIOCGIFMTU`; it
+uses the configured MTU. An empty name becomes the placeholder `tun`. A client
+that is already running can adopt the fd later with `api.Launcher.ServeTUN`
+and release it with `StopTUN` without stopping its other listeners. The
+outbound mark is process-wide and set only at launch, so `ServeTUN` refuses a
+TUN that needs a mark the client did not install: every Linux TUN, and an
+Android TUN with an explicit `bypass_mark`. Declare `tun` in the launch config
+for those. The
+descriptor's shared file status is made nonblocking as required by the gVisor
+endpoint.
+
+Android apps that do not exclude their own UID should call
+`api.SetSocketProtector` before startup. The hook receives each outbound
+socket fd, including when the bypass mark is 0, and should call
+`VpnService.protect`. A protector error fails that dial. Spaceship does not
+import Android APIs; the embedder supplies the function.
 
 With `dns_hijack.enabled`, every TCP or UDP flow whose original destination
 port is 53 is intercepted before normal route selection. Spaceship preserves

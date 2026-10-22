@@ -48,17 +48,23 @@ type MixedConfig struct {
 	// explicitly rather than defaulted, so startup treats an unusable mark as a
 	// failure instead of degrading to unmarked egress.
 	redirectMarkRequired bool
+	// tunMarkRequired records that this TUN configuration needs the outbound
+	// mark. Linux TUN always does. Android TUN does only for an explicit
+	// non-zero mark.
+	tunMarkRequired bool
 }
 
 // BypassMarkRequired reports whether the applied configuration treats the
-// outbound socket mark as a hard requirement. TUN cannot work without it, and
-// an explicitly configured redirect mark is a stated requirement; a mark that
-// was merely defaulted may be dropped with a warning instead.
+// outbound socket mark as a hard requirement. Linux TUN always does, because
+// policy routing would otherwise recapture its egress. Android TUN requires
+// the mark only when it is explicitly non-zero. An explicitly configured
+// redirect mark is also a stated requirement; a mark that was merely defaulted
+// may be dropped with a warning instead.
 func (c *MixedConfig) BypassMarkRequired() bool {
 	if c == nil {
 		return false
 	}
-	return c.redirectMarkRequired || (c.Client != nil && c.TUN != nil)
+	return c.redirectMarkRequired || c.tunMarkRequired
 }
 
 const maxIdleTimeoutSeconds = int64(1<<63-1) / int64(time.Second)
@@ -258,6 +264,7 @@ func (c *MixedConfig) Apply() error {
 		redirectBypassMark = transport.DefaultBypassMark
 	}
 	c.redirectMarkRequired = redirectMarkRequired
+	c.tunMarkRequired = tunConfig != nil && tunConfig.BypassMarkRequired
 
 	// log mode
 	c.LogMode.Set()
@@ -266,13 +273,13 @@ func (c *MixedConfig) Apply() error {
 	// silent black hole rather than a startup error. Both are legitimate when
 	// the operator has arranged the matching exclusion, so neither is rejected.
 	if tunDNSHijackDisabled {
-		// Scope this to DNS. Non-DNS UDP is refused either way because the TUN
-		// frontend is TCP-only, so claiming the flag disables UDP would imply
-		// enabling it delivers a general UDP tunnel.
+		// Port 53 is still forwarded, just not by the Spaceship DNS RPC.
+		// Other UDP is forwarded either way, so the warning must not claim
+		// that leaving the flag off disables UDP.
 		log.Println(
-			"tun: WARNING dns_hijack is disabled, so port 53 is not served and DNS sent " +
-				"through the TUN fails immediately. Enable tun.dns_hijack, or keep port 53 " +
-				"out of the capture rule so queries never enter the TUN",
+			"tun: WARNING dns_hijack is disabled, so port 53 is an ordinary UDP flow " +
+				"rather than the Spaceship DNS resolver. Enable tun.dns_hijack to answer " +
+				"those queries through the authenticated DNS RPC",
 		)
 	}
 	if c.ListenRedirect != "" && tunConfig == nil && redirectBypassMark == 0 {
@@ -290,40 +297,17 @@ func (c *MixedConfig) Apply() error {
 	// capture rule before the frontend has started. Roll back this early global
 	// update if any later configuration step fails.
 	//
-	// TUN and REDIRECT share one process-wide mark. TUN's is authoritative
-	// because TUN cannot work without it; a REDIRECT listener alongside TUN
-	// inherits it and only has to agree.
-	bypassMark := uint32(0)
+	// TUN and REDIRECT share one process-wide mark. A TUN section is
+	// authoritative, including an Android mark of 0 that leaves marking off.
+	// A REDIRECT listener alongside TUN must agree. A redirect mark that was
+	// only defaulted inherits TUN's value instead of turning marking back on.
+	tunMark := uint32(0)
 	if tunConfig != nil {
-		bypassMark = tunConfig.BypassMark
+		tunMark = tunConfig.BypassMark
 	}
-	switch {
-	case bypassMark == 0:
-		// No TUN mark, so the redirect setting decides outright — including an
-		// explicit 0, which disables marking.
-		bypassMark = redirectBypassMark
-	case redirectBypassMark == bypassMark:
-		// Already in agreement with TUN.
-	case redirectMarkExplicit && redirectBypassMark == 0:
-		// Disabling is as much a disagreement with TUN as naming a different
-		// value, and TUN cannot run unmarked, so report it rather than applying
-		// a mark the operator explicitly turned off.
-		return fmt.Errorf(
-			"redirect.bypass_mark 0 cannot disable marking while tun.bypass_mark %#x "+
-				"requires it: a process has exactly one outbound socket mark",
-			bypassMark,
-		)
-	case redirectMarkExplicit:
-		return fmt.Errorf(
-			"redirect.bypass_mark %#x conflicts with tun.bypass_mark %#x: "+
-				"a process has exactly one outbound socket mark",
-			redirectBypassMark,
-			bypassMark,
-		)
-	default:
-		// The redirect mark was only defaulted, so inherit TUN's rather than
-		// rejecting a configuration whose redirect mark the operator never set.
-		// Leaving bypassMark alone is that inheritance.
+	bypassMark, err := resolveOutboundBypassMark(tunConfig != nil, tunMark, redirectBypassMark, redirectMarkExplicit)
+	if err != nil {
+		return err
 	}
 	previousBypassMark := transport.BypassMark()
 	previousOutboundResolver := transport.OutboundResolver()
@@ -505,6 +489,39 @@ func (c *MixedConfig) Apply() error {
 	}
 	networkPolicyCommitted = true
 	return nil
+}
+
+// resolveOutboundBypassMark chooses the process-wide SO_MARK.
+//
+// A missing TUN section lets the redirect setting decide, including an
+// explicit 0. A present TUN section is authoritative: Linux supplies a
+// non-zero mark, and Android may supply 0 to leave marking off. An explicit
+// redirect mark must match. A redirect mark that was only defaulted yields.
+func resolveOutboundBypassMark(tunPresent bool, tunMark, redirectMark uint32, redirectExplicit bool) (uint32, error) {
+	if !tunPresent {
+		return redirectMark, nil
+	}
+	switch {
+	case redirectMark == tunMark:
+		return tunMark, nil
+	case redirectExplicit && tunMark != 0 && redirectMark == 0:
+		// Disabling is as much a disagreement with a required TUN mark as
+		// naming a different value. Linux TUN cannot run unmarked.
+		return 0, fmt.Errorf(
+			"redirect.bypass_mark 0 cannot disable marking while tun.bypass_mark %#x "+
+				"requires it: a process has exactly one outbound socket mark",
+			tunMark,
+		)
+	case redirectExplicit:
+		return 0, fmt.Errorf(
+			"redirect.bypass_mark %#x conflicts with tun.bypass_mark %#x: "+
+				"a process has exactly one outbound socket mark",
+			redirectMark,
+			tunMark,
+		)
+	default:
+		return tunMark, nil
+	}
 }
 
 // routesHasDefault reports whether any route is a catch-all default rule.

@@ -273,10 +273,7 @@ func newLinkedServiceForProtocol(
 		t.Fatal(err)
 	}
 
-	transportProtocols := []stack.TransportProtocolFactory{tcp.NewProtocol}
-	if cfg.DNS.Enabled {
-		transportProtocols = append(transportProtocols, udp.NewProtocol)
-	}
+	transportProtocols := []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol}
 	peer := stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{networkProtocol},
 		TransportProtocols: transportProtocols,
