@@ -3,6 +3,7 @@ package tun
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 	"unicode"
@@ -21,6 +22,11 @@ const (
 	DefaultDNSQueryTimeout          = 5 * time.Second
 	DefaultDNSTCPIdleTimeout        = 10 * time.Second
 	DefaultDNSUDPIdleTimeout        = 30 * time.Second
+	// DefaultUDPIdleTimeout closes a proxied UDP session after this long with
+	// no datagram in either direction. DNS hijack sessions keep their own
+	// idle limits. There is no JSON field for this; set Config.UDPIdleTimeout
+	// from Go, or leave it zero to use this default.
+	DefaultUDPIdleTimeout = 60 * time.Second
 
 	minMTU           = 1280
 	maxMTU           = 65535
@@ -30,23 +36,17 @@ const (
 	maxDNSInFlightLimit = 1024
 )
 
-var ErrUnsupported = errors.New("TUN is only supported on Linux")
+var ErrUnsupported = errors.New("TUN is only supported on Linux and Android")
 
 // DNSConfig controls classic DNS interception on TCP and UDP destination port
 // 53. It intentionally has no resolver address: every accepted query goes
 // through the authenticated Spaceship DNS RPC.
 type DNSConfig struct {
-	// Enabled controls whether port 53 is served. It does not make the TUN a
-	// general UDP tunnel: non-DNS UDP is refused either way, because the
-	// frontend terminates TCP only.
-	//
-	// It does change how that refusal is produced. When enabled, New registers
-	// the UDP protocol and the forwarder rejects every port but 53, so callers
-	// see ICMP port-unreachable. When disabled, no UDP protocol is registered
-	// at all and the stack answers ICMP protocol-unreachable, port 53
-	// included. Either way the client fails immediately rather than stalling,
-	// but a disabled hijack leaves the interface with no name resolution
-	// unless port 53 is kept out of the TUN.
+	// Enabled controls whether port 53 is answered by the Spaceship DNS RPC.
+	// When it is set, TCP and UDP port 53 stay on that path. When it is not,
+	// port 53 is forwarded as an ordinary UDP flow. Other UDP is always
+	// forwarded through the route's packet transport; it is not rejected for
+	// being something other than DNS.
 	Enabled        bool
 	BlockIPv6      bool
 	QueryTimeout   time.Duration
@@ -77,14 +77,24 @@ func defaultDNSMaxInFlightPerConnection(maxInFlight int) int {
 // Config controls the Linux TUN frontend. RouteMode is deliberately limited to
 // manual policy routing so startup never rewrites a host's routing tables.
 type Config struct {
-	Name                  string
-	MTU                   int
-	FileDescriptor        *int
-	RouteMode             string
-	BypassMark            uint32
+	Name           string
+	MTU            int
+	FileDescriptor *int
+	RouteMode      string
+	// BypassMark is the SO_MARK installed for outbound sockets. On Linux, zero
+	// is replaced with DefaultBypassMark and BypassMarkRequired is true. On
+	// Android, zero stays zero and the mark is not required.
+	BypassMark uint32
+	// BypassMarkRequired reports whether BypassMark must be installed and
+	// verified. Linux TUN always requires it. Android requires it only when
+	// the configured mark is non-zero.
+	BypassMarkRequired    bool
 	MaxConnections        int
 	MaxPendingConnections int
-	DNS                   DNSConfig
+	// UDPIdleTimeout closes a general UDP session after this long without a
+	// datagram in either direction. Zero selects DefaultUDPIdleTimeout.
+	UDPIdleTimeout time.Duration
+	DNS            DNSConfig
 
 	// ResolveRoute overrides the process-global router when non-nil. It must be
 	// supplied to New rather than assigned on Service afterwards: CreateNIC
@@ -124,8 +134,12 @@ func NormalizeConfig(cfg Config) (Config, error) {
 	if cfg.RouteMode != "manual" {
 		return Config{}, fmt.Errorf("tun: unsupported route mode %q", cfg.RouteMode)
 	}
-	if cfg.BypassMark == 0 {
-		cfg.BypassMark = DefaultBypassMark
+	cfg.BypassMark, cfg.BypassMarkRequired = normalizeBypassMark(runtime.GOOS, cfg.BypassMark)
+	if cfg.UDPIdleTimeout == 0 {
+		cfg.UDPIdleTimeout = DefaultUDPIdleTimeout
+	}
+	if cfg.UDPIdleTimeout < 0 {
+		return Config{}, fmt.Errorf("tun: udp idle timeout must be positive: %s", cfg.UDPIdleTimeout)
 	}
 
 	var err error
@@ -187,6 +201,25 @@ func NormalizeConfig(cfg Config) (Config, error) {
 	return cfg, nil
 }
 
+// normalizeBypassMark distinguishes an omitted or explicit zero mark from a
+// requested one. Linux TUN, including an external fd, still defaults a zero
+// to the built-in mark and requires it: policy routing would otherwise
+// recapture Spaceship's own egress. Android VpnService excludes the app or
+// protects sockets, so zero installs nothing and is not verified. An explicit
+// non-zero mark is installed on both and fails startup if it cannot be set.
+func normalizeBypassMark(goos string, mark uint32) (effective uint32, required bool) {
+	if goos == "android" {
+		if mark == 0 {
+			return 0, false
+		}
+		return mark, true
+	}
+	if mark == 0 {
+		return DefaultBypassMark, true
+	}
+	return mark, true
+}
+
 // FromClientConfig converts the public JSON config into a validated runtime
 // config. Keeping duration conversion here prevents validation and launcher
 // behavior from drifting apart.
@@ -195,12 +228,16 @@ func FromClientConfig(raw *clientConfig.TUN, blockIPv6 bool) (Config, error) {
 		return Config{}, errors.New("tun: nil client config")
 	}
 
+	var bypassMark uint32
+	if raw.BypassMark != nil {
+		bypassMark = *raw.BypassMark
+	}
 	cfg := Config{
 		Name:                  raw.Name,
 		MTU:                   raw.MTU,
 		FileDescriptor:        raw.FileDescriptor,
 		RouteMode:             raw.RouteMode,
-		BypassMark:            raw.BypassMark,
+		BypassMark:            bypassMark,
 		MaxConnections:        raw.MaxConnections,
 		MaxPendingConnections: raw.MaxPendingConnections,
 	}
@@ -232,9 +269,9 @@ func FromClientConfig(raw *clientConfig.TUN, blockIPv6 bool) (Config, error) {
 }
 
 // RequiredRPCPoolSize returns the minimum number of persistent gRPC
-// connections needed for cfg's worst-case stream demand. General TCP flows use
-// one streaming RPC each; intercepted DNS queries use unary streams in
-// addition to their owning TCP or UDP flow.
+// connections needed for cfg's worst-case stream demand. General TCP and UDP
+// flows share MaxConnections and use one streaming RPC each; intercepted DNS
+// queries use unary RPCs in addition to their owning TCP or UDP flow.
 func RequiredRPCPoolSize(cfg Config, streamsPerConnection uint32) (uint8, error) {
 	normalized, err := NormalizeConfig(cfg)
 	if err != nil {

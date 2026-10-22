@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync/atomic"
 	"time"
@@ -16,7 +17,51 @@ const DefaultBypassMark uint32 = 0x5350
 var (
 	bypassMark       atomic.Uint32
 	outboundResolver atomic.Pointer[net.Resolver]
+	// outboundProtector is optional. Nil means outbound sockets get no extra
+	// protection beyond the bypass mark.
+	outboundProtector atomic.Pointer[socketProtector]
 )
+
+// socketProtector is stored by pointer so SetSocketProtector can swap it
+// atomically. The function runs on Spaceship-created outbound sockets.
+type socketProtector func(fd int) error
+
+// SetSocketProtector installs a process-wide hook for every outbound socket
+// Spaceship creates, including gRPC, direct, and UDP dials, and including
+// when the bypass mark is 0. A nil hook disables it.
+//
+// Android apps that do not exclude their own UID call this before dialing,
+// with a function that invokes VpnService.protect(fd). Spaceship does not
+// import Android APIs; the embedder injects the callback. A protector error
+// fails that dial. The hook is safe for concurrent Set and dial.
+func SetSocketProtector(fn func(fd int) error) {
+	if fn == nil {
+		outboundProtector.Store(nil)
+		return
+	}
+	hook := socketProtector(fn)
+	outboundProtector.Store(&hook)
+}
+
+func socketProtectorHook() func(int) error {
+	hook := outboundProtector.Load()
+	if hook == nil {
+		return nil
+	}
+	return *hook
+}
+
+// protectOutboundSocket runs the embedder hook. A nil hook is success.
+func protectOutboundSocket(fd int) error {
+	protect := socketProtectorHook()
+	if protect == nil {
+		return nil
+	}
+	if err := protect(fd); err != nil {
+		return fmt.Errorf("protect outbound socket: %w", err)
+	}
+	return nil
+}
 
 func init() {
 	outboundResolver.Store(net.DefaultResolver)

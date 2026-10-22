@@ -102,7 +102,7 @@ func endpointAddress(address tcpip.Address, port uint16) (netip.AddrPort, error)
 	raw := address.AsSlice()
 	addr, ok := netip.AddrFromSlice(raw)
 	if !ok || !addr.IsValid() || addr.IsUnspecified() || addr.IsMulticast() || port == 0 {
-		return netip.AddrPort{}, fmt.Errorf("tun: invalid TCP destination %s:%d", address, port)
+		return netip.AddrPort{}, fmt.Errorf("tun: invalid destination %s:%d", address, port)
 	}
 	return netip.AddrPortFrom(addr.Unmap(), port), nil
 }

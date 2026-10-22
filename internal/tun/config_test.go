@@ -2,6 +2,7 @@ package tun
 
 import (
 	"errors"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,10 +16,13 @@ func TestNormalizeConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wantMark, wantRequired := normalizeBypassMark(runtime.GOOS, 0)
 	if cfg.Name != DefaultName ||
 		cfg.MTU != DefaultMTU ||
 		cfg.RouteMode != "manual" ||
-		cfg.BypassMark != DefaultBypassMark ||
+		cfg.BypassMark != wantMark ||
+		cfg.BypassMarkRequired != wantRequired ||
+		cfg.UDPIdleTimeout != DefaultUDPIdleTimeout ||
 		cfg.MaxConnections != DefaultMaxConnections ||
 		cfg.MaxPendingConnections != DefaultMaxPending {
 		t.Fatalf("NormalizeConfig() = %+v", cfg)
@@ -63,6 +67,7 @@ func TestNormalizeConfigRejectsUnsafeValues(t *testing.T) {
 		{name: "pending exceeds connections", cfg: Config{MaxConnections: 2, MaxPendingConnections: 3}, want: "must not exceed"},
 		{name: "negative query timeout", cfg: Config{DNS: DNSConfig{QueryTimeout: -time.Second}}, want: "query timeout"},
 		{name: "negative idle timeout", cfg: Config{DNS: DNSConfig{TCPIdleTimeout: -time.Second}}, want: "idle timeout"},
+		{name: "negative udp idle timeout", cfg: Config{UDPIdleTimeout: -time.Second}, want: "udp idle timeout"},
 		{name: "negative DNS limit", cfg: Config{DNS: DNSConfig{MaxInFlight: -1}}, want: "dns.max_in_flight"},
 		{name: "excessive DNS limit", cfg: Config{DNS: DNSConfig{MaxInFlight: maxDNSInFlightLimit + 1}}, want: "dns.max_in_flight"},
 	}
@@ -155,12 +160,13 @@ func TestNormalizeConfigRejectsInvalidDNSPerConnectionLimit(t *testing.T) {
 
 func TestFromClientConfig(t *testing.T) {
 	fd := 7
+	mark := uint32(123)
 	cfg, err := FromClientConfig(&clientConfig.TUN{
 		Name:                  "ss-tun",
 		MTU:                   1400,
 		FileDescriptor:        &fd,
 		RouteMode:             "manual",
-		BypassMark:            123,
+		BypassMark:            &mark,
 		MaxConnections:        10,
 		MaxPendingConnections: 4,
 		DNSHijack: &clientConfig.DNSHijack{
@@ -174,7 +180,8 @@ func TestFromClientConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.Name != "ss-tun" || cfg.FileDescriptor == nil || *cfg.FileDescriptor != fd ||
-		cfg.BypassMark != 123 || cfg.MaxConnections != 10 || cfg.MaxPendingConnections != 4 {
+		cfg.BypassMark != 123 || !cfg.BypassMarkRequired ||
+		cfg.MaxConnections != 10 || cfg.MaxPendingConnections != 4 {
 		t.Fatalf("FromClientConfig() = %+v", cfg)
 	}
 	if !cfg.DNS.Enabled || !cfg.DNS.BlockIPv6 ||
@@ -284,5 +291,44 @@ func TestSecondsDurationRejectsOverflow(t *testing.T) {
 	const overflowSeconds = int64(1<<63-1)/int64(time.Second) + 1
 	if _, err := secondsDuration("timeout", int(overflowSeconds)); err == nil {
 		t.Fatal("secondsDuration accepted a value that overflows time.Duration")
+	}
+}
+
+func TestNormalizeBypassMark(t *testing.T) {
+	linuxMark, linuxRequired := normalizeBypassMark("linux", 0)
+	if linuxMark != DefaultBypassMark || !linuxRequired {
+		t.Fatalf("linux zero mark = %#x required=%t, want default required", linuxMark, linuxRequired)
+	}
+	explicit := uint32(7)
+	linuxExplicit, linuxExplicitRequired := normalizeBypassMark("linux", explicit)
+	if linuxExplicit != explicit || !linuxExplicitRequired {
+		t.Fatalf("linux explicit mark = %#x required=%t", linuxExplicit, linuxExplicitRequired)
+	}
+
+	androidZero, androidZeroRequired := normalizeBypassMark("android", 0)
+	if androidZero != 0 || androidZeroRequired {
+		t.Fatalf("android zero mark = %#x required=%t, want unmarked", androidZero, androidZeroRequired)
+	}
+	androidExplicit, androidExplicitRequired := normalizeBypassMark("android", explicit)
+	if androidExplicit != explicit || !androidExplicitRequired {
+		t.Fatalf("android explicit mark = %#x required=%t", androidExplicit, androidExplicitRequired)
+	}
+}
+
+func TestFromClientConfigZeroBypassMarkFollowsPlatform(t *testing.T) {
+	zero := uint32(0)
+	for _, raw := range []*clientConfig.TUN{
+		{},
+		{BypassMark: &zero},
+	} {
+		cfg, err := FromClientConfig(raw, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantMark, wantRequired := normalizeBypassMark(runtime.GOOS, 0)
+		if cfg.BypassMark != wantMark || cfg.BypassMarkRequired != wantRequired {
+			t.Fatalf("FromClientConfig(%+v) mark=%#x required=%t, want %#x required=%t",
+				raw.BypassMark, cfg.BypassMark, cfg.BypassMarkRequired, wantMark, wantRequired)
+		}
 	}
 }

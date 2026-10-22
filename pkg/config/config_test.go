@@ -471,12 +471,9 @@ func TestApply_RedirectBypassMarkAgreesWithTUN(t *testing.T) {
 	}
 }
 
-// Disabling dns_hijack leaves the netstack with no UDP protocol at all, so DNS
-// through the TUN silently stops working. The combination stays legal — an
-// operator may exempt port 53 from the capture rule — but it must be loud.
-// Disabling is a disagreement with TUN just as much as naming a different
-// value: TUN cannot run unmarked, so an explicit 0 must be reported rather
-// than silently overridden by the mark TUN needs.
+// Disabling is a disagreement with a required TUN mark just as much as naming
+// a different value. Linux TUN cannot run unmarked, so an explicit redirect 0
+// must be reported rather than silently overridden by the mark TUN needs.
 func TestApply_RedirectBypassMarkZeroConflictsWithTUN(t *testing.T) {
 	if !tun.Supported() {
 		t.Skipf("TUN is unsupported on this platform")
@@ -585,8 +582,8 @@ func TestApply_WarnsWhenTUNDisablesDNSHijack(t *testing.T) {
 	if !strings.Contains(disabled, "dns_hijack is disabled") {
 		t.Fatalf("Apply() without dns_hijack did not warn, log was:\n%s", disabled)
 	}
-	// The consequence is that port 53 stops being served. Non-DNS UDP is
-	// refused either way, so the warning must not claim the flag disables UDP.
+	// Port 53 is no longer answered by the Spaceship DNS RPC. Other UDP is
+	// forwarded either way, so the warning must not claim the flag disables UDP.
 	if !strings.Contains(disabled, "port 53") {
 		t.Fatalf("warning does not name the actual consequence, log was:\n%s", disabled)
 	}
@@ -1553,5 +1550,64 @@ func TestApply_V217ConfigsRemainValid(t *testing.T) {
 	// Nothing since v2.1.7 marks egress unless a new frontend asks for it.
 	if got := transport.BypassMark(); got != 0 {
 		t.Fatalf("a v2.1.7 config installed outbound mark %#x", got)
+	}
+}
+
+func TestResolveOutboundBypassMark(t *testing.T) {
+	const tunMark = uint32(0x1111)
+	tests := []struct {
+		name             string
+		tunPresent       bool
+		tunMark          uint32
+		redirectMark     uint32
+		redirectExplicit bool
+		want             uint32
+		wantErrSubstring string
+	}{
+		{name: "no tun uses redirect", redirectMark: transport.DefaultBypassMark, want: transport.DefaultBypassMark},
+		{name: "no tun explicit zero", redirectExplicit: true, want: 0},
+		{name: "linux tun wins over defaulted redirect", tunPresent: true, tunMark: tunMark, redirectMark: transport.DefaultBypassMark, want: tunMark},
+		{name: "marks agree", tunPresent: true, tunMark: tunMark, redirectMark: tunMark, redirectExplicit: true, want: tunMark},
+		{name: "android zero is authoritative", tunPresent: true, redirectMark: transport.DefaultBypassMark, want: 0},
+		{name: "android zero agrees with explicit redirect zero", tunPresent: true, redirectExplicit: true, want: 0},
+		{
+			name:             "explicit redirect zero cannot clear a required tun mark",
+			tunPresent:       true,
+			tunMark:          tunMark,
+			redirectExplicit: true,
+			wantErrSubstring: "cannot disable marking",
+		},
+		{
+			name:             "explicit redirect mark conflicts",
+			tunPresent:       true,
+			tunMark:          tunMark,
+			redirectMark:     1,
+			redirectExplicit: true,
+			wantErrSubstring: "conflicts with tun.bypass_mark",
+		},
+		{
+			name:             "android zero conflicts with an explicit redirect mark",
+			tunPresent:       true,
+			redirectMark:     1,
+			redirectExplicit: true,
+			wantErrSubstring: "conflicts with tun.bypass_mark",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveOutboundBypassMark(tt.tunPresent, tt.tunMark, tt.redirectMark, tt.redirectExplicit)
+			if tt.wantErrSubstring != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErrSubstring) {
+					t.Fatalf("resolveOutboundBypassMark() error = %v, want %q", err, tt.wantErrSubstring)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("resolveOutboundBypassMark() = %#x, want %#x", got, tt.want)
+			}
+		})
 	}
 }

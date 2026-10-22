@@ -1,11 +1,10 @@
-//go:build linux
+//go:build linux && !android
 
 package tun
 
 import (
 	"errors"
 	"fmt"
-	"sync"
 
 	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -206,21 +205,4 @@ func interfaceMTU(name string) (uint32, error) {
 		return 0, fmt.Errorf("tun: get %s mtu: %w", name, err)
 	}
 	return ifreq.Uint32(), nil
-}
-
-type ownedDescriptor struct {
-	mu  sync.Mutex
-	fd  int
-	err error
-}
-
-func (d *ownedDescriptor) Close() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.fd < 0 {
-		return d.err
-	}
-	d.err = unix.Close(d.fd)
-	d.fd = -1
-	return d.err
 }

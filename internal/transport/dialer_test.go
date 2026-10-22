@@ -1,8 +1,11 @@
 package transport
 
 import (
+	"errors"
 	"net"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -88,6 +91,127 @@ func TestVerifyBypassMarkAgreesWithOutboundDialer(t *testing.T) {
 	if verifyErr != nil && dialErr == nil {
 		t.Fatalf("VerifyBypassMark() = %v but marked dial succeeded", verifyErr)
 	}
+}
+
+func TestSocketProtectorRunsWhenMarkIsZero(t *testing.T) {
+	original := BypassMark()
+	t.Cleanup(func() {
+		SetBypassMark(original)
+		SetSocketProtector(nil)
+	})
+	SetBypassMark(0)
+
+	var calls atomic.Int32
+	SetSocketProtector(func(fd int) error {
+		if fd < 0 {
+			return errors.New("negative fd")
+		}
+		calls.Add(1)
+		return nil
+	})
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	conn, err := NewOutboundDialer(3*time.Second).Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial with protector and mark 0: %v", err)
+	}
+	_ = conn.Close()
+	if calls.Load() == 0 {
+		t.Fatal("socket protector was not invoked")
+	}
+}
+
+func TestSocketProtectorErrorFailsDial(t *testing.T) {
+	original := BypassMark()
+	t.Cleanup(func() {
+		SetBypassMark(original)
+		SetSocketProtector(nil)
+	})
+	SetBypassMark(0)
+	SetSocketProtector(func(int) error { return errors.New("denied") })
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	_, err = NewOutboundDialer(3*time.Second).Dial("tcp", listener.Addr().String())
+	if err == nil || !strings.Contains(err.Error(), "protect outbound socket") {
+		t.Fatalf("dial error = %v, want protector failure", err)
+	}
+}
+
+func TestSetSocketProtectorIsConcurrentWithDial(t *testing.T) {
+	original := BypassMark()
+	t.Cleanup(func() {
+		SetBypassMark(original)
+		SetSocketProtector(nil)
+	})
+	SetBypassMark(0)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	stop := make(chan struct{})
+	var workers sync.WaitGroup
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		var n atomic.Int32
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				current := n.Add(1)
+				SetSocketProtector(func(int) error {
+					if current < 0 {
+						return errors.New("unreachable")
+					}
+					return nil
+				})
+			}
+		}
+	}()
+
+	for range 20 {
+		conn, err := NewOutboundDialer(3*time.Second).Dial("tcp", listener.Addr().String())
+		if err != nil {
+			close(stop)
+			workers.Wait()
+			t.Fatalf("dial during protector swap: %v", err)
+		}
+		_ = conn.Close()
+	}
+	close(stop)
+	workers.Wait()
 }
 
 func TestFixedResolverConfiguration(t *testing.T) {

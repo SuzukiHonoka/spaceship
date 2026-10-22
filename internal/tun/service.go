@@ -32,9 +32,11 @@ type openedDevice struct {
 	closer   io.Closer
 }
 
-// Service terminates TCP sessions from a Linux TUN device in an independent
+// Service terminates TCP and UDP sessions from a TUN device in an independent
 // gVisor network stack and sends them through Spaceship's configured routes.
-// When DNS hijacking is enabled, UDP is admitted only for destination port 53.
+// When DNS hijacking is enabled, destination port 53 stays on the DNS RPC
+// path. Other UDP, and port 53 when hijacking is disabled, is forwarded as a
+// packet session.
 type Service struct {
 	parentCtx context.Context
 	ctx       context.Context
@@ -63,7 +65,13 @@ type Service struct {
 	flows     sync.WaitGroup
 	flowSlots chan struct{}
 	dnsSlots  chan struct{}
-	udpSlots  chan struct{}
+	// udpSlots bounds DNS-over-UDP sessions more tightly than flowSlots.
+	// General UDP uses only flowSlots, which is the MaxConnections budget.
+	udpSlots chan struct{}
+	// udpFlows records general UDP 4-tuples that already hold a flow slot.
+	// DNS hijack sessions are not entered here.
+	udpMu    sync.Mutex
+	udpFlows map[string]struct{}
 	// dnsClients counts live DNS-over-TCP connections and DNS-over-UDP
 	// sessions so the DNS pool can be shared fairly between them. See
 	// fairDNSShare.
@@ -136,6 +144,7 @@ func newService(ctx context.Context, cfg Config, device openedDevice, linkErrors
 		flowSlots:    make(chan struct{}, cfg.MaxConnections),
 		dnsSlots:     make(chan struct{}, cfg.DNS.MaxInFlight),
 		udpSlots:     make(chan struct{}, min(cfg.MaxConnections, cfg.DNS.MaxInFlight)),
+		udpFlows:     make(map[string]struct{}),
 		closeDone:    make(chan struct{}),
 		runDone:      make(chan struct{}),
 	}
@@ -146,11 +155,9 @@ func newService(ctx context.Context, cfg Config, device openedDevice, linkErrors
 
 	transportProtocols := []stack.TransportProtocolFactory{
 		tcp.NewProtocol,
+		udp.NewProtocol,
 		icmp.NewProtocol4,
 		icmp.NewProtocol6,
-	}
-	if cfg.DNS.Enabled {
-		transportProtocols = append(transportProtocols, udp.NewProtocol)
 	}
 
 	netstack := stack.New(stack.Options{
@@ -178,15 +185,13 @@ func newService(ctx context.Context, cfg Config, device openedDevice, linkErrors
 	netstack.SetTransportProtocolHandler(icmp.ProtocolNumber4, dropICMP)
 	netstack.SetTransportProtocolHandler(icmp.ProtocolNumber6, dropICMP)
 
-	if cfg.DNS.Enabled {
-		// Do not use udp.Forwarder.HandlePacket as the protocol handler: it
-		// clones every datagram before the callback runs, and a false return
-		// (non-53 traffic, overload) never DecRefs that clone. Own the clone
-		// here so rejected packets and CreateEndpoint's internal re-clone both
-		// release cleanly. CreateEndpoint feeds the receive queue via Clone and
-		// does not take ownership of the ForwarderRequest packet.
-		netstack.SetTransportProtocolHandler(udp.ProtocolNumber, s.handleUDPDNSPacket)
-	}
+	// Do not use udp.Forwarder.HandlePacket as the protocol handler: it clones
+	// every datagram before the callback runs, and a false return never DecRefs
+	// that clone. Own the clone in the UDP handlers so rejected packets and
+	// CreateEndpoint's internal re-clone both release cleanly. CreateEndpoint
+	// feeds the receive queue via Clone and does not take ownership of the
+	// ForwarderRequest packet.
+	netstack.SetTransportProtocolHandler(udp.ProtocolNumber, s.handleUDPPacket)
 
 	s.nicID = netstack.NextNICID()
 	if err := netstack.CreateNIC(s.nicID, device.endpoint); err != nil {
@@ -223,7 +228,7 @@ func (s *Service) Run() error {
 	s.runOnce.Do(func() {
 		defer close(s.runDone)
 		log.Printf(
-			"tun: interface %s ready (mtu=%d, route_mode=%s, tcp_limit=%d, dns_hijack=%t)",
+			"tun: interface %s ready (mtu=%d, route_mode=%s, flow_limit=%d, dns_hijack=%t)",
 			s.device.name,
 			s.device.mtu,
 			s.cfg.RouteMode,
