@@ -607,3 +607,53 @@ func TestStreamPacketConn_ReadFrom_ContextCanceled(t *testing.T) {
 		t.Errorf("ReadFrom() on canceled context = %v, want net.ErrClosed", err)
 	}
 }
+
+func TestStreamPacketConn_ReadPacketReturnsPayload(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := &mockProxyClient{
+		recvChan: make(chan *proto.ProxyDST, 2),
+		ctx:      ctx,
+	}
+	conn := NewStreamPacketConn(ctx, m, cancel, "8.8.8.8:53")
+
+	payload := []byte(strings.Repeat("x", 9000))
+	m.recvChan <- &proto.ProxyDST{Status: proto.ProxyStatus_Accepted}
+	m.recvChan <- &proto.ProxyDST{
+		Status:          proto.ProxyStatus_Session,
+		HeaderOrPayload: &proto.ProxyDST_Payload{Payload: payload},
+	}
+
+	var reader transport.PacketReader = conn
+	got, addr, err := reader.ReadPacket()
+	if err != nil {
+		t.Fatalf("ReadPacket() error = %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("ReadPacket() returned %d bytes, want %d", len(got), len(payload))
+	}
+	if addr.String() != "8.8.8.8:53" {
+		t.Fatalf("ReadPacket() addr = %v, want 8.8.8.8:53", addr)
+	}
+}
+
+func TestStreamPacketConn_ReadPacketHonorsDeadlineAndEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := &mockProxyClient{
+		recvChan: make(chan *proto.ProxyDST, 1),
+		ctx:      ctx,
+	}
+	conn := NewStreamPacketConn(ctx, m, cancel, "8.8.8.8:53")
+
+	_ = conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	if _, _, err := conn.ReadPacket(); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("ReadPacket() error = %v, want os.ErrDeadlineExceeded", err)
+	}
+
+	_ = conn.SetReadDeadline(time.Time{})
+	m.recvChan <- &proto.ProxyDST{Status: proto.ProxyStatus_EOF}
+	if _, _, err := conn.ReadPacket(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("ReadPacket() after remote EOF error = %v, want net.ErrClosed", err)
+	}
+}

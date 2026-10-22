@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/tun"
 	"github.com/SuzukiHonoka/spaceship/v2/pkg/config/client"
 )
@@ -39,6 +41,13 @@ func (l *Launcher) clearRunState() {
 // On Android, raw.FileDescriptor is the VpnService fd. Spaceship duplicates
 // it and closes only the duplicate. An omitted or zero bypass mark installs
 // no SO_MARK there.
+//
+// ServeTUN does not change the outbound socket mark: it is process-wide and
+// already applied to live sockets and the resolver. A TUN that needs a mark,
+// which is every Linux TUN and an explicit Android mark, is refused unless
+// the running client installed exactly that mark at startup. Declare the tun
+// section in the launch config, or a matching redirect.bypass_mark, so the
+// mark is set before any socket is opened.
 func (l *Launcher) ServeTUN(raw *client.TUN) error {
 	if raw == nil {
 		return errors.New("tun: nil config")
@@ -59,6 +68,9 @@ func (l *Launcher) ServeTUN(raw *client.TUN) error {
 
 	cfg, err := tun.FromClientConfig(raw, blockIPv6)
 	if err != nil {
+		return err
+	}
+	if err := checkInstalledBypassMark(cfg, transport.BypassMark()); err != nil {
 		return err
 	}
 	service, err := tun.New(ctx, cfg)
@@ -91,6 +103,22 @@ func (l *Launcher) ServeTUN(raw *client.TUN) error {
 		l.tunMu.Unlock()
 	}()
 	return nil
+}
+
+// checkInstalledBypassMark refuses a TUN whose required mark differs from the
+// one installed. Without it, a policy-routed TUN would capture Spaceship's own
+// egress and loop it back into the device.
+func checkInstalledBypassMark(cfg tun.Config, installed uint32) error {
+	if !cfg.BypassMarkRequired || installed == cfg.BypassMark {
+		return nil
+	}
+	return fmt.Errorf(
+		"tun: requires outbound socket mark %#x, but the running client installed %#x; "+
+			"the mark is process-wide and set only at launch, so declare tun in the launch "+
+			"config (or a matching redirect.bypass_mark) instead of attaching it later",
+		cfg.BypassMark,
+		installed,
+	)
 }
 
 // StopTUN closes a device attached with ServeTUN and waits until its run

@@ -27,6 +27,9 @@ const (
 	// idle limits. There is no JSON field for this; set Config.UDPIdleTimeout
 	// from Go, or leave it zero to use this default.
 	DefaultUDPIdleTimeout = 60 * time.Second
+	// defaultUDPSessionShare is the fraction of MaxConnections that general UDP
+	// may hold when MaxUDPSessions is zero. The rest stays reserved for TCP.
+	defaultUDPSessionShare = 4
 
 	minMTU           = 1280
 	maxMTU           = 65535
@@ -91,6 +94,12 @@ type Config struct {
 	BypassMarkRequired    bool
 	MaxConnections        int
 	MaxPendingConnections int
+	// MaxUDPSessions bounds general UDP sessions within MaxConnections, so
+	// TCP and DNS keep at least MaxConnections-MaxUDPSessions slots. When UDP
+	// is at its limit, a new 4-tuple replaces the least recently active
+	// session instead of being refused. Zero selects a quarter of
+	// MaxConnections, and at least one.
+	MaxUDPSessions int
 	// UDPIdleTimeout closes a general UDP session after this long without a
 	// datagram in either direction. Zero selects DefaultUDPIdleTimeout.
 	UDPIdleTimeout time.Duration
@@ -163,6 +172,17 @@ func NormalizeConfig(cfg Config) (Config, error) {
 				cfg.MaxConnections,
 			)
 		}
+	}
+
+	if cfg.MaxUDPSessions == 0 {
+		cfg.MaxUDPSessions = max(1, cfg.MaxConnections/defaultUDPSessionShare)
+	}
+	if cfg.MaxUDPSessions < 0 || cfg.MaxUDPSessions > cfg.MaxConnections {
+		return Config{}, fmt.Errorf(
+			"tun: max_udp_sessions must be between 0 and max_connections %d: %d",
+			cfg.MaxConnections,
+			cfg.MaxUDPSessions,
+		)
 	}
 
 	if cfg.DNS.QueryTimeout == 0 {
@@ -240,6 +260,7 @@ func FromClientConfig(raw *clientConfig.TUN, blockIPv6 bool) (Config, error) {
 		BypassMark:            bypassMark,
 		MaxConnections:        raw.MaxConnections,
 		MaxPendingConnections: raw.MaxPendingConnections,
+		MaxUDPSessions:        raw.MaxUDPSessions,
 	}
 	if raw.DNSHijack != nil {
 		queryTimeout, err := secondsDuration(

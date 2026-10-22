@@ -3,9 +3,11 @@ package tun
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,21 +24,50 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
 
-func TestUDPFlowTrackingIsOneSessionPerTuple(t *testing.T) {
-	service := &Service{}
-	if !service.trackUDPFlow("a|1|b|2") {
-		t.Fatal("first trackUDPFlow rejected a new 4-tuple")
+func TestUDPAdmissionIsOneSessionPerTuple(t *testing.T) {
+	service := &Service{
+		ctx:             context.Background(),
+		flowSlots:       make(chan struct{}, 4),
+		udpSessionSlots: make(chan struct{}, 4),
 	}
-	if service.trackUDPFlow("a|1|b|2") {
-		t.Fatal("trackUDPFlow accepted a duplicate 4-tuple")
+	first, ok := service.admitUDPSession("a|1|b|2")
+	if !ok || first == nil {
+		t.Fatal("first admission rejected a new 4-tuple")
 	}
-	if !service.trackUDPFlow("a|1|b|3") {
-		t.Fatal("trackUDPFlow rejected a different 4-tuple")
+	if duplicate, ok := service.admitUDPSession("a|1|b|2"); !ok || duplicate != nil {
+		t.Fatalf("duplicate admission = (%v, %t), want the live session kept", duplicate, ok)
 	}
-	service.untrackUDPFlow("a|1|b|2")
-	if !service.trackUDPFlow("a|1|b|2") {
-		t.Fatal("trackUDPFlow rejected a 4-tuple after it was released")
+	if other, ok := service.admitUDPSession("a|1|b|3"); !ok || other == nil {
+		t.Fatal("admission rejected a different 4-tuple")
 	}
+	service.finishUDPSession(first)
+	if again, ok := service.admitUDPSession("a|1|b|2"); !ok || again == nil || again == first {
+		t.Fatal("admission did not open a new session after the 4-tuple was released")
+	}
+	if got := len(service.flowSlots); got != 2 {
+		t.Fatalf("flow slots = %d, want 2 live sessions", got)
+	}
+	if got := len(service.udpSessionSlots); got != 2 {
+		t.Fatalf("UDP session slots = %d, want 2 live sessions", got)
+	}
+}
+
+func newTestUDPSession(t *testing.T) *udpSession {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	session := &udpSession{key: "test", ctx: ctx, cancel: cancel}
+	session.touch()
+	return session
+}
+
+func pipeTUNSide(conn net.Conn) udpTUNSide {
+	return udpTUNSide{conn: conn, read: func(deadline time.Time) ([]byte, func(), error) {
+		buf := make([]byte, udpDatagramSize)
+		_ = conn.SetReadDeadline(deadline)
+		n, err := conn.Read(buf)
+		return buf[:n], nil, err
+	}}
 }
 
 func TestProxyUDPRejectsRouteThatCannotCarryUDP(t *testing.T) {
@@ -56,7 +87,7 @@ func TestProxyUDPRejectsRouteThatCannotCarryUDP(t *testing.T) {
 		LocalAddress: tcpip.AddrFrom4([4]byte{192, 0, 2, 20}),
 		LocalPort:    443,
 	}
-	err := service.proxyUDP(conn, id)
+	err := service.proxyUDP(newTestUDPSession(t), pipeTUNSide(conn), id)
 	if err == nil || !strings.Contains(err.Error(), "does not support UDP") {
 		t.Fatalf("proxyUDP() error = %v, want unsupported UDP", err)
 	}
@@ -82,7 +113,7 @@ func TestProxyUDPReportsRouteLookupFailure(t *testing.T) {
 		LocalAddress: tcpip.AddrFrom4([4]byte{192, 0, 2, 20}),
 		LocalPort:    443,
 	}
-	if err := service.proxyUDP(conn, id); !errors.Is(err, wantErr) {
+	if err := service.proxyUDP(newTestUDPSession(t), pipeTUNSide(conn), id); !errors.Is(err, wantErr) {
 		t.Fatalf("proxyUDP() error = %v, want wrapping %v", err, wantErr)
 	}
 }
@@ -219,34 +250,268 @@ func TestUDPSessionClosesOnShutdown(t *testing.T) {
 	}
 }
 
-func TestUDPConnectionLimitRejectsExtraSession(t *testing.T) {
+// UDP may only fill its own budget. Extra 4-tuples replace older UDP sessions,
+// so the rest of MaxConnections stays free for TCP.
+func TestUDPSessionsLeaveTCPShareFree(t *testing.T) {
 	service, peer, peerNIC := newLinkedService(t, Config{
-		MaxConnections: 1,
+		MaxConnections: 4,
+		MaxUDPSessions: 2,
 		UDPIdleTimeout: time.Minute,
 	})
-	route := newHoldPacketRoute()
+	udpRoute := newUDPEchoRoute()
+	tcpRoute := &holdTCPRoute{}
+	service.setResolveRoute(func(host string) (transport.Transport, error) {
+		if host == "198.51.100.20" {
+			return tcpRoute, nil
+		}
+		return udpRoute, nil
+	})
+
+	for port := uint16(1); port <= 4; port++ {
+		conn := dialPeerUDP(t, peer, peerNIC, tcpip.AddrFrom4([4]byte{198, 51, 100, 70}), port, ipv4.ProtocolNumber)
+		if err := exchangeUDP(conn, "ping"); err != nil {
+			t.Fatalf("UDP session %d: %v", port, err)
+		}
+	}
+	if got := udpRoute.dials.Load(); got != 4 {
+		t.Fatalf("UDP dials = %d, want every 4-tuple admitted", got)
+	}
+	if got := liveUDPSessions(service); got != 2 {
+		t.Fatalf("live UDP sessions = %d, want MaxUDPSessions", got)
+	}
+	if got := len(service.flowSlots); got != 2 {
+		t.Fatalf("flow slots after UDP = %d, want only the UDP budget used", got)
+	}
+
+	for i := range 2 {
+		conn := dialPeerTCP(t, peer, peerNIC, tcpip.AddrFrom4([4]byte{198, 51, 100, 20}), 443)
+		if err := writeAll(conn, []byte("ping")); err != nil {
+			t.Fatalf("TCP %d write: %v", i, err)
+		}
+		response := make([]byte, 4)
+		if _, err := io.ReadFull(conn, response); err != nil {
+			t.Fatalf("TCP %d was refused while UDP was at its budget: %v", i, err)
+		}
+	}
+	if got := len(service.flowSlots); got != 4 {
+		t.Fatalf("flow slots = %d, want 2 UDP + 2 TCP", got)
+	}
+}
+
+func TestUDPReplacesLeastRecentlyActiveSession(t *testing.T) {
+	service, peer, peerNIC := newLinkedService(t, Config{
+		MaxConnections: 4,
+		MaxUDPSessions: 2,
+		UDPIdleTimeout: time.Minute,
+	})
+	route := newUDPEchoRoute()
 	service.setResolveRoute(func(string) (transport.Transport, error) {
 		return route, nil
 	})
+	target := tcpip.AddrFrom4([4]byte{198, 51, 100, 71})
 
-	first := dialPeerUDP(t, peer, peerNIC, tcpip.AddrFrom4([4]byte{198, 51, 100, 40}), 9, ipv4.ProtocolNumber)
-	if _, err := first.Write([]byte("hold")); err != nil {
+	first := dialPeerUDP(t, peer, peerNIC, target, 1, ipv4.ProtocolNumber)
+	if err := exchangeUDP(first, "one!"); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-route.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("first UDP session did not start")
+	second := dialPeerUDP(t, peer, peerNIC, target, 2, ipv4.ProtocolNumber)
+	if err := exchangeUDP(second, "two!"); err != nil {
+		t.Fatal(err)
+	}
+	// Make the first session the most recently active one.
+	time.Sleep(5 * time.Millisecond)
+	if err := exchangeUDP(first, "one!"); err != nil {
+		t.Fatal(err)
 	}
 
-	second := dialPeerUDP(t, peer, peerNIC, tcpip.AddrFrom4([4]byte{198, 51, 100, 41}), 9, ipv4.ProtocolNumber)
-	if _, err := second.Write([]byte("extra")); err != nil {
+	third := dialPeerUDP(t, peer, peerNIC, target, 3, ipv4.ProtocolNumber)
+	if err := exchangeUDP(third, "tri!"); err != nil {
+		t.Fatal(err)
+	}
+	if !hasUDPSessionTo(service, 1) || hasUDPSessionTo(service, 2) || !hasUDPSessionTo(service, 3) {
+		t.Fatal("replacement did not evict the least recently active session")
+	}
+	if err := exchangeUDP(first, "one!"); err != nil {
+		t.Fatalf("surviving session stopped working: %v", err)
+	}
+	if got := route.dials.Load(); got != 3 {
+		t.Fatalf("dials = %d, want the surviving session reused", got)
+	}
+}
+
+// Replacement hands slots from the evicted session to the new one. Every slot
+// and WaitGroup entry must still be returned exactly once.
+func TestUDPReplacementReleasesSlotsExactlyOnce(t *testing.T) {
+	service, peer, peerNIC := newLinkedService(t, Config{
+		MaxConnections: 4,
+		MaxUDPSessions: 2,
+		UDPIdleTimeout: 300 * time.Millisecond,
+	})
+	route := newUDPEchoRoute()
+	service.setResolveRoute(func(string) (transport.Transport, error) {
+		return route, nil
+	})
+	for port := uint16(1); port <= 8; port++ {
+		conn := dialPeerUDP(t, peer, peerNIC, tcpip.AddrFrom4([4]byte{198, 51, 100, 72}), port, ipv4.ProtocolNumber)
+		if err := exchangeUDP(conn, "ping"); err != nil {
+			t.Fatalf("UDP session %d: %v", port, err)
+		}
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for (len(service.flowSlots) != 0 || len(service.udpSessionSlots) != 0 || liveUDPSessions(service) != 0) &&
+		time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if flows, udp, live := len(service.flowSlots), len(service.udpSessionSlots), liveUDPSessions(service); flows != 0 || udp != 0 || live != 0 {
+		t.Fatalf("after idle expiry flow slots=%d UDP slots=%d sessions=%d, want all released", flows, udp, live)
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- service.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close() waited on a flow that replacement never finished")
+	}
+}
+
+// With no UDP session to replace, a full MaxConnections budget still refuses
+// a new UDP flow rather than taking a TCP slot.
+func TestUDPRefusedWhenTCPHoldsEverySlot(t *testing.T) {
+	service, peer, peerNIC := newLinkedService(t, Config{
+		MaxConnections: 1,
+		MaxUDPSessions: 1,
+		UDPIdleTimeout: time.Minute,
+	})
+	udpRoute := newUDPEchoRoute()
+	tcpRoute := &holdTCPRoute{}
+	service.setResolveRoute(func(host string) (transport.Transport, error) {
+		if host == "198.51.100.20" {
+			return tcpRoute, nil
+		}
+		return udpRoute, nil
+	})
+
+	conn := dialPeerTCP(t, peer, peerNIC, tcpip.AddrFrom4([4]byte{198, 51, 100, 20}), 443)
+	if err := writeAll(conn, []byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	response := make([]byte, 4)
+	if _, err := io.ReadFull(conn, response); err != nil {
+		t.Fatal(err)
+	}
+
+	udpConn := dialPeerUDP(t, peer, peerNIC, tcpip.AddrFrom4([4]byte{198, 51, 100, 73}), 9, ipv4.ProtocolNumber)
+	if _, err := udpConn.Write([]byte("extra")); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(200 * time.Millisecond)
-	if got := route.dials.Load(); got != 1 {
-		t.Fatalf("dials = %d, want the extra 4-tuple rejected by MaxConnections", got)
+	if got := udpRoute.dials.Load(); got != 0 {
+		t.Fatalf("UDP dials = %d, want the flow refused while TCP holds every slot", got)
 	}
+}
+
+// An idle session must not keep a datagram buffer. Before buffers were
+// borrowed per datagram, each session held two 64 KiB buffers.
+func TestIdleUDPSessionHoldsNoDatagramBuffer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("heap measurement")
+	}
+	const sessions = 400
+	service, peer, peerNIC := newLinkedService(t, Config{
+		MaxConnections: sessions + 1,
+		MaxUDPSessions: sessions + 1,
+		UDPIdleTimeout: time.Minute,
+	})
+	route := newUDPEchoRoute()
+	route.packetReader = true
+	service.setResolveRoute(func(string) (transport.Transport, error) {
+		return route, nil
+	})
+	target := tcpip.AddrFrom4([4]byte{198, 51, 100, 74})
+
+	// Warm the pool and one-time stack state outside the measurement.
+	warm := dialPeerUDP(t, peer, peerNIC, target, 1, ipv4.ProtocolNumber)
+	if err := exchangeUDP(warm, "warm"); err != nil {
+		t.Fatal(err)
+	}
+	before := settledHeapInUse()
+	for i := range sessions {
+		conn := dialPeerUDP(t, peer, peerNIC, target, uint16(1000+i), ipv4.ProtocolNumber)
+		if err := exchangeUDP(conn, "ping"); err != nil {
+			t.Fatalf("session %d: %v", i, err)
+		}
+	}
+	after := settledHeapInUse()
+
+	perSession := float64(after-before) / sessions
+	t.Logf("heap per idle UDP session: %.1f KiB", perSession/1024)
+	if perSession > 48*1024 {
+		t.Fatalf("heap per idle UDP session = %.1f KiB, want no retained 64 KiB buffer", perSession/1024)
+	}
+}
+
+// Buffers are no longer sized to the MTU guess: a reassembled datagram larger
+// than the MTU must cross both directions intact.
+func TestUDPCarriesDatagramLargerThanMTU(t *testing.T) {
+	for _, packetReader := range []bool{true, false} {
+		t.Run(fmt.Sprintf("packet_reader=%t", packetReader), func(t *testing.T) {
+			service, peer, peerNIC := newLinkedService(t, Config{MaxConnections: 2, MTU: 1400})
+			route := newUDPEchoRoute()
+			route.packetReader = packetReader
+			service.setResolveRoute(func(string) (transport.Transport, error) {
+				return route, nil
+			})
+			conn := dialPeerUDP(t, peer, peerNIC, tcpip.AddrFrom4([4]byte{198, 51, 100, 75}), 9, ipv4.ProtocolNumber)
+			payload := strings.Repeat("0123456789abcdef", 500)
+			if err := exchangeUDP(conn, payload); err != nil {
+				t.Fatalf("%d-byte datagram: %v", len(payload), err)
+			}
+		})
+	}
+}
+
+func settledHeapInUse() uint64 {
+	runtime.GC()
+	runtime.GC()
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	return stats.HeapInuse
+}
+
+func liveUDPSessions(service *Service) int {
+	service.udpMu.Lock()
+	defer service.udpMu.Unlock()
+	return len(service.udpFlows)
+}
+
+func hasUDPSessionTo(service *Service, port uint16) bool {
+	suffix := fmt.Sprintf("|%d", port)
+	service.udpMu.Lock()
+	defer service.udpMu.Unlock()
+	for key := range service.udpFlows {
+		if strings.HasSuffix(key, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func dialPeerTCP(t *testing.T, peer *stack.Stack, peerNIC tcpip.NICID, addr tcpip.Address, port uint16) net.Conn {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, err := gonet.DialContextTCP(ctx, peer, tcpip.FullAddress{NIC: peerNIC, Addr: addr, Port: port}, ipv4.ProtocolNumber)
+	if err != nil {
+		t.Fatalf("DialContextTCP() error = %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	return conn
 }
 
 func TestUDPRouteFailureReleasesConnectionSlot(t *testing.T) {
@@ -410,6 +675,9 @@ type recordedUDPDial struct {
 type udpEchoRoute struct {
 	dials     atomic.Int32
 	dialsSeen chan recordedUDPDial
+	// packetReader makes dials return a transport.PacketReader, as the RPC
+	// and direct transports do.
+	packetReader bool
 }
 
 func newUDPEchoRoute() *udpEchoRoute {
@@ -436,10 +704,28 @@ func (r *udpEchoRoute) DialPacketContext(ctx context.Context, network, addr stri
 	case r.dialsSeen <- recordedUDPDial{network: network, addr: addr}:
 	default:
 	}
+	if r.packetReader {
+		return &readerEchoPacketConn{newEchoPacketConn()}, nil
+	}
 	return newEchoPacketConn(), nil
 }
 
 var _ transport.ContextPacketDialer = (*udpEchoRoute)(nil)
+
+// readerEchoPacketConn adds transport.PacketReader to echoPacketConn.
+type readerEchoPacketConn struct {
+	*echoPacketConn
+}
+
+func (c *readerEchoPacketConn) ReadPacket() ([]byte, net.Addr, error) {
+	pkt, err := c.nextPacket()
+	if err != nil {
+		return nil, nil, err
+	}
+	return pkt, c.RemoteAddr(), nil
+}
+
+var _ transport.PacketReader = (*readerEchoPacketConn)(nil)
 
 type holdPacketRoute struct {
 	dials   atomic.Int32
@@ -473,6 +759,35 @@ func (r *holdPacketRoute) DialPacketContext(ctx context.Context, _, _ string) (n
 
 var _ transport.ContextPacketDialer = (*holdPacketRoute)(nil)
 
+// holdTCPRoute echoes the first 4 bytes and then keeps the flow open until
+// the service cancels it, so the flow keeps its MaxConnections slot.
+type holdTCPRoute struct{}
+
+func (*holdTCPRoute) String() string                        { return "test-tcp-hold" }
+func (*holdTCPRoute) Dial(string, string) (net.Conn, error) { return nil, errors.New("not used") }
+func (*holdTCPRoute) Close() error                          { return nil }
+func (*holdTCPRoute) Proxy(
+	ctx context.Context,
+	_ string,
+	localAddr chan<- string,
+	dst io.Writer,
+	src io.Reader,
+) error {
+	defer close(localAddr)
+	localAddr <- "127.0.0.1:1"
+	payload := make([]byte, 4)
+	if _, err := io.ReadFull(src, payload); err != nil {
+		return err
+	}
+	if _, err := dst.Write([]byte(strings.ToUpper(string(payload)))); err != nil {
+		return err
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+var _ transport.Transport = (*holdTCPRoute)(nil)
+
 type echoPacketConn struct {
 	mu     sync.Mutex
 	queue  [][]byte
@@ -486,18 +801,27 @@ func newEchoPacketConn() *echoPacketConn {
 }
 
 func (c *echoPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
+	pkt, err := c.nextPacket()
+	if err != nil {
+		return 0, nil, err
+	}
+	return copy(p, pkt), c.RemoteAddr(), nil
+}
+
+// nextPacket waits without a caller buffer, so readerEchoPacketConn can
+// behave like a real transport.PacketReader.
+func (c *echoPacketConn) nextPacket() ([]byte, error) {
 	for {
 		c.mu.Lock()
 		if len(c.queue) > 0 {
 			pkt := c.queue[0]
 			c.queue = c.queue[1:]
 			c.mu.Unlock()
-			n := copy(p, pkt)
-			return n, c.RemoteAddr(), nil
+			return pkt, nil
 		}
 		if c.closed {
 			c.mu.Unlock()
-			return 0, nil, net.ErrClosed
+			return nil, net.ErrClosed
 		}
 		deadline := c.readDL.Load()
 		c.mu.Unlock()
@@ -507,7 +831,7 @@ func (c *echoPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		if deadline > 0 {
 			wait := time.Until(time.Unix(0, deadline))
 			if wait <= 0 {
-				return 0, nil, os.ErrDeadlineExceeded
+				return nil, os.ErrDeadlineExceeded
 			}
 			tr := time.NewTimer(wait)
 			timer = tr.C
@@ -526,7 +850,7 @@ func (c *echoPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 				stop()
 			}
 		case <-timer:
-			return 0, nil, os.ErrDeadlineExceeded
+			return nil, os.ErrDeadlineExceeded
 		}
 	}
 }

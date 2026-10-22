@@ -68,10 +68,13 @@ type Service struct {
 	// udpSlots bounds DNS-over-UDP sessions more tightly than flowSlots.
 	// General UDP uses only flowSlots, which is the MaxConnections budget.
 	udpSlots chan struct{}
-	// udpFlows records general UDP 4-tuples that already hold a flow slot.
-	// DNS hijack sessions are not entered here.
+	// udpSessionSlots is the MaxUDPSessions budget for general UDP. Each
+	// session also holds a flowSlots slot, so TCP keeps the remainder.
+	udpSessionSlots chan struct{}
+	// udpFlows maps each general UDP 4-tuple to its live session. DNS hijack
+	// sessions are not entered here.
 	udpMu    sync.Mutex
-	udpFlows map[string]struct{}
+	udpFlows map[string]*udpSession
 	// dnsClients counts live DNS-over-TCP connections and DNS-over-UDP
 	// sessions so the DNS pool can be shared fairly between them. See
 	// fairDNSShare.
@@ -133,20 +136,21 @@ func newService(ctx context.Context, cfg Config, device openedDevice, linkErrors
 	// #nosec G118 -- cancel is retained by Service and invoked by Close.
 	serviceCtx, cancel := context.WithCancel(ctx)
 	s := &Service{
-		parentCtx:    ctx,
-		ctx:          serviceCtx,
-		cancel:       cancel,
-		cfg:          cfg,
-		device:       device,
-		resolveRoute: router.GetRoute,
-		exchanger:    spaceshipDNS.NewRPCExchanger(),
-		linkErrors:   linkErrors,
-		flowSlots:    make(chan struct{}, cfg.MaxConnections),
-		dnsSlots:     make(chan struct{}, cfg.DNS.MaxInFlight),
-		udpSlots:     make(chan struct{}, min(cfg.MaxConnections, cfg.DNS.MaxInFlight)),
-		udpFlows:     make(map[string]struct{}),
-		closeDone:    make(chan struct{}),
-		runDone:      make(chan struct{}),
+		parentCtx:       ctx,
+		ctx:             serviceCtx,
+		cancel:          cancel,
+		cfg:             cfg,
+		device:          device,
+		resolveRoute:    router.GetRoute,
+		exchanger:       spaceshipDNS.NewRPCExchanger(),
+		linkErrors:      linkErrors,
+		flowSlots:       make(chan struct{}, cfg.MaxConnections),
+		dnsSlots:        make(chan struct{}, cfg.DNS.MaxInFlight),
+		udpSlots:        make(chan struct{}, min(cfg.MaxConnections, cfg.DNS.MaxInFlight)),
+		udpSessionSlots: make(chan struct{}, cfg.MaxUDPSessions),
+		udpFlows:        make(map[string]*udpSession),
+		closeDone:       make(chan struct{}),
+		runDone:         make(chan struct{}),
 	}
 	if cfg.ResolveRoute != nil {
 		s.resolveRoute = cfg.ResolveRoute
@@ -376,6 +380,18 @@ func (s *Service) rejectTCPRequest(request *tcp.ForwarderRequest) {
 	s.flowMu.Lock()
 	defer s.flowMu.Unlock()
 	request.Complete(!s.closing)
+}
+
+// adoptFlow registers a flow that inherits slots reserved by another flow, so
+// it takes no slot of its own. It fails once the service is closing.
+func (s *Service) adoptFlow() bool {
+	s.flowMu.Lock()
+	defer s.flowMu.Unlock()
+	if s.closing {
+		return false
+	}
+	s.flows.Add(1)
+	return true
 }
 
 func (s *Service) endFlow() {

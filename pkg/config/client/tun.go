@@ -40,11 +40,16 @@ type TUN struct {
 	// fails if it cannot be set.
 	BypassMark *uint32 `json:"bypass_mark,omitempty"`
 	// MaxConnections bounds active gVisor TCP and UDP endpoints plus their
-	// proxy goroutines. DNS-over-UDP sessions also count against
-	// dns_hijack.max_in_flight.
+	// proxy goroutines. General UDP is further capped by max_udp_sessions, and
+	// DNS-over-UDP sessions also count against dns_hijack.max_in_flight.
 	MaxConnections int `json:"max_connections,omitempty"`
 	// MaxPendingConnections bounds TCP handshakes being completed by gVisor.
 	MaxPendingConnections int `json:"max_pending_connections,omitempty"`
+	// MaxUDPSessions caps general UDP sessions inside max_connections, so TCP
+	// always keeps the remainder. At the cap, a new UDP 4-tuple replaces the
+	// least recently active session. Zero selects a quarter of
+	// max_connections, and at least one.
+	MaxUDPSessions int `json:"max_udp_sessions,omitempty"`
 	// DNSHijack intercepts classic DNS on TCP and UDP destination port 53.
 	DNSHijack *DNSHijack `json:"dns_hijack,omitempty"`
 }

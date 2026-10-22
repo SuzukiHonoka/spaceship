@@ -190,8 +190,12 @@ go test -count=1 -run '^TestNetfilterRedirectIntegration$' ./internal/redirect
 The client can terminate IP packets from a TUN interface in its own gVisor
 network stack. Spaceship implements this frontend directly; it does not embed
 or invoke `tun2socks`. General TUN traffic is TCP and UDP. Each UDP 4-tuple is
-one session, closed after 60 seconds without a datagram in either direction,
-and counted against `max_connections`. When `dns_hijack` is enabled, TCP and
+one session, closed after 60 seconds without a datagram in either direction.
+UDP sessions count against `max_connections` but may hold at most
+`max_udp_sessions` of it, so TCP always keeps the rest. At that cap a new
+4-tuple replaces the least recently active UDP session instead of being
+refused. An idle session holds no datagram buffer; one is borrowed only while
+a datagram is being forwarded. When `dns_hijack` is enabled, TCP and
 UDP destination port 53 stay on the authenticated DNS RPC. When it is
 disabled, port 53 is an ordinary UDP flow.
 
@@ -211,6 +215,7 @@ disabled, port 53 is an ordinary UDP flow.
     "bypass_mark": 21328,
     "max_connections": 4096,
     "max_pending_connections": 1024,
+    "max_udp_sessions": 1024,
     "dns_hijack": {
       "enabled": true,
       "query_timeout_seconds": 5,
@@ -222,7 +227,9 @@ disabled, port 53 is an ordinary UDP flow.
 }
 ```
 
-Zero-valued limits select the values shown above. `dns_hijack.max_in_flight`
+Zero-valued limits select the values shown above; an omitted
+`max_udp_sessions` is a quarter of `max_connections`, and at least one.
+`dns_hijack.max_in_flight`
 has a hard maximum of 1024 because every active UDP DNS flow owns a receive
 buffer of up to 64 KiB for its idle lifetime; the ceiling bounds those buffers
 to about 64 MiB. On Linux, `bypass_mark` defaults to decimal `21328`
@@ -298,6 +305,10 @@ not create `/dev/net/tun` and does not call `TUNGETIFF` or `SIOCGIFMTU`; it
 uses the configured MTU. An empty name becomes the placeholder `tun`. A client
 that is already running can adopt the fd later with `api.Launcher.ServeTUN`
 and release it with `StopTUN` without stopping its other listeners. The
+outbound mark is process-wide and set only at launch, so `ServeTUN` refuses a
+TUN that needs a mark the client did not install: every Linux TUN, and an
+Android TUN with an explicit `bypass_mark`. Declare `tun` in the launch config
+for those. The
 descriptor's shared file status is made nonblocking as required by the gVisor
 endpoint.
 

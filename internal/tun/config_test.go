@@ -23,6 +23,7 @@ func TestNormalizeConfigDefaults(t *testing.T) {
 		cfg.BypassMark != wantMark ||
 		cfg.BypassMarkRequired != wantRequired ||
 		cfg.UDPIdleTimeout != DefaultUDPIdleTimeout ||
+		cfg.MaxUDPSessions != DefaultMaxConnections/defaultUDPSessionShare ||
 		cfg.MaxConnections != DefaultMaxConnections ||
 		cfg.MaxPendingConnections != DefaultMaxPending {
 		t.Fatalf("NormalizeConfig() = %+v", cfg)
@@ -68,6 +69,8 @@ func TestNormalizeConfigRejectsUnsafeValues(t *testing.T) {
 		{name: "negative query timeout", cfg: Config{DNS: DNSConfig{QueryTimeout: -time.Second}}, want: "query timeout"},
 		{name: "negative idle timeout", cfg: Config{DNS: DNSConfig{TCPIdleTimeout: -time.Second}}, want: "idle timeout"},
 		{name: "negative udp idle timeout", cfg: Config{UDPIdleTimeout: -time.Second}, want: "udp idle timeout"},
+		{name: "negative udp sessions", cfg: Config{MaxUDPSessions: -1}, want: "max_udp_sessions"},
+		{name: "udp sessions exceed connections", cfg: Config{MaxConnections: 2, MaxUDPSessions: 3}, want: "max_udp_sessions"},
 		{name: "negative DNS limit", cfg: Config{DNS: DNSConfig{MaxInFlight: -1}}, want: "dns.max_in_flight"},
 		{name: "excessive DNS limit", cfg: Config{DNS: DNSConfig{MaxInFlight: maxDNSInFlightLimit + 1}}, want: "dns.max_in_flight"},
 	}
@@ -169,6 +172,7 @@ func TestFromClientConfig(t *testing.T) {
 		BypassMark:            &mark,
 		MaxConnections:        10,
 		MaxPendingConnections: 4,
+		MaxUDPSessions:        3,
 		DNSHijack: &clientConfig.DNSHijack{
 			Enabled:               true,
 			QueryTimeoutSeconds:   2,
@@ -181,7 +185,7 @@ func TestFromClientConfig(t *testing.T) {
 	}
 	if cfg.Name != "ss-tun" || cfg.FileDescriptor == nil || *cfg.FileDescriptor != fd ||
 		cfg.BypassMark != 123 || !cfg.BypassMarkRequired ||
-		cfg.MaxConnections != 10 || cfg.MaxPendingConnections != 4 {
+		cfg.MaxConnections != 10 || cfg.MaxPendingConnections != 4 || cfg.MaxUDPSessions != 3 {
 		t.Fatalf("FromClientConfig() = %+v", cfg)
 	}
 	if !cfg.DNS.Enabled || !cfg.DNS.BlockIPv6 ||
@@ -329,6 +333,22 @@ func TestFromClientConfigZeroBypassMarkFollowsPlatform(t *testing.T) {
 		if cfg.BypassMark != wantMark || cfg.BypassMarkRequired != wantRequired {
 			t.Fatalf("FromClientConfig(%+v) mark=%#x required=%t, want %#x required=%t",
 				raw.BypassMark, cfg.BypassMark, cfg.BypassMarkRequired, wantMark, wantRequired)
+		}
+	}
+}
+
+func TestNormalizeConfigUDPSessionDefaultKeepsOneSlot(t *testing.T) {
+	for _, tc := range []struct{ connections, want int }{
+		{connections: 1, want: 1},
+		{connections: 3, want: 1},
+		{connections: 8, want: 2},
+	} {
+		cfg, err := NormalizeConfig(Config{RouteMode: "manual", MaxConnections: tc.connections})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.MaxUDPSessions != tc.want {
+			t.Fatalf("MaxConnections %d: MaxUDPSessions = %d, want %d", tc.connections, cfg.MaxUDPSessions, tc.want)
 		}
 	}
 }
