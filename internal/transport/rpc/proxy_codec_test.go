@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"slices"
 	"testing"
-	"time"
 
 	proxy "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	"google.golang.org/grpc/mem"
@@ -440,21 +438,20 @@ func BenchmarkProxyCodec_MarshalPayload(b *testing.B) {
 
 			b.SetBytes(int64(size))
 			b.ReportAllocs()
-			samples := make([]time.Duration, b.N)
+			// Each iteration is one message on the send path: take a pooled
+			// buffer, offer it, marshal, and free the frame, which returns
+			// the buffer. The read that would fill the payload is I/O, not
+			// codec work, and the bytes do not change the framing cost, so
+			// the payload is left as the pool hands it out. Stopping the
+			// timer around that setup instead would make the benchmark run
+			// for minutes: with -benchmem every StopTimer and StartTimer
+			// reads the memory statistics.
 			b.ResetTimer()
-			for i := range b.N {
-				b.StopTimer()
+			for range b.N {
 				buf, read := AcquirePayloadBuffer(pool, size)
-				for j := range read[:size] {
-					read[j] = 0x5a
-				}
 				payload.Payload = read[:size]
 				OfferPayloadBuffer(src, buf, size, pool)
-				b.StartTimer()
-
-				start := time.Now()
 				got, err := c.Marshal(src)
-				samples[i] = time.Since(start)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -462,7 +459,6 @@ func BenchmarkProxyCodec_MarshalPayload(b *testing.B) {
 				payload.Payload = nil
 			}
 			b.StopTimer()
-			reportCodecRTT(b, samples)
 		})
 	}
 }
@@ -508,31 +504,4 @@ func BenchmarkProxyCodec_UnmarshalPayload(b *testing.B) {
 			b.StopTimer()
 		})
 	}
-}
-
-func reportCodecRTT(b *testing.B, samples []time.Duration) {
-	b.Helper()
-	if len(samples) == 0 {
-		return
-	}
-	sorted := slices.Clone(samples)
-	slices.Sort(sorted)
-	var sum time.Duration
-	for _, d := range sorted {
-		sum += d
-	}
-	b.ReportMetric(float64(sum)/float64(len(sorted))/float64(time.Nanosecond), "avg-ns")
-	b.ReportMetric(float64(sorted[len(sorted)/2])/float64(time.Nanosecond), "p50-ns")
-	b.ReportMetric(float64(sorted[codecPercentileIndex(len(sorted), 99)])/float64(time.Nanosecond), "p99-ns")
-}
-
-func codecPercentileIndex(n, p int) int {
-	if n <= 1 {
-		return 0
-	}
-	i := (p*(n-1) + 99) / 100
-	if i >= n {
-		return n - 1
-	}
-	return i
 }
