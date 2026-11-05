@@ -19,6 +19,7 @@ package sniff
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
 	"net"
 	"net/netip"
@@ -36,6 +37,7 @@ const (
 	Timeout = 200 * time.Millisecond
 
 	maxHTTPHeader = 8 * 1024
+	maxDNSName    = 253
 	maxTLSRecord  = 16 * 1024
 	maxSniff      = 5 + maxTLSRecord
 
@@ -381,9 +383,9 @@ func forEachExtension(exts []byte, fn func(typ int, data []byte) bool) bool {
 	return true
 }
 
+// grease reports a GREASE value (RFC 8701): both bytes equal, each 0x?A.
 func grease(version uint16) bool {
-	hi := byte(version >> 8)
-	lo := byte(version)
+	hi, lo := version>>8, version&0xff
 	return hi == lo && hi&0x0f == 0x0a
 }
 
@@ -466,44 +468,42 @@ func hostWithoutPort(value string) string {
 }
 
 // BuildClientHello returns a TLS 1.2 ClientHello whose SNI is serverName.
-// An empty name returns a nil slice. Peek recovers a normalized serverName
-// from the result.
+// An empty name, or one longer than a DNS name can be (253 bytes), returns a
+// nil slice. Peek recovers a normalized serverName from the result.
 func BuildClientHello(serverName string) []byte {
-	if serverName == "" {
+	if serverName == "" || len(serverName) > maxDNSName {
 		return nil
 	}
-	name := []byte(serverName)
-	// A non-SNI extension sits in front of SNI so the parser has to skip it.
-	pointFormats := []byte{0x00, 0x0b, 0x00, 0x02, 0x01, 0x00}
-	listLen := 3 + len(name)
-	extDataLen := 2 + listLen
-	sniExt := make([]byte, 0, 9+len(name))
-	sniExt = append(sniExt,
-		0x00, 0x00,
-		byte(extDataLen>>8), byte(extDataLen),
-		byte(listLen>>8), byte(listLen),
-		sniHostName,
-		byte(len(name)>>8), byte(len(name)),
-	)
-	sniExt = append(sniExt, name...)
-	ext := append(pointFormats, sniExt...)
+	// The name bound keeps every length below well inside its 16-bit field.
+	nameLen := uint16(len(serverName)) // #nosec G115 -- bounded by maxDNSName above
+	be := binary.BigEndian
 
-	body := make([]byte, 0, 40+len(ext))
+	// A non-SNI extension sits in front of SNI so the parser has to skip it.
+	ext := []byte{0x00, 0x0b, 0x00, 0x02, 0x01, 0x00}
+	ext = be.AppendUint16(ext, sniExtension)
+	ext = be.AppendUint16(ext, 2+3+nameLen) // extension_data: server_name_list
+	ext = be.AppendUint16(ext, 3+nameLen)   // server_name_list
+	ext = append(ext, sniHostName)
+	ext = be.AppendUint16(ext, nameLen)
+	ext = append(ext, serverName...)
+	extLen := uint16(len(ext)) // #nosec G115 -- at most 6+9+maxDNSName bytes
+
+	body := make([]byte, 0, 43+len(ext))
 	body = append(body, 0x03, 0x03)
 	body = append(body, make([]byte, 32)...)
-	body = append(body, 0) // empty session id
-	body = append(body, 0x00, 0x02, 0x00, 0x2f)
-	body = append(body, 0x01, 0x00) // null compression
-	body = append(body, byte(len(ext)>>8), byte(len(ext)))
+	body = append(body, 0)                      // empty session id
+	body = append(body, 0x00, 0x02, 0x00, 0x2f) // one cipher suite
+	body = append(body, 0x01, 0x00)             // null compression
+	body = be.AppendUint16(body, extLen)
 	body = append(body, ext...)
+	bodyLen := uint16(len(body)) // #nosec G115 -- at most 43+extLen bytes
 
-	hs := make([]byte, 0, 4+len(body))
-	hs = append(hs, tlsClientHello, byte(len(body)>>16), byte(len(body)>>8), byte(len(body)))
-	hs = append(hs, body...)
-
-	rec := make([]byte, 0, 5+len(hs))
-	rec = append(rec, tlsHandshake, 0x03, 0x01, byte(len(hs)>>8), byte(len(hs)))
-	return append(rec, hs...)
+	rec := make([]byte, 0, 9+len(body))
+	rec = append(rec, tlsHandshake, 0x03, 0x01)
+	rec = be.AppendUint16(rec, 4+bodyLen)
+	rec = append(rec, tlsClientHello, 0) // handshake length, 24 bits
+	rec = be.AppendUint16(rec, bodyLen)
+	return append(rec, body...)
 }
 
 // acceptName reports a normalized DNS name. IP literals and values that are
@@ -511,7 +511,7 @@ func BuildClientHello(serverName string) []byte {
 // the client already supplied.
 func acceptName(raw string) string {
 	name := utils.NormalizeHost(raw)
-	if name == "" || len(name) > 253 {
+	if name == "" || len(name) > maxDNSName {
 		return ""
 	}
 	if _, err := netip.ParseAddr(name); err == nil {

@@ -90,7 +90,11 @@ cannot be distinguished from a real outer hello. A real Encrypted Client Hello
 outer name is only the public placeholder. The earlier encrypted_server_name
 extension still hides the origin. That recovered name is what `domain`,
 `exact`, and `regex` rules match.
-`cidr` rules still match the original IP, and the first matching rule wins.
+`cidr` rules still match the original IP, and the first matching rule wins,
+with one exception: the recovered name comes from the client, so a name rule
+that selects `direct` cannot reach an address that a `cidr` or `exact` address
+rule blocks, because direct dials that address. A `default` block is not an
+address rule, so a list of direct names ahead of `default` block keeps working.
 Anything other than HTTP/1 or TLS keeps the IP as its only route key. Direct
 and blackhole dial the IP the client supplied. Every other egress receives the
 recovered name and resolves it there, so a proxy route uses the Spaceship

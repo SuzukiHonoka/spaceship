@@ -70,7 +70,9 @@ func startTarget(t *testing.T, payload string, reset bool) string {
 	return listener.Addr().String()
 }
 
-func proxyOnce(t *testing.T, target string) (string, error) {
+// proxyOnce relays one session to target and returns what the client read,
+// how its stream ended, and what Proxy itself returned.
+func proxyOnce(t *testing.T, target string) (got string, clientErr, proxyErr error) {
 	t.Helper()
 	proxySide, client := clientPair(t)
 	done := make(chan error, 1)
@@ -83,28 +85,34 @@ func proxyOnce(t *testing.T, target string) (string, error) {
 		done <- f.Proxy(context.Background(), target, make(chan string, 1), proxySide, proxySide)
 	}()
 	_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
-	got, err := io.ReadAll(client)
+	read, clientErr := io.ReadAll(client)
 	select {
-	case <-done:
+	case proxyErr = <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Proxy did not return")
 	}
-	return string(got), err
+	return string(read), clientErr, proxyErr
 }
 
 func TestForwardProxyRelaysTargetResetAsReset(t *testing.T) {
-	_, err := proxyOnce(t, startTarget(t, "partial response", true))
+	_, err, proxyErr := proxyOnce(t, startTarget(t, "partial response", true))
 	if !errors.Is(err, syscall.ECONNRESET) {
 		t.Fatalf("client saw %v, want a connection reset for a truncated response", err)
+	}
+	if proxyErr == nil {
+		t.Fatal("Proxy reported success for a response the target cut short")
 	}
 }
 
 func TestForwardProxyKeepsOrderlyCloseOrderly(t *testing.T) {
-	got, err := proxyOnce(t, startTarget(t, "complete response", false))
+	got, err, proxyErr := proxyOnce(t, startTarget(t, "complete response", false))
 	if err != nil {
 		t.Fatalf("client saw %v, want a clean EOF", err)
 	}
 	if got != "complete response" {
 		t.Fatalf("client read %q", got)
+	}
+	if proxyErr != nil {
+		t.Fatalf("Proxy returned %v for a complete session", proxyErr)
 	}
 }

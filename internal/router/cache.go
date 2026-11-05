@@ -65,8 +65,10 @@ func GetRoute(dst string) (transport.Transport, error) {
 // to reach and name is a hostname recovered from that connection's first
 // flight. CIDR rules match the IP. Exact, domain, and regex rules match the
 // name, and still match the IP so a literal address in those rules keeps
-// working. The first matching rule wins. An empty name, or a name that is
-// itself an IP, selects the same route as GetRoute(dialHost).
+// working. The first matching rule wins, except that a name selecting direct
+// cannot open an address a CIDR or exact-address rule blocks (see
+// observedEgress). An empty name, or a name that is itself an IP, selects the
+// same route as GetRoute(dialHost).
 func GetRouteObserved(dialHost, name string) (transport.Transport, error) {
 	ipKey := normalizeRouteKey(dialHost)
 	nameKey := normalizeRouteKey(name)
@@ -103,9 +105,7 @@ func MatchEgress(dialHost, name string) (Egress, error) {
 	if egress, ok := table.Get(key); ok {
 		return egress, nil
 	}
-	return routesCache.findEgress(key, nameKey, func(route *Route) bool {
-		return matchObserved(route, ipKey, nameKey)
-	})
+	return routesCache.observedEgress(key, ipKey, nameKey)
 }
 
 func matchEgress(key string) (Egress, error) {
