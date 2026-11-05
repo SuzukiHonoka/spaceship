@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux && !android
 
 package tun
 
@@ -321,22 +321,27 @@ func runKernelTUNIntegrationHelper(t *testing.T) {
 		assertKernelResolverNetwork(t, resolver.knownQueries, "udp")
 	})
 
-	t.Run("non-DNS UDP is rejected", func(t *testing.T) {
+	// Port 123 is a general UDP flow: it must reach the server route as a
+	// UDP target and carry the fixture's reply back through the TUN.
+	t.Run("IPv4 general UDP through authenticated RPC", func(t *testing.T) {
 		conn, err := net.DialTimeout("udp4", "198.51.100.20:123", 3*time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer func() { _ = conn.Close() }()
-		_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
-		_, writeErr := conn.Write([]byte("unsupported"))
-		var readErr error
-		if writeErr == nil {
-			var response [1]byte
-			_, readErr = conn.Read(response[:])
+		_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+		if _, err := conn.Write([]byte("ping")); err != nil {
+			t.Fatal(err)
 		}
-		if writeErr == nil && readErr == nil {
-			t.Fatal("non-DNS UDP unexpectedly returned a response")
+		response := make([]byte, 16)
+		n, err := conn.Read(response)
+		if err != nil {
+			t.Fatal(err)
 		}
+		if got := string(response[:n]); got != "PING" {
+			t.Fatalf("response = %q, want PING", got)
+		}
+		assertKernelTarget(t, targetDialer.targets, "udp", "198.51.100.20:123")
 	})
 
 	cancel()

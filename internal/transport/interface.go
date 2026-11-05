@@ -47,6 +47,15 @@ type ContextPacketTargetDialer interface {
 	DialPacketTargetContext(ctx context.Context, network, addr string) (net.PacketConn, net.Addr, error)
 }
 
+// PacketReader is an optional net.PacketConn extension for long-lived relays.
+// ReadPacket blocks for one datagram, honoring the read deadline, without the
+// caller lending a buffer while it waits. The payload is never truncated and
+// belongs to the caller. A relay with thousands of idle sessions then holds no
+// per-session receive buffer.
+type PacketReader interface {
+	ReadPacket() ([]byte, net.Addr, error)
+}
+
 // PacketTargetDialer extends PacketDialer for transports that resolve a packet
 // target locally. Returning the address selected while opening the socket keeps
 // address-family selection and the destination address consistent, and avoids

@@ -29,6 +29,14 @@ type Launcher struct {
 	skipInternalLogging bool
 	stopOnce            sync.Once
 
+	// runCtx is set for the lifetime of a running client. ServeTUN uses it so
+	// an attached device stops when the client context is canceled.
+	tunMu        sync.Mutex
+	runCtx       context.Context
+	blockIPv6DNS bool
+	tunEmbedded  bool
+	tunSess      *tunSession
+
 	forceExitTimeout time.Duration
 	forceExitMu      sync.Mutex
 	forceExitTimer   *time.Timer
@@ -100,12 +108,14 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 	// before any frontend starts. Checking here rather than in Apply keeps
 	// config validation privilege-free while still turning a missing
 	// CAP_NET_ADMIN into one startup error instead of an EPERM on every dial.
-	// Apply already dropped a defaulted mark this process cannot set, so anything
-	// still installed is a stated requirement: TUN's, or an explicit
-	// redirect.bypass_mark. Fail with one clear error rather than letting it
-	// surface as an EPERM on every outbound dial.
-	if err := transport.VerifyBypassMark(); err != nil {
-		return fmt.Errorf("apply outbound socket mark %#x: %w", transport.BypassMark(), err)
+	// Apply already dropped a defaulted mark this process cannot set, so a
+	// non-zero mark still installed is a stated requirement: Linux TUN's, an
+	// explicit Android TUN mark, or an explicit redirect.bypass_mark. A zero
+	// mark is success. Android VpnService TUN uses that to leave SO_MARK off.
+	if mark := transport.BypassMark(); mark != 0 {
+		if err := transport.VerifyBypassMark(); err != nil {
+			return fmt.Errorf("apply outbound socket mark %#x: %w", mark, err)
+		}
 	}
 
 	// destroy any left connections
@@ -131,6 +141,10 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 	}
 
 	errGroup, ctx := errgroup.WithContext(ctx)
+	// Publish the client before opening TUN. A dynamic attachment has to fail
+	// while this launch already owns one, including if that open fails later.
+	l.beginRun(ctx, cfg.BlockIPv6DNS, cfg.TUN != nil)
+	defer l.clearRunState()
 
 	// Create the Linux gVisor TUN frontend before starting the other listeners so
 	// a device/configuration failure is atomic from the operator's perspective.

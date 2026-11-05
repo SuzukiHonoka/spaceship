@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 )
 
@@ -21,6 +22,8 @@ type packetAddr string
 
 func (a packetAddr) Network() string { return "udp" }
 func (a packetAddr) String() string  { return string(a) }
+
+var _ transport.PacketReader = (*StreamPacketConn)(nil)
 
 // StreamPacketConn wraps a gRPC bidirectional stream and implements net.PacketConn.
 // It assumes that each write sends a single ProxySRC payload message and
@@ -90,6 +93,36 @@ func (c *StreamPacketConn) readLoop() {
 }
 
 func (c *StreamPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+	payload, err := c.nextPayload()
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(payload) == 0 {
+		return 0, c.peerAddr, nil
+	}
+
+	n = copy(p, payload)
+	if n < len(payload) {
+		return n, c.peerAddr, io.ErrShortBuffer
+	}
+
+	return n, c.peerAddr, nil
+}
+
+// ReadPacket implements transport.PacketReader. It returns the payload of the
+// received message itself, so a waiting caller holds no buffer and nothing is
+// copied. Each Recv decodes a fresh message, so the slice is not reused.
+func (c *StreamPacketConn) ReadPacket() ([]byte, net.Addr, error) {
+	payload, err := c.nextPayload()
+	if err != nil {
+		return nil, nil, err
+	}
+	return payload, c.peerAddr, nil
+}
+
+// nextPayload waits for the next Session datagram, skipping the handshake
+// acknowledgement, and maps stream endings to net.ErrClosed.
+func (c *StreamPacketConn) nextPayload() ([]byte, error) {
 	c.readMu.Lock()
 	defer c.readMu.Unlock()
 
@@ -97,21 +130,21 @@ func (c *StreamPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 		var msg recvMsg
 		select {
 		case <-c.ctx.Done():
-			return 0, nil, net.ErrClosed
+			return nil, net.ErrClosed
 		case <-c.rdeadline.wait():
-			return 0, nil, os.ErrDeadlineExceeded
+			return nil, os.ErrDeadlineExceeded
 		case received, ok := <-c.recvCh:
 			if !ok {
-				return 0, nil, net.ErrClosed
+				return nil, net.ErrClosed
 			}
 			msg = received
 		}
 
 		if msg.err != nil {
 			if errors.Is(msg.err, io.EOF) || errors.Is(msg.err, context.Canceled) {
-				return 0, nil, net.ErrClosed
+				return nil, net.ErrClosed
 			}
-			return 0, nil, msg.err
+			return nil, msg.err
 		}
 
 		switch msg.resp.Status {
@@ -121,22 +154,12 @@ func (c *StreamPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 			continue
 		case proto.ProxyStatus_Session:
 		case proto.ProxyStatus_EOF:
-			return 0, nil, net.ErrClosed
+			return nil, net.ErrClosed
 		default:
-			return 0, nil, errors.New("remote proxy returned error status")
+			return nil, errors.New("remote proxy returned error status")
 		}
 
-		payload := msg.resp.GetPayload()
-		if len(payload) == 0 {
-			return 0, c.peerAddr, nil
-		}
-
-		n = copy(p, payload)
-		if n < len(payload) {
-			return n, c.peerAddr, io.ErrShortBuffer
-		}
-
-		return n, c.peerAddr, nil
+		return msg.resp.GetPayload(), nil
 	}
 }
 
