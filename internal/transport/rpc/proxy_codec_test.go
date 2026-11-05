@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	proxy "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
 	"google.golang.org/grpc/mem"
 	"google.golang.org/protobuf/proto"
@@ -427,7 +428,11 @@ var codecBenchSizes = []int{16, 64, 256, 1024, 8192, 16384, 256 * 1024}
 
 func BenchmarkProxyCodec_MarshalPayload(b *testing.B) {
 	var c proxyCodec
-	pool := BufferPool()
+	// The pool DialOptions and ServerOptions install: it does not zero
+	// buffers and has a tier for the transport buffer. BufferPool falls back
+	// to gRPC's default pool until one of them runs, and that pool clears
+	// every buffer it hands out, which is not what the send path pays.
+	pool := payloadBufferPool()
 	for _, size := range codecBenchSizes {
 		b.Run(fmt.Sprintf("%d", size), func(b *testing.B) {
 			src := &proxy.ProxySRC{
@@ -435,6 +440,10 @@ func BenchmarkProxyCodec_MarshalPayload(b *testing.B) {
 			}
 			payload := src.HeaderOrPayload.(*proxy.ProxySRC_Payload)
 			b.Cleanup(func() { ReleaseMessageBuffers(src) })
+
+			// Forwarders take a whole transport buffer for every read and
+			// offer only the bytes it returned.
+			readSize := max(size, transport.GetBufferSize())
 
 			b.SetBytes(int64(size))
 			b.ReportAllocs()
@@ -448,7 +457,7 @@ func BenchmarkProxyCodec_MarshalPayload(b *testing.B) {
 			// reads the memory statistics.
 			b.ResetTimer()
 			for range b.N {
-				buf, read := AcquirePayloadBuffer(pool, size)
+				buf, read := AcquirePayloadBuffer(pool, readSize)
 				payload.Payload = read[:size]
 				OfferPayloadBuffer(src, buf, size, pool)
 				got, err := c.Marshal(src)
