@@ -339,7 +339,9 @@ func (s *Service) proxyUDP(session *udpSession, tun udpTUNSide, id stack.Transpo
 }
 
 func (s *Service) routeUDP(ip string) (transport.Transport, error) {
-	fn := s.getResolveRoute()
+	s.hooksMu.RLock()
+	fn := s.resolveRoute
+	s.hooksMu.RUnlock()
 	if fn == nil {
 		return nil, errors.New("tun: no route resolver")
 	}
