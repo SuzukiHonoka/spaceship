@@ -41,7 +41,8 @@ func startSpaceship(bin, name, configPath, logDir string, extraArgs ...string) (
 	return &proc{name: name, cmd: cmd, log: logPath}, nil
 }
 
-// stop sends SIGTERM and reports how long the process took to exit.
+// stop sends SIGTERM and reports how long the process took to exit. A
+// graceful stop exits 0, so any other exit status is reported as an error.
 func (p *proc) stop(budget time.Duration) (time.Duration, error) {
 	start := time.Now()
 	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
@@ -50,14 +51,18 @@ func (p *proc) stop(budget time.Duration) (time.Duration, error) {
 	done := make(chan error, 1)
 	go func() { done <- p.cmd.Wait() }()
 	select {
-	case <-done:
-		return time.Since(start), nil
+	case err := <-done:
+		elapsed := time.Since(start)
+		if err != nil {
+			return elapsed, fmt.Errorf("%s exited uncleanly after SIGTERM: %w", p.name, err)
+		}
+		return elapsed, nil
 	case <-time.After(budget):
 		_ = p.cmd.Process.Signal(syscall.SIGQUIT)
 		time.Sleep(2 * time.Second)
 		_ = p.cmd.Process.Kill()
-		<-done
-		return time.Since(start), fmt.Errorf("%s did not exit within %s", p.name, budget)
+		waitErr := <-done
+		return time.Since(start), fmt.Errorf("%s did not exit within %s (%v)", p.name, budget, waitErr)
 	}
 }
 
