@@ -393,12 +393,6 @@ func releaseSlot(slots chan struct{}) {
 	<-slots
 }
 
-func (s *Service) getResolveRoute() routeResolver {
-	s.hooksMu.RLock()
-	defer s.hooksMu.RUnlock()
-	return s.resolveRoute
-}
-
 func (s *Service) setResolveRoute(fn routeResolver) {
 	s.hooksMu.Lock()
 	defer s.hooksMu.Unlock()

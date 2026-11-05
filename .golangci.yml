@@ -1,0 +1,15 @@
+version: "2"
+
+linters:
+  exclusions:
+    rules:
+      # errcheck v1.30 reports a bare receive from a channel of errors, such as
+      # `<-done` after cancel() or `case <-errCh:` in a select with a timeout.
+      # That receive waits for a goroutine to exit after its work was stopped
+      # on purpose, so the error it carries is expected. staticcheck S1005
+      # rejects the `_ = <-done` spelling errcheck would accept, so the two
+      # cannot both be satisfied. A receive whose error matters is assigned
+      # and checked, and assignments are not covered by this rule.
+      - linters:
+          - errcheck
+        source: '^\s*(case\s+)?<-[\w.]+:?\s*(//.*)?$'

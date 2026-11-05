@@ -32,7 +32,7 @@ func prepareAdmitPool(t *testing.T, addr string, probe time.Duration) {
 	earlyAdmitProbeNanos.Store(int64(probe))
 }
 
-func admitFor(t *testing.T, ctx context.Context) (transport.AdmittedSession, error, time.Duration) {
+func admitFor(t *testing.T, ctx context.Context) (transport.AdmittedSession, time.Duration, error) {
 	t.Helper()
 	c, err := New()
 	if err != nil {
@@ -48,7 +48,7 @@ func admitFor(t *testing.T, ctx context.Context) (transport.AdmittedSession, err
 		_ = session.Close()
 		t.Fatalf("Admit returned a session and error %v", err)
 	}
-	return session, err, elapsed
+	return session, elapsed, err
 }
 
 func TestAdmitLegacyServerProbeAndCache(t *testing.T) {
@@ -56,7 +56,7 @@ func TestAdmitLegacyServerProbeAndCache(t *testing.T) {
 	addr := startStubProxy(t)
 	prepareAdmitPool(t, addr, probe)
 
-	session, err, elapsed := admitFor(t, nil)
+	session, elapsed, err := admitFor(t, nil)
 	if session != nil {
 		t.Fatal("legacy Admit returned a session")
 	}
@@ -76,7 +76,7 @@ func TestAdmitLegacyServerProbeAndCache(t *testing.T) {
 		t.Fatal("legacy probe did not cache the result")
 	}
 
-	_, err, elapsed = admitFor(t, nil)
+	_, elapsed, err = admitFor(t, nil)
 	if !errors.Is(err, ErrEarlyAdmitUnavailable) {
 		t.Fatalf("cached Admit error = %v, want ErrEarlyAdmitUnavailable", err)
 	}
@@ -106,7 +106,7 @@ func TestAdmitLegacyServerProbeAndCache(t *testing.T) {
 		t.Fatalf("Init changed the probe timeout to %s", got)
 	}
 
-	_, err, elapsed = admitFor(t, nil)
+	_, elapsed, err = admitFor(t, nil)
 	if !errors.Is(err, ErrEarlyAdmitUnavailable) {
 		t.Fatalf("Admit after reload error = %v, want ErrEarlyAdmitUnavailable", err)
 	}
@@ -149,7 +149,7 @@ func TestAdmitEarlyHeaderReturnsSession(t *testing.T) {
 	addr := startProxyServer(t, &headerFirstProxy{})
 	prepareAdmitPool(t, addr, probe)
 
-	session, err, elapsed := admitFor(t, nil)
+	session, elapsed, err := admitFor(t, nil)
 	if err != nil {
 		t.Fatalf("Admit error = %v after %s", err, elapsed)
 	}
@@ -192,7 +192,7 @@ func TestAdmitFastErrorDoesNotMarkLegacy(t *testing.T) {
 	prepareAdmitPool(t, addr, probe)
 
 	for i := 0; i < 2; i++ {
-		_, err, elapsed := admitFor(t, nil)
+		_, elapsed, err := admitFor(t, nil)
 		if errors.Is(err, ErrEarlyAdmitUnavailable) {
 			t.Fatalf("call %d treated a fast RPC error as legacy admission", i+1)
 		}
@@ -218,7 +218,7 @@ func TestAdmitParentCancelDoesNotMarkLegacy(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err, elapsed := admitFor(t, ctx)
+	_, elapsed, err := admitFor(t, ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("already-canceled Admit error = %v, want context.Canceled", err)
 	}
@@ -232,7 +232,7 @@ func TestAdmitParentCancelDoesNotMarkLegacy(t *testing.T) {
 	ctx, cancel = context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	time.AfterFunc(50*time.Millisecond, cancel)
-	_, err, elapsed = admitFor(t, ctx)
+	_, elapsed, err = admitFor(t, ctx)
 	if errors.Is(err, ErrEarlyAdmitUnavailable) {
 		t.Fatalf("parent cancel treated as legacy after %s", elapsed)
 	}
