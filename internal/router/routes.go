@@ -35,28 +35,78 @@ func (r Routes) GetRoute(dst string) (transport.Transport, error) {
 // that egress under cacheKey. errKey is the destination named in the error
 // when nothing matches. The caller holds routesMu for reading.
 func (r Routes) findEgress(cacheKey, errKey string, match func(*Route) bool) (Egress, error) {
+	egress, err := r.firstEgress(errKey, match)
+	if err != nil {
+		return "", err
+	}
+	table.Set(cacheKey, egress)
+	return egress, nil
+}
+
+// firstEgress returns the destination of the first route for which match
+// reports true. The caller holds routesMu for reading.
+func (r Routes) firstEgress(errKey string, match func(*Route) bool) (Egress, error) {
 	for i, route := range r {
 		if route == nil {
 			return "", fmt.Errorf("route %d is nil", i)
 		}
 		if match(route) {
-			table.Set(cacheKey, route.Destination)
 			return route.Destination, nil
 		}
 	}
 	return "", fmt.Errorf("route not found: %s -> nil", errKey)
 }
 
-// getObserved matches name rules against nameKey and CIDR rules against ipKey.
-// The caller holds routesMu for reading.
+// getObserved is the transport observedEgress selects. The caller holds
+// routesMu for reading.
 func (r Routes) getObserved(cacheKey, ipKey, nameKey string) (transport.Transport, error) {
-	egress, err := r.findEgress(cacheKey, nameKey, func(route *Route) bool {
-		return matchObserved(route, ipKey, nameKey)
-	})
+	egress, err := r.observedEgress(cacheKey, ipKey, nameKey)
 	if err != nil {
 		return nil, err
 	}
 	return egress.GetTransport()
+}
+
+// observedEgress matches name rules against nameKey and CIDR rules against
+// ipKey, first match winning, and caches the result under cacheKey. The caller
+// holds routesMu for reading.
+//
+// Direct dials the IP the client supplied, not the recovered name, and that
+// name is whatever the client chose to send. So a name rule that selects
+// direct cannot open an address that a CIDR or exact-address rule blocks:
+// otherwise any client could reach a blocked IP by sending the name of an
+// earlier direct rule. The default rule says nothing about the address, so an
+// allowlist of direct names in front of a default block keeps working. Proxy
+// and forward dial the name itself and are unaffected.
+func (r Routes) observedEgress(cacheKey, ipKey, nameKey string) (Egress, error) {
+	egress, err := r.firstEgress(nameKey, func(route *Route) bool {
+		return matchObserved(route, ipKey, nameKey)
+	})
+	if err != nil {
+		return "", err
+	}
+	if egress == EgressDirect && r.addressBlocked(ipKey) {
+		egress = EgressBlock
+	}
+	table.Set(cacheKey, egress)
+	return egress, nil
+}
+
+// addressBlocked reports whether the first CIDR or exact rule that matches the
+// address ipKey blocks it. The caller holds routesMu for reading.
+func (r Routes) addressBlocked(ipKey string) bool {
+	for _, route := range r {
+		if route == nil {
+			continue
+		}
+		switch route.MatchType {
+		case TypeCIDR, TypeExact:
+			if route.Match(ipKey) {
+				return route.Destination == EgressBlock
+			}
+		}
+	}
+	return false
 }
 
 // decidedIPEgress is the egress an IP already selects when no earlier name

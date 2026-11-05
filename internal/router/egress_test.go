@@ -321,3 +321,104 @@ func TestAnyRouteSupportsUDP(t *testing.T) {
 		})
 	}
 }
+
+// TestRecoveredNameCannotOpenBlockedAddress guards against a client reaching a
+// blocked IP by sending the name of an earlier direct rule in its first flight:
+// direct dials the client's IP, not the name.
+func TestRecoveredNameCannotOpenBlockedAddress(t *testing.T) {
+	const (
+		ip      = "203.0.113.10"
+		allowed = "allowed.example"
+	)
+	tests := []struct {
+		name   string
+		routes Routes
+		want   Egress
+	}{
+		{
+			name: "cidr block outranks a direct name rule",
+			routes: Routes{
+				{MatchType: TypeExact, Sources: []string{allowed}, Destination: EgressDirect},
+				{MatchType: TypeCIDR, Sources: []string{"203.0.113.0/24"}, Destination: EgressBlock},
+			},
+			want: EgressBlock,
+		},
+		{
+			name: "exact address block outranks a direct name rule",
+			routes: Routes{
+				{MatchType: TypeExact, Sources: []string{allowed}, Destination: EgressDirect},
+				{MatchType: TypeExact, Sources: []string{ip}, Destination: EgressBlock},
+			},
+			want: EgressBlock,
+		},
+		{
+			name: "an earlier address rule that allows the IP still decides",
+			routes: Routes{
+				{MatchType: TypeExact, Sources: []string{allowed}, Destination: EgressDirect},
+				{MatchType: TypeCIDR, Sources: []string{ip + "/32"}, Destination: EgressDirect},
+				{MatchType: TypeCIDR, Sources: []string{"203.0.113.0/24"}, Destination: EgressBlock},
+			},
+			want: EgressDirect,
+		},
+		{
+			name: "an unblocked address goes direct by name",
+			routes: Routes{
+				{MatchType: TypeExact, Sources: []string{allowed}, Destination: EgressDirect},
+				{MatchType: TypeCIDR, Sources: []string{"198.51.100.0/24"}, Destination: EgressBlock},
+				{MatchType: TypeDefault, Destination: EgressProxy},
+			},
+			want: EgressDirect,
+		},
+		{
+			// An allowlist of names in front of a default block is not a
+			// statement about any address, so it keeps admitting its names.
+			name: "default block does not refuse an allowlisted name",
+			routes: Routes{
+				{MatchType: TypeExact, Sources: []string{allowed}, Destination: EgressDirect},
+				{MatchType: TypeDefault, Destination: EgressBlock},
+			},
+			want: EgressDirect,
+		},
+		{
+			// Proxy dials the name, so the blocked address is never reached.
+			name: "proxy by name is unaffected",
+			routes: Routes{
+				{MatchType: TypeExact, Sources: []string{allowed}, Destination: EgressProxy},
+				{MatchType: TypeCIDR, Sources: []string{"203.0.113.0/24"}, Destination: EgressBlock},
+			},
+			want: EgressProxy,
+		},
+	}
+	t.Cleanup(func() { _ = SetRoutes(Routes{{MatchType: TypeDefault, Destination: EgressDirect}}) })
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := SetRoutes(tc.routes); err != nil {
+				t.Fatal(err)
+			}
+			// The second lookup is served from the route cache.
+			for range 2 {
+				got, err := MatchEgress(ip, allowed)
+				if err != nil {
+					t.Fatalf("MatchEgress() error = %v", err)
+				}
+				if got != tc.want {
+					t.Fatalf("MatchEgress() = %s, want %s", got, tc.want)
+				}
+			}
+			if tc.want == EgressProxy {
+				return // GetRouteObserved would check a tunnel out of the pool.
+			}
+			tr, err := GetRouteObserved(ip, allowed)
+			if tc.want == EgressBlock {
+				if !errors.Is(err, transport.ErrBlocked) {
+					t.Fatalf("GetRouteObserved() = %v, %v; want ErrBlocked", tr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("GetRouteObserved() error = %v", err)
+			}
+			_ = tr.Close()
+		})
+	}
+}

@@ -259,6 +259,82 @@ func TestHandleConnectIP_SniffedNameReplayedToOriginalIP(t *testing.T) {
 	}
 }
 
+// TestHandleConnectIP_SniffedNameCannotOpenBlockedAddress sends the name of a
+// direct rule to an address a later CIDR rule blocks. Direct would dial that
+// address, so the session must end without reaching it.
+func TestHandleConnectIP_SniffedNameCannotOpenBlockedAddress(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	reached := make(chan struct{}, 1)
+	go func() {
+		c, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			return
+		}
+		_ = c.Close()
+		reached <- struct{}{}
+	}()
+
+	if err := router.SetRoutes(router.Routes{
+		{MatchType: router.TypeExact, Sources: []string{"sniff.example"}, Destination: router.EgressDirect},
+		{MatchType: router.TypeCIDR, Sources: []string{"127.0.0.0/8"}, Destination: router.EgressBlock},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = router.SetRoutes(router.Routes{{MatchType: router.TypeDefault, Destination: router.EgressDirect}})
+	})
+
+	dst := ln.Addr().(*net.TCPAddr)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := New(ctx, &Config{})
+	serverSide, clientSide := net.Pipe()
+	defer func() { _ = serverSide.Close() }()
+	defer func() { _ = clientSide.Close() }()
+
+	req := &Request{
+		Command:  ConnectCommand,
+		DestAddr: &AddrSpec{IP: dst.IP, Port: uint16(dst.Port)},
+		bufConn:  serverSide,
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.handleConnect(ctx, serverSide, req)
+	}()
+
+	_ = clientSide.SetDeadline(time.Now().Add(3 * time.Second))
+	head := make([]byte, 10)
+	if _, err := io.ReadFull(clientSide, head); err != nil {
+		t.Fatalf("read reply: %v", err)
+	}
+	// The name rule could still win, so the IP alone does not refuse in the
+	// reply: the decision waits for the flight.
+	if head[1] != successReply {
+		t.Fatalf("reply code = %d, want success", head[1])
+	}
+	if _, err := clientSide.Write(sniff.BuildClientHello("sniff.example")); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("handleConnect() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("handleConnect() did not return")
+	}
+	select {
+	case <-reached:
+		t.Fatal("a sniffed name opened an address a CIDR rule blocks")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 func TestHandleConnect_SuccessDirect(t *testing.T) {
 	if err := router.SetRoutes(router.Routes{
 		{MatchType: router.TypeDefault, Destination: router.EgressDirect},
