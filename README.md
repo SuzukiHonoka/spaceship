@@ -432,6 +432,45 @@ SPACESHIP_TUN_INTEGRATION=1 \
 go test -count=1 -run '^TestKernelTUNIntegration$' ./internal/tun
 ```
 
+## Benchmarks
+
+Measured in a Linux container (`go1.27.4`, `linux/arm64`, 12 vCPU on Apple M6, `-benchtime=200ms`) over loopback gRPC (`h2c`):
+
+### End-to-End gRPC Tunnel (`./internal/transport/rpc`)
+
+| Benchmark | Latency | Throughput | Alloc / op |
+|---|---:|---:|---:|
+| `EndToEnd_TCPTunnel/16B` | 22.6 µs | 44.3k ops/s | 1,283 B / 19 allocs |
+| `EndToEnd_TCPTunnel/1KiB` | 24.2 µs | 84.8 MB/s | 1,220 B / 13 allocs |
+| `EndToEnd_TCPTunnel/16KiB` | 35.5 µs | 923.6 MB/s | 1,314 B / 17 allocs |
+| `EndToEnd_TCPTunnel/1MiB` | 351.3 µs | **5,969 MB/s** | 26.0 KiB / 79 allocs |
+| `EndToEnd_TCPSessionSetup` | 121.8 µs (p50 101 µs) | — | 36.8 KiB / 346 allocs |
+| `EndToEnd_UDPTunnel/64B` | 25.6 µs (p50 24 µs) | 5.0 MB/s | 1,499 B / 25 allocs |
+| `EndToEnd_UDPTunnel/1400B` | 23.6 µs (p50 24 µs) | 118.9 MB/s | 2,798 B / 15 allocs |
+| `EndToEnd_UDPTunnel/8KiB` | 34.9 µs (p50 32 µs) | 468.9 MB/s | 12.2 KiB / 15 allocs |
+| `EndToEnd_DNSExchange/serial` | 62.7 µs | — | 23.1 KiB / 242 allocs |
+| `EndToEnd_DNSExchange/parallel` | 25.8 µs | — | 21.9 KiB / 242 allocs |
+
+### Hot-Path Microbenchmarks
+
+| Component | Benchmark | Time / op | Alloc / op |
+|---|---|---:|---:|
+| Codec | `ProxyCodec_MarshalPayload` (16 B – 256 KiB) | 57.5 – 94.0 ns | 16 B / 1 alloc |
+| Codec | `ProxyCodec_UnmarshalPayload` (16 B – 256 KiB) | 13.3 – 15.7 ns | **0 B / 0 allocs** |
+| Pool | `ConnQueueGetConnBusy` / `Parallel` | 52.7 ns / 223.0 ns | 64 B / 2 allocs |
+| Sniffer | `Classify/sniff-nonhttp-1400` | 325.9 ns (3.07M pkt/s) | 1,637 B / 3 allocs |
+| Sniffer | `Classify/sniff-tls` / `sniff-http` | 418.0 ns / 461.3 ns | 1,701 B (5) / 1,733 B (6) |
+| Router | `RouteMatchCIDR` (2,048 prefixes, 2 lookups/op) | 38.3 ns | **0 B / 0 allocs** |
+
+Reproduce locally:
+
+```shell
+go test -run='^$' -bench='^Benchmark(ProxyCodec_(MarshalPayload|UnmarshalPayload)|EndToEnd_(TCPTunnel|TCPSessionSetup|UDPTunnel|DNSExchange))$' -benchtime=200ms ./internal/transport/rpc
+go test -run='^$' -bench='^BenchmarkConnQueueGetConn(Parallel|Busy)?$' -benchtime=200ms ./internal/transport/rpc/client
+go test -run='^$' -bench='^BenchmarkClassify$' -benchtime=200ms ./internal/sniff
+go test -run='^$' -bench='^BenchmarkRouteMatchCIDR$' -benchtime=200ms ./internal/router
+```
+
 ## Nginx Reserve Proxy Configuration
 
 ```nginx
