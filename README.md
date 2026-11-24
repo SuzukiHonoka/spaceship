@@ -434,38 +434,76 @@ go test -count=1 -run '^TestKernelTUNIntegration$' ./internal/tun
 
 ## Benchmarks
 
-Measured in a Linux container (`go1.27.4`, `linux/arm64`, 12 vCPU on Apple M6, `-benchtime=200ms`) over loopback gRPC (`h2c`):
+Measured in a Linux container (`go1.27.4`, `linux/arm64`, 12 vCPU on Apple M6, `-benchtime=200ms`) over loopback. All throughput numbers reflect end-to-end client-to-server-to-target traffic through Spaceship's transport stack.
 
-### End-to-End gRPC Tunnel (`./internal/transport/rpc`)
+### Bulk TCP Streaming (Continuous 1 MiB Transfer)
 
-| Benchmark | Latency | Throughput | Alloc / op |
+| Transport | Throughput | Per-1MiB Time |
+|---|---:|---:|
+| Direct TCP (Linux `splice`) | **14,493 MB/s** | 144.7 µs |
+| gRPC Tunnel (`h2c`) | **7,126 MB/s** | 294.3 µs |
+| gRPC Tunnel (`TLS 1.3 / h2`) | **3,500 MB/s** | 599.2 µs |
+
+### Bidirectional TCP Tunnel Speed & Latency by Payload Size
+
+Single long-lived session echoing chunks of the given size (round-trip wire volume = `2 × payload size`):
+
+| Payload Size | Direct TCP | gRPC Tunnel (`h2c`) | gRPC Tunnel (`TLS 1.3 / h2`) |
 |---|---:|---:|---:|
-| `EndToEnd_TCPTunnel/16B` | 22.6 µs | 44.3k ops/s | 1,283 B / 19 allocs |
-| `EndToEnd_TCPTunnel/1KiB` | 24.2 µs | 84.8 MB/s | 1,220 B / 13 allocs |
-| `EndToEnd_TCPTunnel/16KiB` | 35.5 µs | 923.6 MB/s | 1,314 B / 17 allocs |
-| `EndToEnd_TCPTunnel/1MiB` | 351.3 µs | **5,969 MB/s** | 26.0 KiB / 79 allocs |
-| `EndToEnd_TCPSessionSetup` | 121.8 µs (p50 101 µs) | — | 36.8 KiB / 346 allocs |
-| `EndToEnd_UDPTunnel/64B` | 25.6 µs (p50 24 µs) | 5.0 MB/s | 1,499 B / 25 allocs |
-| `EndToEnd_UDPTunnel/1400B` | 23.6 µs (p50 24 µs) | 118.9 MB/s | 2,798 B / 15 allocs |
-| `EndToEnd_UDPTunnel/8KiB` | 34.9 µs (p50 32 µs) | 468.9 MB/s | 12.2 KiB / 15 allocs |
-| `EndToEnd_DNSExchange/serial` | 62.7 µs | — | 23.1 KiB / 242 allocs |
-| `EndToEnd_DNSExchange/parallel` | 25.8 µs | — | 21.9 KiB / 242 allocs |
+| **16 B** | 3.65 MB/s (8.8 µs) | 1.47 MB/s (21.8 µs) | 1.25 MB/s (25.6 µs) |
+| **64 B** | 15.59 MB/s (8.2 µs) | 5.66 MB/s (22.6 µs) | 5.33 MB/s (24.0 µs) |
+| **256 B** | 53.03 MB/s (9.7 µs) | 23.57 MB/s (21.7 µs) | 21.23 MB/s (24.1 µs) |
+| **1 KiB** | 181.8 MB/s (11.3 µs) | 91.1 MB/s (22.5 µs) | 91.3 MB/s (22.4 µs) |
+| **8 KiB** | 1,047 MB/s (15.6 µs) | 622.0 MB/s (26.3 µs) | 416.0 MB/s (39.4 µs) |
+| **16 KiB** | 1,130 MB/s (29.0 µs) | 855.1 MB/s (38.3 µs) | 600.6 MB/s (54.6 µs) |
+| **1 MiB** | 6,620 MB/s (316.8 µs) | **4,572 MB/s** (458.6 µs) | **2,895 MB/s** (724.4 µs) |
 
-### Hot-Path Microbenchmarks
+- **TCP session setup** (open stream + target dial + accept): **121.8 µs** avg (p50 101.3 µs).
 
-| Component | Benchmark | Time / op | Alloc / op |
+### Concurrent TCP Scaling (`h2c`, 32 KiB Chunks)
+
+| Concurrent Sessions | Aggregate Throughput | Per-Op Latency |
+|---:|---:|---:|
+| 1 | 2,021 MB/s | 32.4 µs |
+| 8 | 3,368 MB/s | 19.5 µs |
+| 32 | **5,672 MB/s** | 11.6 µs |
+
+### Buffer Size Tuning (`"buffer"` Config in KiB, `h2c`)
+
+| Buffer Size | 1-Session Bulk (1 MiB) | 8-Session Concurrent (32 KiB) | Bulk Allocs / MiB |
+|---:|---:|---:|---:|
+| 16 KiB | 3,732 MB/s | 3,266 MB/s | 928 |
+| 64 KiB | 5,019 MB/s | 3,599 MB/s | 253 |
+| **256 KiB (default)** | **4,707 MB/s** | **3,642 MB/s** | **78** |
+| 1024 KiB | 4,940 MB/s | 3,689 MB/s | 36 |
+| 4095 KiB | 4,917 MB/s | 3,184 MB/s | 37 |
+
+### UDP Tunnel & DNS over gRPC (`h2c`)
+
+| Workload | Throughput | Latency (avg / p50) | Allocs / op |
+|---|---:|---:|---:|
+| UDP Tunnel — **64 B** | 5.0 MB/s | 25.6 µs / 23.7 µs | 25 |
+| UDP Tunnel — **512 B** | 43.6 MB/s | 23.5 µs / 23.8 µs | 25 |
+| UDP Tunnel — **1,400 B** (MTU) | 118.9 MB/s | 23.6 µs / 24.4 µs | 15 |
+| UDP Tunnel — **8 KiB** | 468.9 MB/s | 34.9 µs / 32.2 µs | 15 |
+| DNS Exchange — serial | — | 62.7 µs | 242 |
+| DNS Exchange — parallel | — | 25.8 µs | 242 |
+
+### Internal Hot-Path Microbenchmarks
+
+| Component | Operation | Time / op | Alloc / op |
 |---|---|---:|---:|
-| Codec | `ProxyCodec_MarshalPayload` (16 B – 256 KiB) | 57.5 – 94.0 ns | 16 B / 1 alloc |
-| Codec | `ProxyCodec_UnmarshalPayload` (16 B – 256 KiB) | 13.3 – 15.7 ns | **0 B / 0 allocs** |
-| Pool | `ConnQueueGetConnBusy` / `Parallel` | 52.7 ns / 223.0 ns | 64 B / 2 allocs |
-| Sniffer | `Classify/sniff-nonhttp-1400` | 325.9 ns (3.07M pkt/s) | 1,637 B / 3 allocs |
-| Sniffer | `Classify/sniff-tls` / `sniff-http` | 418.0 ns / 461.3 ns | 1,701 B (5) / 1,733 B (6) |
-| Router | `RouteMatchCIDR` (2,048 prefixes, 2 lookups/op) | 38.3 ns | **0 B / 0 allocs** |
+| Codec | `ProxyCodec` marshal (16 B – 256 KiB) | 57.5 – 94.0 ns | 16 B / 1 alloc |
+| Codec | `ProxyCodec` unmarshal (16 B – 256 KiB) | 13.3 – 15.7 ns | **0 B / 0 allocs** |
+| Pool | `ConnQueue` checkout (busy / parallel) | 52.7 ns / 223.0 ns | 64 B / 2 allocs |
+| Sniffer | Non-HTTP (1,400 B) / TLS SNI / HTTP Host | 326 ns / 418 ns / 461 ns | 3 / 5 / 6 allocs |
+| Router | CIDR match (2,048 prefixes, 2 lookups/op) | 38.3 ns | **0 B / 0 allocs** |
 
 Reproduce locally:
 
 ```shell
-go test -run='^$' -bench='^Benchmark(ProxyCodec_(MarshalPayload|UnmarshalPayload)|EndToEnd_(TCPTunnel|TCPSessionSetup|UDPTunnel|DNSExchange))$' -benchtime=200ms ./internal/transport/rpc
+go test -run='^$' -bench='^BenchmarkDirect_(TCPStream|Proxy)$' -benchtime=200ms ./internal/transport/direct
+go test -run='^$' -bench='^Benchmark(ProxyCodec_(MarshalPayload|UnmarshalPayload)|EndToEnd_(TCPStream|TCPStreamTLS|TCPTunnel|TCPTunnelTLS|TCPTunnelParallel|TCPTunnelBufferSize|TCPSessionSetup|UDPTunnel|DNSExchange))$' -benchtime=200ms ./internal/transport/rpc
 go test -run='^$' -bench='^BenchmarkConnQueueGetConn(Parallel|Busy)?$' -benchtime=200ms ./internal/transport/rpc/client
 go test -run='^$' -bench='^BenchmarkClassify$' -benchtime=200ms ./internal/sniff
 go test -run='^$' -bench='^BenchmarkRouteMatchCIDR$' -benchtime=200ms ./internal/router
