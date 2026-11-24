@@ -180,6 +180,8 @@ func (s *Server) serve(listener net.Listener) error {
 	return err
 }
 
+var admittedHeaderMD = metadata.MD{"x-spaceship-admitted": {"1"}}
+
 func (s *Server) Proxy(stream proto.Proxy_ProxyServer) error {
 	if stream == nil {
 		return status.Error(codes.InvalidArgument, "proxy: nil stream")
@@ -212,7 +214,7 @@ func (s *Server) Proxy(stream proto.Proxy_ProxyServer) error {
 	// the target send it immediately and never look at these headers.
 	// A non-empty map is required. The client's Header call reports a nil map
 	// both for an empty admission and for a refusal whose status it swallowed.
-	if err := stream.SendHeader(metadata.Pairs("x-spaceship-admitted", "1")); err != nil {
+	if err := stream.SendHeader(admittedHeaderMD); err != nil {
 		return err
 	}
 

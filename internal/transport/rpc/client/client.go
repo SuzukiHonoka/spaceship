@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
@@ -28,9 +29,9 @@ import (
 const TransportName = "rpc"
 
 var (
-	clientMu sync.RWMutex
-	uuidVal  string
-	queueVal *ConnQueue
+	clientMu sync.Mutex
+	uuidPtr  atomic.Pointer[string]
+	queuePtr atomic.Pointer[ConnQueue]
 )
 
 type Client struct {
@@ -44,21 +45,18 @@ type Client struct {
 var _ transport.PacketDialer = (*Client)(nil)
 
 func SetUUID(uid string) {
-	clientMu.Lock()
-	uuidVal = uid
-	clientMu.Unlock()
+	uuidPtr.Store(&uid)
 }
 
 func getUUID() string {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return uuidVal
+	if p := uuidPtr.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 func getQueue() *ConnQueue {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return queueVal
+	return queuePtr.Load()
 }
 
 func setupGrpcCredential(tls bool, hostName string, customCA ...string) (credentials.TransportCredentials, error) {
@@ -138,16 +136,18 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
 	}
 
 	clientMu.Lock()
-	queueVal = q
+	old := queuePtr.Swap(q)
 	clientMu.Unlock()
+	if old != nil {
+		old.Destroy()
+	}
 	resetEarlyAdmitLegacy()
 	return nil
 }
 
 func Destroy() {
 	clientMu.Lock()
-	q := queueVal
-	queueVal = nil
+	q := queuePtr.Swap(nil)
 	clientMu.Unlock()
 	if q != nil {
 		q.Destroy()

@@ -45,12 +45,7 @@ func NewServer(addr string, blockIPv6DNS bool) (*Server, error) {
 }
 
 func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
-	wireQuery, err := r.Pack()
-	if err != nil {
-		s.writeErrorResponse(w, r, dns.RcodeFormatError, err)
-		return
-	}
-	if _, err := dnswire.ParseQuery(wireQuery); err != nil {
+	if err := dnswire.ValidateQueryMsg(r); err != nil {
 		s.writeErrorResponse(w, r, dnswire.QueryErrorRcode(err), nil)
 		return
 	}
@@ -63,6 +58,17 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		s.serveLegacy(ctx, w, r)
 		return
 	}
+
+	wireQuery, err := r.Pack()
+	if err != nil {
+		s.writeErrorResponse(w, r, dns.RcodeFormatError, err)
+		return
+	}
+	if len(wireQuery) > dnswire.MaxMessageSize {
+		s.writeErrorResponse(w, r, dnswire.QueryErrorRcode(dnswire.ErrMessageTooLarge), nil)
+		return
+	}
+
 	wireResponse, err := s.exchanger.Exchange(ctx, wireQuery, proto.Network_UDP, s.blockIPv6DNS)
 	if status.Code(err) == codes.Unimplemented {
 		s.legacyUntil.Store(time.Now().Add(time.Minute).UnixNano())

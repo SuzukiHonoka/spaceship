@@ -12,7 +12,7 @@ type Users []*User
 // Deprecated: use UsersMatchMap.Match for O(1) lookup.
 func (u Users) Match(id string) bool {
 	for _, user := range u {
-		if user.UUID == id {
+		if user != nil && user.UUID == id {
 			return true
 		}
 	}
@@ -31,6 +31,9 @@ type UsersMatchMap struct {
 func NewUsersMatchMap(users Users) *UsersMatchMap {
 	m := make(map[string]struct{}, len(users))
 	for _, user := range users {
+		if user == nil {
+			continue
+		}
 		m[user.UUID] = struct{}{}
 	}
 	return &UsersMatchMap{m: m}

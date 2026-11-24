@@ -21,14 +21,20 @@ var (
 	dialTimeout atomic.Int64
 )
 
+// DefaultBufferSizeKiB is the default transport copy/chunk buffer size in KiB.
+const DefaultBufferSizeKiB uint16 = 256
+
+// DefaultIdleTimeout is the default idle timeout for relayed connections.
+const DefaultIdleTimeout = 30 * time.Minute
+
 func init() {
 	// BufferSize default: 256KiB. Larger chunks cut gRPC/protobuf framing
 	// overhead on the tunnel path; Direct.Proxy benefits from the same
 	// io.CopyBuffer size. Operators can still override via config "buffer".
-	bufferSize.Store(int64(256 * 1024))
+	bufferSize.Store(int64(DefaultBufferSizeKiB) * 1024)
 	network.Store("tcp")
 	dialTimeout.Store(int64(3 * time.Minute))
-	idleTimeout.Store(int64(30 * time.Minute))
+	idleTimeout.Store(int64(DefaultIdleTimeout))
 }
 
 // GetBufferSize returns the current buffer size.

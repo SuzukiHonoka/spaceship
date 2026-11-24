@@ -29,30 +29,42 @@ type Config struct {
 }
 
 type Server struct {
-	ctx       context.Context
-	config    *Config
-	srv       *http.Server
-	closeOnce sync.Once
+	ctx    context.Context
+	config *Config
+	mu     sync.Mutex
+	srv    *http.Server
+	closed bool
 }
 
 func New(ctx context.Context, cfg *Config) *Server {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if cfg == nil {
+		cfg = &Config{}
+	}
 	return &Server{
 		ctx:    ctx,
 		config: cfg,
 	}
 }
 
-func (s *Server) Close() (err error) {
-	if s.srv == nil {
+func (s *Server) Close() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
-	s.closeOnce.Do(func() {
-		log.Println("http: shutting down")
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		err = s.srv.Shutdown(ctx)
-	})
-	return err
+	s.closed = true
+	srv := s.srv
+	s.mu.Unlock()
+	if srv == nil {
+		return nil
+	}
+	log.Println("http: shutting down")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return srv.Shutdown(ctx)
 }
 
 func (s *Server) ListenAndServe(_, addr string) error {
@@ -64,16 +76,23 @@ func (s *Server) ListenAndServe(_, addr string) error {
 		return http.HandlerFunc(s.Handle)
 	}()
 
-	s.srv = &http.Server{
+	srv := &http.Server{
 		Addr:              addr,
 		Handler:           handlerFunc,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.srv = srv
+	s.mu.Unlock()
 
 	// Create error channel for server errors
 	serverErr := make(chan error, 1)
 	go func() {
-		serverErr <- s.srv.ListenAndServe()
+		serverErr <- srv.ListenAndServe()
 	}()
 
 	// Wait for context done or server error
@@ -171,6 +190,8 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// Close. Make Close idempotent so ownership overlap is safe.
 	client := utils.OnceNetConn(conn)
 	defer utils.Close(client)
+	stopShutdown := context.AfterFunc(s.ctx, func() { _ = client.Close() })
+	defer stopShutdown()
 
 	// actual proxy
 
@@ -337,6 +358,8 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// "use of closed network connection" from that intentional overlap.
 	client := utils.OnceNetConn(conn)
 	defer utils.Close(client)
+	stopShutdown := context.AfterFunc(s.ctx, func() { _ = client.Close() })
+	defer stopShutdown()
 	// A client need not wait for the 200 before sending tunnel bytes (a TLS
 	// ClientHello, typically). Whatever arrived with the request is already
 	// in net/http's read buffer and belongs to the tunnel.
@@ -405,6 +428,8 @@ func (s *Server) handleConnectIP(w http.ResponseWriter, r *http.Request, host st
 	}
 	client := utils.OnceNetConn(conn)
 	defer utils.Close(client)
+	stopShutdown := context.AfterFunc(s.ctx, func() { _ = client.Close() })
+	defer stopShutdown()
 	if _, err = client.Write(MessageConnectionEstablished); err != nil {
 		log.Printf("http: CONNECT %q failed: %v", r.Host, err) // #nosec G706 -- %q escapes request-controlled log characters
 		return

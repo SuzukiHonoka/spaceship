@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/dnswire"
 	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
@@ -47,7 +48,11 @@ func (c *Client) DnsExchange(ctx context.Context, wireQuery []byte, network prot
 		return nil, errors.New("rpc dns exchange response does not match the query")
 	}
 
-	// Detach the result from protobuf-owned storage before returning it to
-	// callers that may retain the slice for asynchronous TCP writes.
-	return append([]byte(nil), response.WireResponse...), nil
+	// DynamicProxyClient allocates a fresh DnsExchangeResponse per RPC whose
+	// WireResponse slice has no external references; custom/mock ProxyClient
+	// implementations may retain their response struct, so clone in that case.
+	if _, owned := c.ProxyClient.(*DynamicProxyClient); owned {
+		return response.WireResponse, nil
+	}
+	return slices.Clone(response.WireResponse), nil
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
+	"google.golang.org/grpc/mem"
 )
 
 // TestPayloadBufferPoolSizesTierToBuffer guards the allocation fix behind
@@ -123,5 +124,24 @@ func TestDialOptionsConstructs(t *testing.T) {
 func TestStreamWorkerCountMatchesGOMAXPROCS(t *testing.T) {
 	if got, want := streamWorkerCount(), runtime.GOMAXPROCS(0); int64(got) != int64(want) {
 		t.Fatalf("streamWorkerCount() = %d, want %d", got, want)
+	}
+}
+
+func TestPayloadBufferPoolNeverBelowPoolingThreshold(t *testing.T) {
+	oldBuffer := transport.GetBufferSize()
+	t.Cleanup(func() {
+		transport.SetBufferSize(uint16(oldBuffer / 1024))
+		payloadBufferPool()
+	})
+
+	for _, bufferKB := range []uint16{1, 32, 256} {
+		transport.SetBufferSize(bufferKB)
+		pool := payloadBufferPool().(*dirtyTieredPool)
+		for _, tier := range pool.tiers {
+			if mem.IsBelowBufferPoolingThreshold(tier.size) {
+				t.Fatalf("buffer=%dK: tier %d is <= BufferPoolingThreshold and would leak unpooled SliceBuffers",
+					bufferKB, tier.size)
+			}
+		}
 	}
 }

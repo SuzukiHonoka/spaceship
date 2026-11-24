@@ -199,12 +199,12 @@ func TestForward_Proxy(t *testing.T) {
 	f := New().(*Forward)
 
 	// Custom mock dialer that actually dials our echo server
-	if err := f.Attach(&mockDialer{
-		conn: func() net.Conn {
-			c, _ := net.Dial("tcp", ln.Addr().String())
-			return c
-		}(),
-	}); err != nil {
+	echoConn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	if err := f.Attach(&mockDialer{conn: echoConn}); err != nil {
+		_ = echoConn.Close()
 		t.Fatal(err)
 	}
 

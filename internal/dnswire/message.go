@@ -38,26 +38,36 @@ func ParseQuery(wire []byte) (*dns.Msg, error) {
 	if err := msg.Unpack(wire); err != nil {
 		return nil, fmt.Errorf("dns: unpack query: %w", err)
 	}
+	if err := ValidateQueryMsg(msg); err != nil {
+		return nil, err
+	}
+	return msg, nil
+}
+
+// ValidateQueryMsg validates an already-parsed DNS query without re-unpacking wire bytes.
+func ValidateQueryMsg(msg *dns.Msg) error {
+	if msg == nil {
+		return ErrEmptyQuery
+	}
 	if msg.Response {
-		return nil, ErrNotQuery
+		return ErrNotQuery
 	}
 	if msg.Opcode != dns.OpcodeQuery {
-		return nil, fmt.Errorf("%w: %d", ErrUnsupportedOpcode, msg.Opcode)
+		return fmt.Errorf("%w: %d", ErrUnsupportedOpcode, msg.Opcode)
 	}
 	if len(msg.Question) != 1 {
-		return nil, fmt.Errorf("%w: %d", ErrQuestionCount, len(msg.Question))
+		return fmt.Errorf("%w: %d", ErrQuestionCount, len(msg.Question))
 	}
 
 	question := msg.Question[0]
 	if question.Qclass != dns.ClassINET {
-		return nil, fmt.Errorf("%w: %d", ErrUnsupportedClass, question.Qclass)
+		return fmt.Errorf("%w: %d", ErrUnsupportedClass, question.Qclass)
 	}
 	switch question.Qtype {
 	case dns.TypeAXFR, dns.TypeIXFR:
-		return nil, fmt.Errorf("%w: %s", ErrZoneTransfer, dns.TypeToString[question.Qtype])
+		return fmt.Errorf("%w: %s", ErrZoneTransfer, dns.TypeToString[question.Qtype])
 	}
-
-	return msg, nil
+	return nil
 }
 
 // QueryErrorRcode maps query-validation failures to protocol-level responses.

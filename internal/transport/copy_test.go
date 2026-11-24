@@ -398,3 +398,70 @@ func TestCloseHelpers(t *testing.T) {
 		t.Fatalf("close calls = (%d, %d), want (2, 1)", first.calls, second.calls)
 	}
 }
+
+type nonComparableCloser struct {
+	tag    []byte
+	closed *int
+}
+
+func (c nonComparableCloser) Close() error {
+	*c.closed++
+	return nil
+}
+
+func TestCloseAllHandlesNonComparableCloser(t *testing.T) {
+	closed := 0
+	nc := nonComparableCloser{tag: []byte("nc"), closed: &closed}
+	CloseAll(nc)
+	if closed != 1 {
+		t.Fatalf("non-comparable closer Close calls = %d, want 1", closed)
+	}
+}
+
+func TestBufferPoolAdaptsToSetBufferSize(t *testing.T) {
+	orig := GetBufferSize()
+	t.Cleanup(func() { SetBufferSize(uint16(orig / 1024)) })
+
+	SetBufferSize(128)
+	b1 := Buffer()
+	if len(*b1) != 128*1024 {
+		t.Fatalf("len(*b1) = %d, want %d", len(*b1), 128*1024)
+	}
+	PutBuffer(b1)
+
+	SetBufferSize(64)
+	b2 := Buffer()
+	defer PutBuffer(b2)
+	if len(*b2) != 64*1024 {
+		t.Fatalf("len(*b2) after shrink = %d, want %d", len(*b2), 64*1024)
+	}
+}
+
+func TestCopyWithContextUpdatesGlobalStatsIncrementally(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer func() { _ = pw.Close() }()
+
+	dst := &signalWriter{wrote: make(chan struct{})}
+	beforeTx, _ := GlobalStats.Total()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- CopyWithContext(context.Background(), nil, dst, pr, DirectionOut)
+	}()
+
+	chunk := []byte("live-incremental-bytes")
+	if _, err := pw.Write(chunk); err != nil {
+		t.Fatal(err)
+	}
+	<-dst.wrote
+	// Stream is still open; stats must already reflect the written chunk.
+	midTx, _ := GlobalStats.Total()
+	if midTx-beforeTx < uint64(len(chunk)) {
+		t.Fatalf("incremental tx delta = %d, want >= %d while stream open", midTx-beforeTx, len(chunk))
+	}
+
+	_ = pw.Close()
+	if err := <-done; err != nil {
+		t.Fatalf("CopyWithContext() error = %v", err)
+	}
+}

@@ -161,7 +161,14 @@ func (d *Direct) Proxy(ctx context.Context, addr string, localAddr chan<- string
 		// "direct: failed to dial: dial tcp …" (server logs add "dial:" once).
 		return err
 	}
-	localAddr <- conn.LocalAddr().String()
+	if conn == nil {
+		return errors.New("direct: dialer returned nil connection")
+	}
+	local := ""
+	if la := conn.LocalAddr(); la != nil {
+		local = la.String()
+	}
+	localAddr <- local
 	defer utils.Close(conn)
 
 	sessionCtx, cancel := context.WithCancel(ctx)

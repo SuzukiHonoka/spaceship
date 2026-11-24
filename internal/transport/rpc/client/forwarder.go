@@ -113,64 +113,68 @@ func (f *Forwarder) copySRCtoTarget(srcData *proxy.ProxySRC, payload *proxy.Prox
 }
 
 func (f *Forwarder) CopyTargetToSRC(ctx context.Context) error {
-	errCh := make(chan error, 1)
-	go func() {
-		// Reuse one message for the life of the stream. The proxyCodec hot path
-		// retains a refcounted view into the receive buffer so steady-state
-		// streaming does not allocate/copy per chunk.
-		dstData := &proxy.ProxyDST{
-			HeaderOrPayload: &proxy.ProxyDST_Payload{},
-		}
-		rpc.RetainPayloadViews(dstData)
-		defer rpc.ReleaseMessageBuffers(dstData)
-		for {
-			if err := f.stream.RecvMsg(dstData); err != nil {
-				switch {
-				case errors.Is(err, io.EOF):
-					// The server completed the RPC: an orderly end.
-					errCh <- io.EOF
-				case f.accepted.Load():
-					// The tunnel broke (a reset or timed-out transport surfaces
-					// as Unavailable) after the session started and before the
-					// server ended it, so the client's response is incomplete.
-					errCh <- fmt.Errorf("%w: %w", errTunnelLost, err)
-				default:
-					// Refused before the session started (authentication,
-					// admission): report the server's reason as it is.
-					errCh <- err
-				}
-				return
-			}
-			if readErr := f.copyTargetToSRC(ctx, dstData); readErr != nil {
-				errCh <- readErr
-				return
-			}
-		}
-	}()
-
-	select {
-	case err := <-errCh:
-		// Only the server's EOF status (or a completed RPC) proves the response
-		// is whole. Anything else, other than our own cancellation, leaves the
-		// client holding a truncated stream, so reset it instead of letting the
-		// caller close it in an orderly way.
-		// Before the server accepts the session the front end still owns the
-		// connection and must be able to write its own failure reply.
-		if f.accepted.Load() && !errors.Is(err, io.EOF) && ctx.Err() == nil {
-			f.abortCause = err
-			transport.Abort(f.writer)
+	if err := ctx.Err(); err != nil {
+		if f.cancel != nil {
+			f.cancel()
 		}
 		return err
-	case <-ctx.Done():
-		// Abort the stream so the receive goroutine unblocks from RecvMsg, then
-		// wait for it to exit. Returning early would leave it writing to the
-		// caller's io.Writer after Proxy has already returned, at which point the
-		// caller is entitled to treat the session as finished and reuse or close
-		// that writer.
-		f.cancel()
-		<-errCh
-		return ctx.Err()
 	}
+	// Abort the stream on copy-context cancellation so RecvMsg unblocks in place
+	// without spawning a second receive goroutine. Returning only after RecvMsg
+	// finishes prevents any write-after-return to the caller's io.Writer.
+	if f.cancel != nil {
+		stopCancel := context.AfterFunc(ctx, f.cancel)
+		defer stopCancel()
+	}
+
+	// Reuse one message for the life of the stream. The proxyCodec hot path
+	// retains a refcounted view into the receive buffer so steady-state
+	// streaming does not allocate/copy per chunk.
+	dstData := &proxy.ProxyDST{
+		HeaderOrPayload: &proxy.ProxyDST_Payload{},
+	}
+	rpc.RetainPayloadViews(dstData)
+	defer rpc.ReleaseMessageBuffers(dstData)
+
+	var loopErr error
+	for {
+		if err := f.stream.RecvMsg(dstData); err != nil {
+			switch {
+			case errors.Is(err, io.EOF):
+				// The server completed the RPC: an orderly end.
+				loopErr = io.EOF
+			case f.accepted.Load():
+				// The tunnel broke (a reset or timed-out transport surfaces
+				// as Unavailable) after the session started and before the
+				// server ended it, so the client's response is incomplete.
+				loopErr = fmt.Errorf("%w: %w", errTunnelLost, err)
+			default:
+				// Refused before the session started (authentication,
+				// admission): report the server's reason as it is.
+				loopErr = err
+			}
+			break
+		}
+		if readErr := f.copyTargetToSRC(ctx, dstData); readErr != nil {
+			loopErr = readErr
+			break
+		}
+	}
+
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	// Only the server's EOF status (or a completed RPC) proves the response
+	// is whole. Anything else, other than our own cancellation, leaves the
+	// client holding a truncated stream, so reset it instead of letting the
+	// caller close it in an orderly way.
+	// Before the server accepts the session the front end still owns the
+	// connection and must be able to write its own failure reply.
+	if f.accepted.Load() && !errors.Is(loopErr, io.EOF) {
+		f.abortCause = loopErr
+		transport.Abort(f.writer)
+	}
+	return loopErr
 }
 
 func (f *Forwarder) copyTargetToSRC(ctx context.Context, buf *proxy.ProxyDST) error {

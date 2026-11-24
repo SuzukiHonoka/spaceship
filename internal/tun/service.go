@@ -74,7 +74,7 @@ type Service struct {
 	// udpFlows maps each general UDP 4-tuple to its live session. DNS hijack
 	// sessions are not entered here.
 	udpMu    sync.Mutex
-	udpFlows map[string]*udpSession
+	udpFlows map[stack.TransportEndpointID]*udpSession
 	// dnsClients counts live DNS-over-TCP connections and DNS-over-UDP
 	// sessions so the DNS pool can be shared fairly between them. See
 	// fairDNSShare.
@@ -148,7 +148,7 @@ func newService(ctx context.Context, cfg Config, device openedDevice, linkErrors
 		dnsSlots:        make(chan struct{}, cfg.DNS.MaxInFlight),
 		udpSlots:        make(chan struct{}, min(cfg.MaxConnections, cfg.DNS.MaxInFlight)),
 		udpSessionSlots: make(chan struct{}, cfg.MaxUDPSessions),
-		udpFlows:        make(map[string]*udpSession),
+		udpFlows:        make(map[stack.TransportEndpointID]*udpSession),
 		closeDone:       make(chan struct{}),
 		runDone:         make(chan struct{}),
 	}

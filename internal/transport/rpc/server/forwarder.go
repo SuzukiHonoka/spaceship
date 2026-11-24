@@ -128,11 +128,15 @@ func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 	}
 
 	// send local addr to client for nat
+	localAddr := ""
+	if f.Conn != nil && f.Conn.LocalAddr() != nil {
+		localAddr = f.Conn.LocalAddr().String()
+	}
 	msgAccept := &proto.ProxyDST{
 		Status: proto.ProxyStatus_Accepted,
 		HeaderOrPayload: &proto.ProxyDST_Header{
 			Header: &proto.ProxyDST_ProxyHeader{
-				Addr: f.Conn.LocalAddr().String(),
+				Addr: localAddr,
 			},
 		},
 	}
@@ -143,15 +147,10 @@ func (f *Forwarder) CopyTargetToClient(ctx context.Context) (err error) {
 	// Closing the target connection is sufficient to interrupt a blocked Read.
 	// Keep Send in this goroutine so it cannot outlive the RPC handler and race
 	// a final status send on the same stream.
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = f.Close()
-		case <-done:
-		}
-	}()
-	defer close(done)
+	stopClose := context.AfterFunc(ctx, func() {
+		_ = f.Close()
+	})
+	defer stopClose()
 
 	var udpBuf []byte
 	if isUDPNetwork(f.network) {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 )
@@ -29,10 +30,11 @@ type Indicator struct {
 	logBuffer  []string
 	maxLogs    int
 	resizeChan chan os.Signal
+	closed     bool
 }
 
 func calculateMinHeight(heigh int) int {
-	return heigh - StatusMarginTopLines
+	return max(0, heigh-StatusMarginTopLines)
 }
 
 // NewIndicator creates a writer that captures logs and manages a status line
@@ -137,6 +139,10 @@ func (sw *Indicator) UpdateStatus(message string) {
 func (sw *Indicator) Close() error {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
+	if sw.closed {
+		return nil
+	}
+	sw.closed = true
 
 	// Stop listening for resize events
 	signal.Stop(sw.resizeChan)
@@ -151,21 +157,26 @@ func (sw *Indicator) Close() error {
 
 // wrapLine wraps a line to fit within the given width
 func wrapLine(line string, width int) []string {
-	if width <= 0 {
+	if width <= 0 || len(line) <= width {
 		return []string{line}
 	}
-
-	if len(line) <= width {
+	if utf8.RuneCountInString(line) <= width {
 		return []string{line}
 	}
 
 	var wrapped []string
-	for len(line) > width {
-		wrapped = append(wrapped, line[:width])
-		line = line[width:]
-	}
-	if len(line) > 0 {
-		wrapped = append(wrapped, line)
+	for len(line) > 0 {
+		count := 0
+		splitAt := len(line)
+		for idx := range line {
+			if count == width {
+				splitAt = idx
+				break
+			}
+			count++
+		}
+		wrapped = append(wrapped, line[:splitAt])
+		line = line[splitAt:]
 	}
 	return wrapped
 }

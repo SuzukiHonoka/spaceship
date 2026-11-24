@@ -39,7 +39,7 @@ var udpBuffers = sync.Pool{
 // one MaxUDPSessions slot until finishUDPSession releases them, or until a
 // newer session takes them over through replaceLRUUDPSessionLocked.
 type udpSession struct {
-	key      string
+	key      stack.TransportEndpointID
 	ctx      context.Context
 	cancel   context.CancelFunc
 	activity atomic.Int64
@@ -81,7 +81,7 @@ func (s *Service) handleGeneralUDPPacket(id stack.TransportEndpointID, pkt *stac
 	if _, err := endpointAddress(id.LocalAddress, id.LocalPort); err != nil {
 		return false
 	}
-	session, admitted := s.admitUDPSession(udpFlowKey(id))
+	session, admitted := s.admitUDPSession(id)
 	if !admitted {
 		return false
 	}
@@ -116,10 +116,6 @@ func (s *Service) handleGeneralUDPPacket(id stack.TransportEndpointID, pkt *stac
 	return true
 }
 
-func udpFlowKey(id stack.TransportEndpointID) string {
-	return fmt.Sprintf("%s|%d|%s|%d", id.RemoteAddress, id.RemotePort, id.LocalAddress, id.LocalPort)
-}
-
 // admitUDPSession reserves slots for key. It returns (nil, true) when key
 // already has a live session, and (nil, false) when the flow must be refused.
 //
@@ -128,11 +124,11 @@ func udpFlowKey(id stack.TransportEndpointID) string {
 // slots pass straight to the new one. UDP therefore never takes TCP's share of
 // MaxConnections, and a burst of new 4-tuples ages out idle sessions rather
 // than being refused while they wait for their idle timeout.
-func (s *Service) admitUDPSession(key string) (*udpSession, bool) {
+func (s *Service) admitUDPSession(key stack.TransportEndpointID) (*udpSession, bool) {
 	s.udpMu.Lock()
 	defer s.udpMu.Unlock()
 	if s.udpFlows == nil {
-		s.udpFlows = make(map[string]*udpSession)
+		s.udpFlows = make(map[stack.TransportEndpointID]*udpSession)
 	}
 	if _, exists := s.udpFlows[key]; exists {
 		return nil, true
@@ -150,7 +146,7 @@ func (s *Service) admitUDPSession(key string) (*udpSession, bool) {
 	return s.newUDPSessionLocked(key), true
 }
 
-func (s *Service) newUDPSessionLocked(key string) *udpSession {
+func (s *Service) newUDPSessionLocked(key stack.TransportEndpointID) *udpSession {
 	ctx, cancel := context.WithCancel(s.ctx)
 	session := &udpSession{key: key, ctx: ctx, cancel: cancel}
 	session.touch()
@@ -213,29 +209,58 @@ func endpointPacketReader(
 	waitQueue *waiter.Queue,
 ) func(time.Time) ([]byte, func(), error) {
 	const events = waiter.ReadableEvents | waiter.EventHUp | waiter.EventErr
+	var (
+		entry  waiter.Entry
+		notify chan struct{}
+		timer  *time.Timer
+	)
+	tryRead := func() ([]byte, func(), bool, error) {
+		if endpoint.Readiness(events) == 0 {
+			return nil, nil, false, nil
+		}
+		bufp := udpBuffers.Get().(*[]byte)
+		writer := tcpip.SliceWriter(*bufp)
+		result, err := endpoint.Read(&writer, tcpip.ReadOptions{})
+		if err == nil {
+			return (*bufp)[:result.Count], func() { udpBuffers.Put(bufp) }, true, nil
+		}
+		udpBuffers.Put(bufp)
+		switch err.(type) {
+		case *tcpip.ErrWouldBlock:
+			return nil, nil, false, nil
+		case *tcpip.ErrClosedForReceive:
+			return nil, nil, true, io.EOF
+		default:
+			return nil, nil, true, errors.New(err.String())
+		}
+	}
 	return func(deadline time.Time) ([]byte, func(), error) {
-		entry, notify := waiter.NewChannelEntry(events)
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		dur := time.Until(deadline)
+		if dur <= 0 {
+			return nil, nil, os.ErrDeadlineExceeded
+		}
+		if payload, release, done, err := tryRead(); done {
+			return payload, release, err
+		}
+
+		if notify == nil {
+			entry, notify = waiter.NewChannelEntry(events)
+		}
 		waitQueue.EventRegister(&entry)
 		defer waitQueue.EventUnregister(&entry)
 
-		timer := time.NewTimer(time.Until(deadline))
+		if timer == nil {
+			timer = time.NewTimer(dur)
+		} else {
+			timer.Reset(dur)
+		}
 		defer timer.Stop()
 		for {
-			if endpoint.Readiness(events) != 0 {
-				bufp := udpBuffers.Get().(*[]byte)
-				writer := tcpip.SliceWriter(*bufp)
-				result, err := endpoint.Read(&writer, tcpip.ReadOptions{})
-				if err == nil {
-					return (*bufp)[:result.Count], func() { udpBuffers.Put(bufp) }, nil
-				}
-				udpBuffers.Put(bufp)
-				switch err.(type) {
-				case *tcpip.ErrWouldBlock:
-				case *tcpip.ErrClosedForReceive:
-					return nil, nil, io.EOF
-				default:
-					return nil, nil, errors.New(err.String())
-				}
+			if payload, release, done, err := tryRead(); done {
+				return payload, release, err
 			}
 			select {
 			case <-notify:
@@ -297,17 +322,20 @@ func (s *Service) proxyUDP(session *udpSession, tun udpTUNSide, id stack.Transpo
 
 	sessionCtx, cancel := context.WithCancel(session.ctx)
 	defer cancel()
-	go func() {
-		<-sessionCtx.Done()
+	stopClose := context.AfterFunc(sessionCtx, func() {
 		_ = tun.conn.Close()
 		_ = packet.Close()
-	}()
+	})
+	defer stopClose()
 
 	errc := make(chan error, 2)
 	go func() {
 		errc <- s.pumpUDP(sessionCtx, session, tun.read, func(payload []byte) error {
 			_ = packet.SetWriteDeadline(time.Now().Add(s.udpIdleTimeout()))
 			n, writeErr := packet.WriteTo(payload, target)
+			if n > 0 {
+				transport.GlobalStats.AddTx(uint64(n))
+			}
 			if writeErr != nil {
 				return writeErr
 			}
@@ -321,6 +349,9 @@ func (s *Service) proxyUDP(session *udpSession, tun udpTUNSide, id stack.Transpo
 		errc <- s.pumpUDP(sessionCtx, session, routePacketReader(packet), func(payload []byte) error {
 			_ = tun.conn.SetWriteDeadline(time.Now().Add(s.udpIdleTimeout()))
 			n, writeErr := tun.conn.Write(payload)
+			if n > 0 {
+				transport.GlobalStats.AddRx(uint64(n))
+			}
 			if writeErr != nil {
 				return writeErr
 			}

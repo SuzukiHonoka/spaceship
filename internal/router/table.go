@@ -82,7 +82,9 @@ func (t *syncedRoutesTable) Get(k string) (Egress, bool) {
 		return EgressUnknown, false
 	}
 	entry := elem.Value.(*cacheEntry)
-	entry.referenced.Store(true)
+	if !entry.referenced.Load() {
+		entry.referenced.Store(true)
+	}
 	return entry.egress, true
 }
 

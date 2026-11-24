@@ -3,79 +3,98 @@ package rpc
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
-// ServiceConfig holds dynamic service configuration
-type ServiceConfig struct {
-	mu          sync.RWMutex
+const defaultServiceName = "proxy.Proxy"
+
+type serviceSnapshot struct {
+	epoch       uint64
 	serviceName string
-	methodNames map[string]string
+	dnsResolve  string
+	dnsExchange string
+	proxy       string
+}
+
+func newServiceSnapshot(name string, epoch uint64) *serviceSnapshot {
+	if name == "" {
+		name = defaultServiceName
+	}
+	return &serviceSnapshot{
+		epoch:       epoch,
+		serviceName: name,
+		dnsResolve:  "/" + name + "/DnsResolve",
+		dnsExchange: "/" + name + "/DnsExchange",
+		proxy:       "/" + name + "/Proxy",
+	}
 }
 
 var (
-	// Global service configuration, fully initialized at startup.
-	globalServiceConfig = func() *ServiceConfig {
-		cfg := &ServiceConfig{serviceName: "proxy.Proxy"}
-		cfg.methodNames = map[string]string{
-			"DnsResolve":  "/proxy.Proxy/DnsResolve",
-			"DnsExchange": "/proxy.Proxy/DnsExchange",
-			"Proxy":       "/proxy.Proxy/Proxy",
-		}
-		return cfg
-	}()
+	serviceWriteMu sync.Mutex
+	serviceCfg     atomic.Pointer[serviceSnapshot]
 )
 
-// SetServiceName configures the gRPC service name dynamically
-// This should be called before creating clients or servers
+func init() {
+	serviceCfg.Store(newServiceSnapshot(defaultServiceName, 1))
+}
+
+// SetServiceName configures the gRPC service name dynamically.
+// This should be called before creating clients or servers.
 func SetServiceName(name string) {
-	globalServiceConfig.mu.Lock()
-	defer globalServiceConfig.mu.Unlock()
+	serviceWriteMu.Lock()
+	defer serviceWriteMu.Unlock()
 
-	if name == "" {
-		name = "proxy.Proxy" // fallback to default
+	prev := serviceCfg.Load()
+	nextEpoch := uint64(1)
+	if prev != nil {
+		nextEpoch = prev.epoch + 1
 	}
-
-	globalServiceConfig.serviceName = name
-
-	// Update method names
-	globalServiceConfig.methodNames = map[string]string{
-		"DnsResolve":  fmt.Sprintf("/%s/DnsResolve", name),
-		"DnsExchange": fmt.Sprintf("/%s/DnsExchange", name),
-		"Proxy":       fmt.Sprintf("/%s/Proxy", name),
-	}
+	serviceCfg.Store(newServiceSnapshot(name, nextEpoch))
 }
 
-// GetServiceName returns the current service name
+// ServiceEpoch returns a monotonic counter incremented on each SetServiceName call.
+func ServiceEpoch() uint64 {
+	return serviceCfg.Load().epoch
+}
+
+// ServiceMethods returns the current epoch and all standard gRPC full method
+// names from a single atomic snapshot.
+func ServiceMethods() (epoch uint64, dnsResolve, dnsExchange, proxy string) {
+	snap := serviceCfg.Load()
+	return snap.epoch, snap.dnsResolve, snap.dnsExchange, snap.proxy
+}
+
+// GetServiceName returns the current service name.
 func GetServiceName() string {
-	globalServiceConfig.mu.RLock()
-	defer globalServiceConfig.mu.RUnlock()
-	return globalServiceConfig.serviceName
+	return serviceCfg.Load().serviceName
 }
 
-// GetMethodName returns the full method name for a given method
+// GetMethodName returns the full method name for a given method.
 func GetMethodName(method string) string {
-	globalServiceConfig.mu.RLock()
-	defer globalServiceConfig.mu.RUnlock()
-
-	if fullName, exists := globalServiceConfig.methodNames[method]; exists {
-		return fullName
+	snap := serviceCfg.Load()
+	switch method {
+	case "DnsResolve":
+		return snap.dnsResolve
+	case "DnsExchange":
+		return snap.dnsExchange
+	case "Proxy":
+		return snap.proxy
+	default:
+		return fmt.Sprintf("/%s/%s", snap.serviceName, method)
 	}
-
-	// Fallback uses the currently configured service name, not the hardcoded default.
-	return fmt.Sprintf("/%s/%s", globalServiceConfig.serviceName, method)
 }
 
-// GetDnsResolveMethodName returns the full method name for DnsResolve
+// GetDnsResolveMethodName returns the full method name for DnsResolve.
 func GetDnsResolveMethodName() string {
-	return GetMethodName("DnsResolve")
+	return serviceCfg.Load().dnsResolve
 }
 
 // GetDnsExchangeMethodName returns the full method name for DnsExchange.
 func GetDnsExchangeMethodName() string {
-	return GetMethodName("DnsExchange")
+	return serviceCfg.Load().dnsExchange
 }
 
-// GetProxyMethodName returns the full method name for Proxy
+// GetProxyMethodName returns the full method name for Proxy.
 func GetProxyMethodName() string {
-	return GetMethodName("Proxy")
+	return serviceCfg.Load().proxy
 }

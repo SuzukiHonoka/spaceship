@@ -1,6 +1,8 @@
 package router
 
 import (
+	"fmt"
+	"net/netip"
 	"os"
 	"testing"
 )
@@ -166,5 +168,75 @@ func TestRoute_GenerateCache_ExtFile_SkipsEmptyAndComments(t *testing.T) {
 	}
 	if len(r.cache.ExactMap) != 2 {
 		t.Fatalf("ExactMap size = %d, want 2", len(r.cache.ExactMap))
+	}
+}
+
+func TestRoute_Match_CIDR_CompiledParity(t *testing.T) {
+	sources := []string{
+		"10.0.0.0/8",
+		"192.168.1.99/24", // unmasked host bits
+		"192.168.2.0/24",  // adjacent to 192.168.1.0/24
+		"172.16.5.4/32",
+		"2001:db8::/32",
+		"2001:db8:0:1::/64",
+		"fe80::1/128",
+	}
+	r := &Route{Sources: sources, MatchType: TypeCIDR}
+	if err := r.GenerateCache(); err != nil {
+		t.Fatal(err)
+	}
+	probes := []string{
+		"9.255.255.255",
+		"10.0.0.0",
+		"10.255.255.255",
+		"11.0.0.0",
+		"192.168.0.255",
+		"192.168.1.0",
+		"192.168.1.255",
+		"192.168.2.0",
+		"192.168.2.255",
+		"192.168.3.0",
+		"172.16.5.4",
+		"172.16.5.5",
+		"::ffff:192.168.1.1",
+		"2001:db8::1",
+		"2001:db8:ffff:ffff:ffff:ffff:ffff:ffff",
+		"2001:db9::1",
+		"fe80::1",
+		"fe80::2",
+		"fe80::1%en0",
+		"example.com",
+	}
+	for _, probe := range probes {
+		got := r.Match(probe)
+		want := false
+		if addr, err := netip.ParseAddr(probe); err == nil {
+			for _, prefix := range r.cache.CIDRList {
+				if prefix.Contains(addr) {
+					want = true
+					break
+				}
+			}
+		}
+		if got != want {
+			t.Fatalf("Match(%q) = %v, want %v", probe, got, want)
+		}
+	}
+}
+
+func BenchmarkRouteMatchCIDR(b *testing.B) {
+	sources := make([]string, 0, 2048)
+	for i := range 2048 {
+		sources = append(sources, fmt.Sprintf("10.%d.%d.0/24", (i>>7)&0xff, (i<<1)&0xff))
+	}
+	r := &Route{Sources: sources, MatchType: TypeCIDR}
+	if err := r.GenerateCache(); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		_ = r.Match("198.51.100.42")
+		_ = r.Match("10.15.254.9")
 	}
 }

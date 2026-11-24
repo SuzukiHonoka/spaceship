@@ -63,16 +63,16 @@ const (
 	extEncryptedServerName = 0xffce
 )
 
-var httpMethods = []string{
-	"GET ",
-	"POST ",
-	"HEAD ",
-	"PUT ",
-	"DELETE ",
-	"OPTIONS ",
-	"CONNECT ",
-	"PATCH ",
-	"TRACE ",
+var httpMethods = [][]byte{
+	[]byte("GET "),
+	[]byte("POST "),
+	[]byte("HEAD "),
+	[]byte("PUT "),
+	[]byte("DELETE "),
+	[]byte("OPTIONS "),
+	[]byte("CONNECT "),
+	[]byte("PATCH "),
+	[]byte("TRACE "),
 }
 
 // Peek reads the opening flight of r and reports the hostname it carries.
@@ -86,12 +86,18 @@ func Peek(r io.Reader, timeout time.Duration) (host string, replay io.Reader) {
 	}
 	defer disarm(arm(r, timeout))
 
-	buf := make([]byte, 0, 512)
-	tmp := make([]byte, 1024)
+	buf := make([]byte, 0, 1536)
 	for len(buf) < maxSniff && wantMore(buf) {
-		n, err := r.Read(tmp)
+		if len(buf) == cap(buf) {
+			nextCap := min(cap(buf)*2, maxSniff)
+			grown := make([]byte, len(buf), nextCap)
+			copy(grown, buf)
+			buf = grown
+		}
+		limit := min(cap(buf), maxSniff)
+		n, err := r.Read(buf[len(buf):limit])
 		if n > 0 {
-			buf = append(buf, tmp[:n]...)
+			buf = buf[:len(buf)+n]
 		}
 		if err != nil {
 			break
@@ -100,7 +106,7 @@ func Peek(r io.Reader, timeout time.Duration) (host string, replay io.Reader) {
 	if len(buf) == 0 {
 		return "", r
 	}
-	return extract(buf), transport.Prepend(r, buf)
+	return extract(buf), transport.PrependOwned(r, buf)
 }
 
 type deadliner interface {
@@ -175,9 +181,8 @@ func httpNeed(buf []byte) bool {
 }
 
 func methodPrefix(buf []byte) bool {
-	s := string(buf)
 	for _, method := range httpMethods {
-		if strings.HasPrefix(method, s) || strings.HasPrefix(s, method) {
+		if bytes.HasPrefix(method, buf) || bytes.HasPrefix(buf, method) {
 			return true
 		}
 	}
@@ -185,16 +190,20 @@ func methodPrefix(buf []byte) bool {
 }
 
 func requestLine(line []byte) bool {
-	parts := bytes.Split(line, []byte(" "))
-	if len(parts) != 3 {
+	method, rest, ok := bytes.Cut(line, []byte{' '})
+	if !ok {
 		return false
 	}
-	switch string(parts[0]) {
+	_, proto, ok := bytes.Cut(rest, []byte{' '})
+	if !ok || bytes.IndexByte(proto, ' ') >= 0 {
+		return false
+	}
+	switch string(method) {
 	case "GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "CONNECT", "PATCH", "TRACE":
 	default:
 		return false
 	}
-	return bytes.Equal(parts[2], []byte("HTTP/1.0")) || bytes.Equal(parts[2], []byte("HTTP/1.1"))
+	return bytes.Equal(proto, []byte("HTTP/1.0")) || bytes.Equal(proto, []byte("HTTP/1.1"))
 }
 
 func extract(buf []byte) string {
@@ -292,18 +301,11 @@ func clientHelloExtensions(record []byte) (legacy uint16, exts []byte, ok bool) 
 // offers. supported_versions wins over legacy_version, and GREASE values are
 // ignored. SSL 3.0 and anything newer than TLS 1.3 are rejected.
 func offeredTLSVersion(legacy uint16, exts []byte) (uint16, bool) {
-	versions, present, ok := supportedVersions(exts)
+	best, present, ok := bestSupportedVersion(exts)
 	if !ok {
 		return 0, false
 	}
 	if present {
-		var best uint16
-		for _, version := range versions {
-			if grease(version) || version < tls10 || version > tls13 || version <= best {
-				continue
-			}
-			best = version
-		}
 		if best == 0 {
 			return 0, false
 		}
@@ -315,7 +317,7 @@ func offeredTLSVersion(legacy uint16, exts []byte) (uint16, bool) {
 	return legacy, true
 }
 
-func supportedVersions(exts []byte) (versions []uint16, present, ok bool) {
+func bestSupportedVersion(exts []byte) (best uint16, present, ok bool) {
 	malformed := false
 	walked := forEachExtension(exts, func(typ int, data []byte) bool {
 		if typ != extSupportedVersions {
@@ -326,16 +328,21 @@ func supportedVersions(exts []byte) (versions []uint16, present, ok bool) {
 			malformed = true
 			return false
 		}
-		versions = make([]uint16, 0, data[0]/2)
+		var extBest uint16
 		for i := 1; i < len(data); i += 2 {
-			versions = append(versions, uint16(data[i])<<8|uint16(data[i+1]))
+			version := uint16(data[i])<<8 | uint16(data[i+1])
+			if grease(version) || version < tls10 || version > tls13 || version <= extBest {
+				continue
+			}
+			extBest = version
 		}
+		best = extBest
 		return true
 	})
 	if !walked || malformed {
-		return nil, present, false
+		return 0, present, false
 	}
-	return versions, present, true
+	return best, present, true
 }
 
 // serverNameEncrypted reports whether the cleartext SNI must be ignored.
@@ -432,19 +439,19 @@ func httpHost(buf []byte) string {
 			rest = rest[nl+2:]
 		}
 		name, value, ok := splitHeader(line)
-		if ok && strings.EqualFold(name, "host") {
-			return acceptName(hostWithoutPort(value))
+		if ok && bytes.EqualFold(name, []byte("host")) {
+			return acceptName(hostWithoutPort(string(value)))
 		}
 	}
 	return ""
 }
 
-func splitHeader(line []byte) (string, string, bool) {
+func splitHeader(line []byte) (name, value []byte, ok bool) {
 	colon := bytes.IndexByte(line, ':')
 	if colon <= 0 {
-		return "", "", false
+		return nil, nil, false
 	}
-	return string(line[:colon]), string(line[colon+1:]), true
+	return line[:colon], line[colon+1:], true
 }
 
 func hostWithoutPort(value string) string {
@@ -517,8 +524,14 @@ func acceptName(raw string) string {
 	if _, err := netip.ParseAddr(name); err == nil {
 		return ""
 	}
-	labels := strings.Split(name, ".")
-	for _, label := range labels {
+	for rem := name; ; {
+		dot := strings.IndexByte(rem, '.')
+		var label string
+		if dot < 0 {
+			label = rem
+		} else {
+			label = rem[:dot]
+		}
 		if len(label) == 0 || len(label) > 63 {
 			return ""
 		}
@@ -531,6 +544,10 @@ func acceptName(raw string) string {
 				return ""
 			}
 		}
+		if dot < 0 {
+			break
+		}
+		rem = rem[dot+1:]
 	}
 	return name
 }

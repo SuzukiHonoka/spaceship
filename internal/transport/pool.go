@@ -11,8 +11,13 @@ var bufferPool = sync.Pool{
 }
 
 func Buffer() *[]byte {
+	want := GetBufferSize()
 	buf := bufferPool.Get().(*[]byte)
-	*buf = (*buf)[:cap(*buf)]
+	if cap(*buf) != want {
+		b := make([]byte, want)
+		return &b
+	}
+	*buf = (*buf)[:want]
 	return buf
 }
 
@@ -20,7 +25,7 @@ func Buffer() *[]byte {
 // matches the current GetBufferSize() are silently discarded, allowing the
 // pool to gradually migrate to a new size after SetBufferSize() is called.
 func PutBuffer(buf *[]byte) {
-	if cap(*buf) != GetBufferSize() {
+	if buf == nil || cap(*buf) != GetBufferSize() {
 		return
 	}
 	bufferPool.Put(buf)

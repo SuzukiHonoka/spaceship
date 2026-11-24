@@ -6,12 +6,16 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
+	"google.golang.org/grpc"
 )
+
+var zeroUDPAddr = &net.UDPAddr{IP: net.IPv4zero, Port: 0}
 
 type recvMsg struct {
 	resp *proto.ProxyDST
@@ -44,34 +48,41 @@ type StreamPacketConn struct {
 
 	// sendMu orders a write deadline firing against a Send starting, so the
 	// deadline either stops the Send before it begins or cancels it in flight.
-	sendMu  sync.Mutex
-	sending bool
+	sendMu       sync.Mutex
+	sending      bool
+	reuseSendMsg bool
+	sendMsg      proto.ProxySRC
+	sendPayload  proto.ProxySRC_Payload
 }
 
 // NewStreamPacketConn creates a new StreamPacketConn from a gRPC stream.
 func NewStreamPacketConn(ctx context.Context, stream proto.Proxy_ProxyClient, cancel context.CancelFunc, targetAddr string) *StreamPacketConn {
-	addr := &net.UDPAddr{IP: net.ParseIP("0.0.0.0"), Port: 0}
 	var peer net.Addr = packetAddr(targetAddr)
 	if targetHost, targetPort, err := net.SplitHostPort(targetAddr); err == nil {
 		if ip := net.ParseIP(targetHost); ip != nil {
 			udpPeer := &net.UDPAddr{IP: ip}
-			if port, err := net.LookupPort("udp", targetPort); err == nil {
+			if port, err := strconv.Atoi(targetPort); err == nil && port >= 0 && port <= 65535 {
+				udpPeer.Port = port
+			} else if port, err := net.LookupPort("udp", targetPort); err == nil {
 				udpPeer.Port = port
 			}
 			peer = udpPeer
 		}
 	}
 
+	_, reuseSendMsg := stream.(*grpc.GenericClientStream[proto.ProxySRC, proto.ProxyDST])
 	c := &StreamPacketConn{
-		stream:    stream,
-		cancel:    cancel,
-		ctx:       ctx,
-		localAddr: addr,
-		peerAddr:  peer,
-		recvCh:    make(chan recvMsg, 1),
-		rdeadline: makePipeDeadline(),
-		wdeadline: makePipeDeadline(),
+		stream:       stream,
+		cancel:       cancel,
+		ctx:          ctx,
+		localAddr:    zeroUDPAddr,
+		peerAddr:     peer,
+		recvCh:       make(chan recvMsg, 1),
+		rdeadline:    makePipeDeadline(),
+		wdeadline:    makePipeDeadline(),
+		reuseSendMsg: reuseSendMsg,
 	}
+	c.sendMsg.HeaderOrPayload = &c.sendPayload
 	c.wdeadline.onFire = c.writeDeadlineFired
 	go c.readLoop()
 	return c
@@ -175,10 +186,17 @@ func (c *StreamPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	default:
 	}
 
-	req := &proto.ProxySRC{
-		HeaderOrPayload: &proto.ProxySRC_Payload{
-			Payload: p,
-		},
+	var req *proto.ProxySRC
+	if c.reuseSendMsg {
+		c.sendPayload.Payload = p
+		req = &c.sendMsg
+		defer func() { c.sendPayload.Payload = nil }()
+	} else {
+		req = &proto.ProxySRC{
+			HeaderOrPayload: &proto.ProxySRC_Payload{
+				Payload: p,
+			},
+		}
 	}
 	// Send inline rather than on a helper goroutine: the handoff cost a
 	// scheduler hop per datagram. Close still unblocks it because Send observes
@@ -260,6 +278,7 @@ func (c *StreamPacketConn) SetWriteDeadline(t time.Time) error {
 type pipeDeadline struct {
 	mu     sync.Mutex
 	timer  *time.Timer
+	active bool          // true while timer is armed and has not been stopped
 	fired  chan struct{} // closed only after the entire callback has finished
 	cancel chan struct{} // closed when the deadline fires
 	// onFire, when set, runs each time the deadline expires, after cancel is
@@ -276,16 +295,20 @@ func (d *pipeDeadline) set(t time.Time) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if d.timer != nil && !d.timer.Stop() {
-		<-d.fired // cancel closes before onFire; a reset must wait for both
+	if d.active {
+		d.active = false
+		if !d.timer.Stop() {
+			<-d.fired // cancel closes before onFire; a reset must wait for both
+			d.timer = nil
+		}
 	}
-	d.timer = nil
 
 	// Time is zero or already expired.
 	closed := isClosedChan(d.cancel)
 	if t.IsZero() {
 		if closed {
 			d.cancel = make(chan struct{})
+			d.timer = nil
 		}
 		return
 	}
@@ -294,15 +317,15 @@ func (d *pipeDeadline) set(t time.Time) {
 	if dur := time.Until(t); dur > 0 {
 		if closed {
 			d.cancel = make(chan struct{})
+			d.timer = nil
+		}
+		if d.timer != nil {
+			d.timer.Reset(dur)
+			d.active = true
+			return
 		}
 		cancel := d.cancel
-		// A stopped timer never ran its callback, so its completion channel can
-		// be reused. Deadline refreshes on the datagram hot path need no new
-		// channel allocation until a deadline actually fires.
-		fired := d.fired
-		if fired == nil || isClosedChan(fired) {
-			fired = make(chan struct{})
-		}
+		fired := make(chan struct{})
 		d.fired = fired
 		d.timer = time.AfterFunc(dur, func() {
 			defer close(fired)
@@ -311,10 +334,12 @@ func (d *pipeDeadline) set(t time.Time) {
 				d.onFire()
 			}
 		})
+		d.active = true
 		return
 	}
 
 	// Time in the past, so close immediately.
+	d.timer = nil
 	if !closed {
 		close(d.cancel)
 		if d.onFire != nil {

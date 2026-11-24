@@ -30,18 +30,30 @@ func TestUDPAdmissionIsOneSessionPerTuple(t *testing.T) {
 		flowSlots:       make(chan struct{}, 4),
 		udpSessionSlots: make(chan struct{}, 4),
 	}
-	first, ok := service.admitUDPSession("a|1|b|2")
+	tuple1 := stack.TransportEndpointID{
+		RemoteAddress: tcpip.AddrFrom4([4]byte{10, 0, 0, 1}),
+		RemotePort:    1,
+		LocalAddress:  tcpip.AddrFrom4([4]byte{10, 0, 0, 2}),
+		LocalPort:     2,
+	}
+	tuple2 := stack.TransportEndpointID{
+		RemoteAddress: tcpip.AddrFrom4([4]byte{10, 0, 0, 1}),
+		RemotePort:    1,
+		LocalAddress:  tcpip.AddrFrom4([4]byte{10, 0, 0, 2}),
+		LocalPort:     3,
+	}
+	first, ok := service.admitUDPSession(tuple1)
 	if !ok || first == nil {
 		t.Fatal("first admission rejected a new 4-tuple")
 	}
-	if duplicate, ok := service.admitUDPSession("a|1|b|2"); !ok || duplicate != nil {
+	if duplicate, ok := service.admitUDPSession(tuple1); !ok || duplicate != nil {
 		t.Fatalf("duplicate admission = (%v, %t), want the live session kept", duplicate, ok)
 	}
-	if other, ok := service.admitUDPSession("a|1|b|3"); !ok || other == nil {
+	if other, ok := service.admitUDPSession(tuple2); !ok || other == nil {
 		t.Fatal("admission rejected a different 4-tuple")
 	}
 	service.finishUDPSession(first)
-	if again, ok := service.admitUDPSession("a|1|b|2"); !ok || again == nil || again == first {
+	if again, ok := service.admitUDPSession(tuple1); !ok || again == nil || again == first {
 		t.Fatal("admission did not open a new session after the 4-tuple was released")
 	}
 	if got := len(service.flowSlots); got != 2 {
@@ -56,7 +68,7 @@ func newTestUDPSession(t *testing.T) *udpSession {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	session := &udpSession{key: "test", ctx: ctx, cancel: cancel}
+	session := &udpSession{ctx: ctx, cancel: cancel}
 	session.touch()
 	return session
 }
@@ -490,11 +502,10 @@ func liveUDPSessions(service *Service) int {
 }
 
 func hasUDPSessionTo(service *Service, port uint16) bool {
-	suffix := fmt.Sprintf("|%d", port)
 	service.udpMu.Lock()
 	defer service.udpMu.Unlock()
 	for key := range service.udpFlows {
-		if strings.HasSuffix(key, suffix) {
+		if key.LocalPort == port {
 			return true
 		}
 	}
@@ -936,3 +947,25 @@ func (c *holdPacketConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *holdPacketConn) SetWriteDeadline(time.Time) error { return nil }
 
 var _ net.PacketConn = (*holdPacketConn)(nil)
+
+func TestUDPForwarderAccountsGlobalStats(t *testing.T) {
+	service, peer, peerNIC := newLinkedService(t, Config{MaxConnections: 2})
+	route := newUDPEchoRoute()
+	service.setResolveRoute(func(string) (transport.Transport, error) {
+		return route, nil
+	})
+
+	beforeTx, beforeRx := transport.GlobalStats.Total()
+	conn := dialPeerUDP(t, peer, peerNIC, tcpip.AddrFrom4([4]byte{198, 51, 100, 99}), 443, ipv4.ProtocolNumber)
+	const payload = "stats-accounted-datagram"
+	if err := exchangeUDP(conn, payload); err != nil {
+		t.Fatal(err)
+	}
+	afterTx, afterRx := transport.GlobalStats.Total()
+	if afterTx-beforeTx < uint64(len(payload)) {
+		t.Fatalf("tx delta = %d, want >= %d", afterTx-beforeTx, len(payload))
+	}
+	if afterRx-beforeRx < uint64(len(payload)) {
+		t.Fatalf("rx delta = %d, want >= %d", afterRx-beforeRx, len(payload))
+	}
+}

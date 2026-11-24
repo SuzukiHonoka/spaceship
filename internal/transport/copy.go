@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"reflect"
 	"slices"
 	"time"
 )
@@ -50,7 +51,15 @@ func Prepend(r io.Reader, prefix []byte) io.Reader {
 	if r == nil || len(prefix) == 0 {
 		return r
 	}
-	prefix = slices.Clone(prefix)
+	return PrependOwned(r, slices.Clone(prefix))
+}
+
+// PrependOwned behaves like Prepend but takes ownership of prefix without
+// cloning it. The caller must not modify prefix after calling PrependOwned.
+func PrependOwned(r io.Reader, prefix []byte) io.Reader {
+	if r == nil || len(prefix) == 0 {
+		return r
+	}
 	if p, ok := r.(*PrefixedConn); ok {
 		if len(p.prefix) > 0 {
 			merged := make([]byte, 0, len(prefix)+len(p.prefix))
@@ -59,10 +68,10 @@ func Prepend(r io.Reader, prefix []byte) io.Reader {
 			prefix = merged
 			p.prefix = nil
 		}
-		return WithPrefix(p.conn, prefix)
+		return &PrefixedConn{prefix: prefix, conn: p.conn}
 	}
 	if c, ok := r.(net.Conn); ok {
-		return WithPrefix(c, prefix)
+		return &PrefixedConn{prefix: prefix, conn: c}
 	}
 	return &pendingReader{pending: prefix, r: r}
 }
@@ -145,8 +154,8 @@ func (p *PrefixedConn) flushPrefix(w io.Writer) (int64, error) {
 	return int64(n), err
 }
 
-// readerOnly and writerOnly hide io.WriterTo and io.ReaderFrom so io.CopyBuffer
-// runs its plain read/write loop with the buffer it was given.
+// readerOnly, writerOnly, and statsWriter hide io.WriterTo and io.ReaderFrom
+// so io.CopyBuffer runs its plain read/write loop with the buffer it was given.
 type readerOnly struct{ r io.Reader }
 
 func (r readerOnly) Read(p []byte) (int, error) { return r.r.Read(p) }
@@ -154,6 +163,19 @@ func (r readerOnly) Read(p []byte) (int, error) { return r.r.Read(p) }
 type writerOnly struct{ w io.Writer }
 
 func (w writerOnly) Write(p []byte) (int, error) { return w.w.Write(p) }
+
+type statsWriter struct {
+	w         io.Writer
+	direction Direction
+}
+
+func (w statsWriter) Write(p []byte) (int, error) {
+	n, err := w.w.Write(p)
+	if n > 0 {
+		GlobalStats.Add(w.direction, int64(n))
+	}
+	return n, err
+}
 
 // kernelConn follows pass-through wrappers down to a stream socket the kernel
 // can move data between: a TCP connection, or a stream Unix-domain one.
@@ -196,58 +218,51 @@ func kernelConn(v any) (net.Conn, bool) {
 // A ReplyGate is waited out and then removed before that choice. Splice and
 // the buffered loop both have to see the connection underneath; looking
 // through the gate earlier would deliver tunnel bytes before the proxy reply.
-func copyStream(ctx context.Context, dst io.Writer, src io.Reader) (int64, error) {
+func copyStream(ctx context.Context, dst io.Writer, src io.Reader, direction Direction) error {
 	if gate, ok := dst.(*ReplyGate); ok {
 		if err := gate.wait(ctx); err != nil {
-			return 0, err
+			return err
 		}
 		dst = gate.w
 	}
-	var written int64
 	if p, ok := src.(*PrefixedConn); ok {
 		n, err := p.flushPrefix(dst)
-		written += n
+		GlobalStats.Add(direction, n)
 		if err != nil {
-			return written, err
+			return err
 		}
 		src = p.conn
 	}
 	if n, err, ok := spliceStreams(dst, src); ok {
-		return written + n, err
+		GlobalStats.Add(direction, n)
+		return err
 	}
 	buf := Buffer()
 	defer PutBuffer(buf)
-	n, err := io.CopyBuffer(writerOnly{dst}, readerOnly{src}, *buf)
-	return written + n, err
+	_, err := io.CopyBuffer(statsWriter{w: dst, direction: direction}, readerOnly{src}, *buf)
+	return err
 }
 
 // CopyWithContext copies from src to dst until EOF or an error, through the
 // kernel when both ends allow it and otherwise with the shared transport
 // buffer. If ctx is canceled before the copy completes, unblock is called
-// before waiting for the copy goroutine to exit.
+// to interrupt in-flight I/O before CopyWithContext returns.
 func CopyWithContext(ctx context.Context, unblock func(), dst io.Writer, src io.Reader, direction Direction) error {
-	type copyResult struct {
-		n   int64
-		err error
-	}
-	resultCh := make(chan copyResult, 1)
-	go func() {
-		n, err := copyStream(ctx, dst, src)
-		resultCh <- copyResult{n: n, err: err}
-	}()
-
-	select {
-	case result := <-resultCh:
-		GlobalStats.Add(direction, result.n)
-		return result.err
-	case <-ctx.Done():
+	if err := ctx.Err(); err != nil {
 		if unblock != nil {
 			unblock()
 		}
-		result := <-resultCh
-		GlobalStats.Add(direction, result.n)
+		return err
+	}
+	if unblock != nil && ctx.Done() != nil {
+		stop := context.AfterFunc(ctx, unblock)
+		defer stop()
+	}
+	err := copyStream(ctx, dst, src, direction)
+	if err != nil && ctx.Err() != nil {
 		return ctx.Err()
 	}
+	return err
 }
 
 // CloseWriteOrClose closes the write side of v when supported. If the
@@ -275,11 +290,12 @@ func CloseAll(values ...any) {
 		if !ok || closer == nil {
 			continue
 		}
-		dup := slices.Contains(seen, closer)
-		if dup {
-			continue
+		if reflect.TypeOf(closer).Comparable() {
+			if slices.Contains(seen, closer) {
+				continue
+			}
+			seen = append(seen, closer)
 		}
-		seen = append(seen, closer)
 		_ = closer.Close()
 	}
 }

@@ -115,3 +115,37 @@ func TestServer_Handle_NotConnect(t *testing.T) {
 		t.Errorf("expected StatusServiceUnavailable for GET with no route, got %v", rr.Code)
 	}
 }
+
+func TestServer_NilInputsAndConcurrentClose(t *testing.T) {
+	var nilCtx context.Context
+	s := New(nilCtx, nil) //nolint:staticcheck // intentionally verifies nil-context guard
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close() before ListenAndServe error = %v", err)
+	}
+	if err := s.ListenAndServe("tcp", "127.0.0.1:0"); err != nil {
+		t.Fatalf("ListenAndServe() after Close error = %v, want nil", err)
+	}
+
+	s2 := New(context.Background(), nil)
+	done := make(chan error, 1)
+	go func() {
+		done <- s2.ListenAndServe("tcp", "127.0.0.1:0")
+	}()
+	time.Sleep(30 * time.Millisecond)
+	closeDone := make(chan error, 2)
+	go func() { closeDone <- s2.Close() }()
+	go func() { closeDone <- s2.Close() }()
+	for range 2 {
+		if err := <-closeDone; err != nil {
+			t.Fatalf("concurrent Close() error = %v", err)
+		}
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ListenAndServe() after Close error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ListenAndServe() did not exit after Close()")
+	}
+}

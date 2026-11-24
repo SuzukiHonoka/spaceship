@@ -121,13 +121,20 @@ func exchangeDNSDatagram(
 	if err := conn.SetDeadline(deadline); err != nil {
 		return nil, 0, err
 	}
-	if err := conn.WriteMsg(query); err != nil {
-		return nil, 0, err
-	}
 
 	bufp := udpResponseBuffers.Get().(*[]byte)
 	defer udpResponseBuffers.Put(bufp)
 	buf := *bufp
+	packed, err := query.PackBuffer(buf[:0])
+	if err != nil {
+		return nil, 0, err
+	}
+	if _, err := conn.Write(packed); err != nil {
+		return nil, 0, err
+	}
+	if cap(packed) == cap(buf) {
+		buf = packed[:cap(packed)]
+	}
 	for {
 		n, err := conn.Read(buf)
 		if err != nil {

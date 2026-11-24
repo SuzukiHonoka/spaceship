@@ -8,9 +8,11 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 )
@@ -39,7 +41,54 @@ type ConnWrapper struct {
 	// never read the clock.
 	lastActive atomic.Int64
 	// stopWarm ends the keep-warm loop. Set before publication.
-	stopWarm context.CancelFunc
+	stopWarm     context.CancelFunc
+	cachedClient atomic.Pointer[cachedDynamicClient]
+}
+
+type cachedDynamicClient struct {
+	epoch  uint64
+	client *DynamicProxyClient
+}
+
+func (w *ConnWrapper) proxyClient() *DynamicProxyClient {
+	epoch, dnsResolve, dnsExchange, proxy := rpc.ServiceMethods()
+	if cur := w.cachedClient.Load(); cur != nil && cur.epoch == epoch {
+		return cur.client
+	}
+	built := &cachedDynamicClient{
+		epoch: epoch,
+		client: &DynamicProxyClient{
+			conn:            w,
+			dnsResolveName:  dnsResolve,
+			dnsExchangeName: dnsExchange,
+			proxyMethodName: proxy,
+		},
+	}
+	w.cachedClient.Store(built)
+	return built.client
+}
+
+type wrapperRelease struct {
+	w    *ConnWrapper
+	q    *ConnQueue
+	mu   sync.Mutex
+	done bool
+	err  error
+}
+
+func (r *wrapperRelease) call() error {
+	r.mu.Lock()
+	if !r.done {
+		r.done = true
+		if r.q != nil {
+			r.err = r.q.release(r.w)
+		} else {
+			r.err = r.w.Done()
+		}
+	}
+	err := r.err
+	r.mu.Unlock()
+	return err
 }
 
 func NewConnWrapper(p *Params) (*ConnWrapper, error) {

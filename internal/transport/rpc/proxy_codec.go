@@ -42,20 +42,37 @@ func (proxyCodec) Name() string { return "proto" }
 func (c proxyCodec) Marshal(v any) (mem.BufferSlice, error) {
 	switch m := v.(type) {
 	case *proxy.ProxySRC:
-		if p, ok := m.HeaderOrPayload.(*proxy.ProxySRC_Payload); ok && p != nil {
-			return marshalBytesField(m, srcPayloadTag, p.Payload)
+		if m != nil {
+			if p, ok := m.HeaderOrPayload.(*proxy.ProxySRC_Payload); ok && p != nil {
+				return marshalBytesField(m, srcPayloadTag, p.Payload)
+			}
 		}
 	case *proxy.ProxyDST:
-		if m.Status == proxy.ProxyStatus_Session {
-			if p, ok := m.HeaderOrPayload.(*proxy.ProxyDST_Payload); ok && p != nil {
-				return marshalBytesField(m, dstPayloadTag, p.Payload)
+		if m != nil {
+			if m.Status == proxy.ProxyStatus_Session {
+				if p, ok := m.HeaderOrPayload.(*proxy.ProxyDST_Payload); ok && p != nil {
+					return marshalBytesField(m, dstPayloadTag, p.Payload)
+				}
+			}
+			if m.HeaderOrPayload == nil &&
+				(m.Status == proxy.ProxyStatus_EOF || m.Status == proxy.ProxyStatus_Error) {
+				if frame, ok := marshalStatusOnly(m.Status); ok {
+					return frame, nil
+				}
 			}
 		}
-		if m.HeaderOrPayload == nil &&
-			(m.Status == proxy.ProxyStatus_EOF || m.Status == proxy.ProxyStatus_Error) {
-			if frame, ok := marshalStatusOnly(m.Status); ok {
+	case *proxy.DnsExchangeRequest:
+		if m != nil {
+			if frame, ok := marshalDNSExchangeRequest(m); ok {
 				return frame, nil
 			}
+		}
+	case *proxy.DnsExchangeResponse:
+		if m != nil {
+			if len(m.WireResponse) == 0 {
+				return nil, nil
+			}
+			return marshalRawBytesField(dnsWireTag, m.WireResponse), nil
 		}
 	}
 	return marshalProto(v)
@@ -67,6 +84,10 @@ func (c proxyCodec) Unmarshal(data mem.BufferSlice, v any) error {
 		return unmarshalProxySRC(data, m)
 	case *proxy.ProxyDST:
 		return unmarshalProxyDST(data, m)
+	case *proxy.DnsExchangeRequest:
+		return unmarshalDNSExchangeRequest(data, m)
+	case *proxy.DnsExchangeResponse:
+		return unmarshalDNSExchangeResponse(data, m)
 	default:
 		return unmarshalProto(data, v)
 	}
@@ -74,9 +95,12 @@ func (c proxyCodec) Unmarshal(data mem.BufferSlice, v any) error {
 
 // Protobuf tags (field number << 3 | wire type) the hot path encodes by hand.
 const (
-	srcPayloadTag byte = 2<<3 | 2 // ProxySRC.payload, length-delimited
-	dstPayloadTag byte = 3<<3 | 2 // ProxyDST.payload, length-delimited
-	dstStatusTag  byte = 1 << 3   // ProxyDST.status, varint (wire type 0)
+	srcPayloadTag   byte = 2<<3 | 2 // ProxySRC.payload, length-delimited
+	dstPayloadTag   byte = 3<<3 | 2 // ProxyDST.payload, length-delimited
+	dstStatusTag    byte = 1 << 3   // ProxyDST.status, varint (wire type 0)
+	dnsWireTag      byte = 1<<3 | 2 // DnsExchangeRequest.wire_query / DnsExchangeResponse.wire_response
+	dnsNetworkTag   byte = 2 << 3   // DnsExchangeRequest.network, varint
+	dnsBlockIPv6Tag byte = 3 << 3   // DnsExchangeRequest.block_ipv6, varint
 )
 
 // maxProtobufBytesHeader is tag (1) + max uvarint length prefix. Reserved at
@@ -211,7 +235,7 @@ func takeOfferedFrame(msg any, tag byte, data []byte) (mem.BufferSlice, bool) {
 	buf, pool := o.buf, o.pool
 	*o = offeredPayload{}
 	// Keep *buf rooted at the allocation base so pool.Put stays valid; expose
-	// only [start:end) via Slice.
+	// the framed region through a refcounted Slice view.
 	*buf = b[:maxProtobufBytesHeader+n]
 	full := mem.NewBuffer(buf, pool)
 	view := full.Slice(start, maxProtobufBytesHeader+n)
@@ -276,7 +300,10 @@ func marshalBytesField(msg any, tag byte, payload []byte) (mem.BufferSlice, erro
 	if frame, ok := takeOfferedFrame(msg, tag, payload); ok {
 		return frame, nil
 	}
+	return marshalRawBytesField(tag, payload), nil
+}
 
+func marshalRawBytesField(tag byte, payload []byte) mem.BufferSlice {
 	varintLen := uvarintSize(lengthPrefix(len(payload)))
 	hdrSize := 1 + varintLen
 	size := hdrSize + len(payload)
@@ -285,7 +312,7 @@ func marshalBytesField(msg any, tag byte, payload []byte) (mem.BufferSlice, erro
 		out[0] = tag
 		putUvarint(out[1:], lengthPrefix(len(payload)))
 		copy(out[hdrSize:], payload)
-		return mem.BufferSlice{mem.SliceBuffer(out)}, nil
+		return mem.BufferSlice{mem.SliceBuffer(out)}
 	}
 
 	pool := BufferPool()
@@ -295,7 +322,7 @@ func marshalBytesField(msg any, tag byte, payload []byte) (mem.BufferSlice, erro
 	putUvarint(b[1:], lengthPrefix(len(payload)))
 	copy(b[hdrSize:], payload)
 	*buf = b
-	return mem.BufferSlice{mem.NewBuffer(buf, pool)}, nil
+	return mem.BufferSlice{mem.NewBuffer(buf, pool)}
 }
 
 // marshalStatusOnly encodes a message whose only field is its status. It
@@ -323,6 +350,15 @@ func unmarshalProxySRC(data mem.BufferSlice, m *proxy.ProxySRC) error {
 	if free != nil {
 		defer free()
 	}
+	if held == nil {
+		if start, end, ok := soleBytesFieldRange(raw, srcPayloadTag); ok {
+			m.Reset()
+			payload := make([]byte, end-start)
+			copy(payload, raw[start:end])
+			setSRCPayloadView(m, payload)
+			return nil
+		}
+	}
 	clearSRC(m)
 	if held != nil {
 		// m no longer aliases the previous view, so it can be returned now.
@@ -346,10 +382,140 @@ func unmarshalProxyDST(data mem.BufferSlice, m *proxy.ProxyDST) error {
 	if free != nil {
 		defer free()
 	}
+	if held == nil {
+		if start, end, ok := soleBytesFieldRange(raw, dstPayloadTag); ok {
+			m.Reset()
+			m.Status = proxy.ProxyStatus_Session
+			payload := make([]byte, end-start)
+			copy(payload, raw[start:end])
+			setDSTPayloadView(m, payload)
+			return nil
+		}
+	}
 	clearDST(m)
 	if held != nil {
 		// m no longer aliases the previous view, so it can be returned now.
 		held.replace(nil)
+	}
+	return proto.Unmarshal(raw, m)
+}
+
+func marshalDNSExchangeRequest(m *proxy.DnsExchangeRequest) (mem.BufferSlice, bool) {
+	if m == nil || m.Network < 0 || m.Network >= 0x80 {
+		return nil, false
+	}
+	size := 0
+	if len(m.WireQuery) > 0 {
+		size += 1 + uvarintSize(lengthPrefix(len(m.WireQuery))) + len(m.WireQuery)
+	}
+	if m.Network != 0 {
+		size += 2
+	}
+	if m.BlockIpv6 {
+		size += 2
+	}
+	if size == 0 {
+		return nil, true
+	}
+	writeInto := func(dst []byte) {
+		pos := 0
+		if len(m.WireQuery) > 0 {
+			dst[pos] = dnsWireTag
+			pos++
+			pos += putUvarint(dst[pos:], lengthPrefix(len(m.WireQuery)))
+			pos += copy(dst[pos:], m.WireQuery)
+		}
+		if m.Network != 0 {
+			dst[pos] = dnsNetworkTag
+			dst[pos+1] = byte(m.Network) // #nosec G115 -- bounded to 0..0x7f above
+			pos += 2
+		}
+		if m.BlockIpv6 {
+			dst[pos] = dnsBlockIPv6Tag
+			dst[pos+1] = 1
+		}
+	}
+	if mem.IsBelowBufferPoolingThreshold(size) {
+		out := make([]byte, size)
+		writeInto(out)
+		return mem.BufferSlice{mem.SliceBuffer(out)}, true
+	}
+	pool := BufferPool()
+	buf := pool.Get(size)
+	b := (*buf)[:size]
+	writeInto(b)
+	*buf = b
+	return mem.BufferSlice{mem.NewBuffer(buf, pool)}, true
+}
+
+func unmarshalDNSExchangeRequest(data mem.BufferSlice, m *proxy.DnsExchangeRequest) error {
+	raw, free := frameBytes(data)
+	if free != nil {
+		defer free()
+	}
+	m.Reset()
+	var (
+		wireSlice []byte
+		hasWire   bool
+		network   proxy.Network
+		blockIPv6 bool
+	)
+	for pos := 0; pos < len(raw); {
+		tag := raw[pos]
+		pos++
+		switch tag {
+		case dnsWireTag:
+			length, n := consumeUvarint(raw[pos:])
+			if n <= 0 || length > lengthPrefix(len(raw)-pos-n) {
+				return proto.Unmarshal(raw, m)
+			}
+			pos += n
+			end := pos + int(length) // #nosec G115 -- bounded by len(raw) above
+			wireSlice = raw[pos:end]
+			hasWire = true
+			pos = end
+		case dnsNetworkTag:
+			val, n := consumeUvarint(raw[pos:])
+			if n <= 0 || val > 0x7fffffff {
+				return proto.Unmarshal(raw, m)
+			}
+			network = proxy.Network(int32(val)) // #nosec G115 -- bounded to int32 range above
+			pos += n
+		case dnsBlockIPv6Tag:
+			val, n := consumeUvarint(raw[pos:])
+			if n <= 0 {
+				return proto.Unmarshal(raw, m)
+			}
+			blockIPv6 = val != 0
+			pos += n
+		default:
+			return proto.Unmarshal(raw, m)
+		}
+	}
+	if hasWire {
+		copied := make([]byte, len(wireSlice))
+		copy(copied, wireSlice)
+		m.WireQuery = copied
+	}
+	m.Network = network
+	m.BlockIpv6 = blockIPv6
+	return nil
+}
+
+func unmarshalDNSExchangeResponse(data mem.BufferSlice, m *proxy.DnsExchangeResponse) error {
+	raw, free := frameBytes(data)
+	if free != nil {
+		defer free()
+	}
+	m.Reset()
+	if len(raw) == 0 {
+		return nil
+	}
+	if start, end, ok := soleBytesFieldRange(raw, dnsWireTag); ok {
+		payload := make([]byte, end-start)
+		copy(payload, raw[start:end])
+		m.WireResponse = payload
+		return nil
 	}
 	return proto.Unmarshal(raw, m)
 }
@@ -443,11 +609,11 @@ func setDSTPayloadView(m *proxy.ProxyDST, src []byte) {
 }
 
 func clearSRC(m *proxy.ProxySRC) {
-	*m = proxy.ProxySRC{}
+	m.Reset()
 }
 
 func clearDST(m *proxy.ProxyDST) {
-	*m = proxy.ProxyDST{}
+	m.Reset()
 }
 
 func marshalProto(v any) (mem.BufferSlice, error) {

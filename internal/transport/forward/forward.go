@@ -127,7 +127,14 @@ func (f *Forward) Proxy(ctx context.Context, addr string, localAddr chan<- strin
 	if err != nil {
 		return err
 	}
-	localAddr <- conn.LocalAddr().String()
+	if conn == nil {
+		return errors.New("forward: dialer returned nil connection")
+	}
+	local := ""
+	if la := conn.LocalAddr(); la != nil {
+		local = la.String()
+	}
+	localAddr <- local
 	defer utils.Close(conn)
 
 	sessionCtx, cancel := context.WithCancel(ctx)

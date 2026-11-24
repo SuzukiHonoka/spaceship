@@ -41,7 +41,7 @@ func (c *connectedPacketConn) ReadPacket() ([]byte, net.Addr, error) {
 		bufp := datagramBuffers.Get().(*[]byte)
 		defer datagramBuffers.Put(bufp)
 		for {
-			n, _, err := syscall.Recvfrom(int(fd), *bufp, 0)
+			n, err := syscall.Read(int(fd), *bufp)
 			switch {
 			case errors.Is(err, syscall.EINTR):
 				continue

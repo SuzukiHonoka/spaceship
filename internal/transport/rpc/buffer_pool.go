@@ -45,11 +45,12 @@ func newDirtyTieredPool(sizes ...int) *dirtyTieredPool {
 
 // tier returns the smallest tier that holds size bytes, or nil.
 func (p *dirtyTieredPool) tier(size int) *dirtySizedPool {
-	i := sort.Search(len(p.tiers), func(i int) bool { return p.tiers[i].size >= size })
-	if i == len(p.tiers) {
-		return nil
+	for _, t := range p.tiers {
+		if t.size >= size {
+			return t
+		}
 	}
-	return p.tiers[i]
+	return nil
 }
 
 // Get returns a buffer of length size whose contents are unspecified.
@@ -81,11 +82,13 @@ func (p *dirtyTieredPool) Put(buf *[]byte) {
 		return
 	}
 	c := cap(*buf)
-	if t := p.tier(c); t != nil {
-		if t.size == c {
-			t.pool.Put(buf)
+	for _, t := range p.tiers {
+		if t.size >= c {
+			if t.size == c {
+				t.pool.Put(buf)
+			}
+			return
 		}
-		return
 	}
 	p.fallback.Put(buf)
 }

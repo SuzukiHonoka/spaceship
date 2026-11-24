@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"sync/atomic"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -23,11 +24,32 @@ func UserIDFromContext(ctx context.Context) (string, bool) {
 
 // --- Client interceptors ---
 
+func clientAuthContext(ctx context.Context, uid string, cached *atomic.Pointer[userAuthMD]) context.Context {
+	if _, hasExisting := metadata.FromOutgoingContext(ctx); hasExisting {
+		return metadata.AppendToOutgoingContext(ctx, MetadataKeyUserID, uid)
+	}
+	cur := cached.Load()
+	if cur == nil || cur.uid != uid {
+		cur = &userAuthMD{
+			uid: uid,
+			md:  metadata.MD{MetadataKeyUserID: []string{uid}},
+		}
+		cached.Store(cur)
+	}
+	return metadata.NewOutgoingContext(ctx, cur.md)
+}
+
+type userAuthMD struct {
+	uid string
+	md  metadata.MD
+}
+
 // UnaryClientAuthInterceptor returns a unary interceptor that attaches
 // the user UUID to outgoing gRPC metadata on every call.
 func UnaryClientAuthInterceptor(getUUID func() string) grpc.UnaryClientInterceptor {
+	var cached atomic.Pointer[userAuthMD]
 	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		ctx = metadata.AppendToOutgoingContext(ctx, MetadataKeyUserID, getUUID())
+		ctx = clientAuthContext(ctx, getUUID(), &cached)
 		return invoker(ctx, method, req, reply, cc, opts...)
 	}
 }
@@ -35,8 +57,9 @@ func UnaryClientAuthInterceptor(getUUID func() string) grpc.UnaryClientIntercept
 // StreamClientAuthInterceptor returns a stream interceptor that attaches
 // the user UUID to outgoing gRPC metadata on every stream.
 func StreamClientAuthInterceptor(getUUID func() string) grpc.StreamClientInterceptor {
+	var cached atomic.Pointer[userAuthMD]
 	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-		ctx = metadata.AppendToOutgoingContext(ctx, MetadataKeyUserID, getUUID())
+		ctx = clientAuthContext(ctx, getUUID(), &cached)
 		return streamer(ctx, desc, cc, method, opts...)
 	}
 }
@@ -75,7 +98,7 @@ func extractAndValidateUserID(ctx context.Context, matchUser func(string) bool) 
 	if !ok {
 		return "", status.Error(codes.Unauthenticated, "missing metadata")
 	}
-	values := md.Get(MetadataKeyUserID)
+	values := md[MetadataKeyUserID]
 	if len(values) == 0 || values[0] == "" {
 		return "", status.Error(codes.Unauthenticated, "missing user id")
 	}

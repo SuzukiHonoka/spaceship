@@ -424,6 +424,67 @@ func TestProxyCodecHeaderRoundTrip(t *testing.T) {
 	}
 }
 
+func TestProxyCodecDnsExchangeWireCompatibility(t *testing.T) {
+	var c proxyCodec
+	requests := []*proxy.DnsExchangeRequest{
+		{},
+		{WireQuery: []byte{0x12, 0x34, 0x01, 0x00}, Network: proxy.Network_UDP, BlockIpv6: true},
+		{WireQuery: bytes.Repeat([]byte{0xab}, 512), Network: proxy.Network_TCP, BlockIpv6: false},
+	}
+	for i, req := range requests {
+		gotSlice, err := c.Marshal(req)
+		if err != nil {
+			t.Fatalf("req %d Marshal: %v", i, err)
+		}
+		gotBytes := gotSlice.Materialize()
+		wantBytes, err := proto.Marshal(req)
+		if err != nil {
+			t.Fatalf("req %d proto.Marshal: %v", i, err)
+		}
+		if !bytes.Equal(gotBytes, wantBytes) {
+			t.Fatalf("req %d wire mismatch:\n got %x\nwant %x", i, gotBytes, wantBytes)
+		}
+		decoded := new(proxy.DnsExchangeRequest)
+		if err := c.Unmarshal(gotSlice, decoded); err != nil {
+			t.Fatalf("req %d Unmarshal: %v", i, err)
+		}
+		gotSlice.Free()
+		if !bytes.Equal(decoded.WireQuery, req.WireQuery) ||
+			decoded.Network != req.Network ||
+			decoded.BlockIpv6 != req.BlockIpv6 {
+			t.Fatalf("req %d round-trip = %+v, want %+v", i, decoded, req)
+		}
+	}
+
+	responses := []*proxy.DnsExchangeResponse{
+		{},
+		{WireResponse: []byte{0x12, 0x34, 0x81, 0x80}},
+		{WireResponse: bytes.Repeat([]byte{0xcd}, 1400)},
+	}
+	for i, resp := range responses {
+		gotSlice, err := c.Marshal(resp)
+		if err != nil {
+			t.Fatalf("resp %d Marshal: %v", i, err)
+		}
+		gotBytes := gotSlice.Materialize()
+		wantBytes, err := proto.Marshal(resp)
+		if err != nil {
+			t.Fatalf("resp %d proto.Marshal: %v", i, err)
+		}
+		if !bytes.Equal(gotBytes, wantBytes) {
+			t.Fatalf("resp %d wire mismatch:\n got %x\nwant %x", i, gotBytes, wantBytes)
+		}
+		decoded := new(proxy.DnsExchangeResponse)
+		if err := c.Unmarshal(gotSlice, decoded); err != nil {
+			t.Fatalf("resp %d Unmarshal: %v", i, err)
+		}
+		gotSlice.Free()
+		if !bytes.Equal(decoded.WireResponse, resp.WireResponse) {
+			t.Fatalf("resp %d round-trip mismatch", i)
+		}
+	}
+}
+
 var codecBenchSizes = []int{16, 64, 256, 1024, 8192, 16384, 256 * 1024}
 
 func BenchmarkProxyCodec_MarshalPayload(b *testing.B) {

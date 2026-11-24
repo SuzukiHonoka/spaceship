@@ -444,12 +444,12 @@ func (c *MixedConfig) Apply() error {
 	if udpSettings.Disable {
 		log.Println("socks5 udp associate disabled")
 	}
-	if c.Buffer > 0 {
-		transport.SetBufferSize(c.Buffer)
+	bufferKiB := c.Buffer
+	if bufferKiB == 0 {
+		bufferKiB = transport.DefaultBufferSizeKiB
 	}
-	if c.Path != "" {
-		rpc.SetServiceName(c.Path)
-	}
+	transport.SetBufferSize(bufferKiB)
+	rpc.SetServiceName(c.Path)
 	if c.Role == RoleClient {
 		rpcClient.SetUUID(c.UUID)
 	}
@@ -473,11 +473,13 @@ func (c *MixedConfig) Apply() error {
 		log.Println("ipv6 enabled")
 	}
 
-	// idle timeout: only apply when the field is present in config.
-	// omitted -> keep transport default (30m); 0 -> disable; n > 0 -> n seconds.
+	// idle timeout: omitted/null -> reset to transport default (30m);
+	// 0 -> disable; n > 0 -> n seconds.
 	if applyIdleTimeout {
 		log.Printf("custom idle timeout: %ds", c.IdleTimeout)
 		transport.SetIdleTimeout(time.Duration(idleTimeoutSeconds) * time.Second)
+	} else {
+		transport.SetIdleTimeout(transport.DefaultIdleTimeout)
 	}
 
 	c.Mux = effectiveMux

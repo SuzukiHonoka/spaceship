@@ -93,18 +93,35 @@ var DefaultCurvePreferences = []tls.CurveID{
 // also stored for BufferPool() so forwarders/codec share the same tiers without
 // racing on experimental.SetDefaultBufferPool (unsafe under parallel Dial/Serve).
 func payloadBufferPool() mem.BufferPool {
-	sizes := []int{256, 4 * 1024, 16 * 1024, 32 * 1024, 64 * 1024, 128 * 1024, 1024 * 1024}
+	// Keep every tier strictly above mem.BufferPoolingThreshold (1KiB in grpc-go)
+	// so mem.NewBuffer refcounts and returns pooled buffers on Free() instead of
+	// wrapping them in an unpooled SliceBuffer that leaks to GC on small chunks.
+	minTier := 2 * 1024
+	for mem.IsBelowBufferPoolingThreshold(minTier) {
+		minTier *= 2
+	}
+	candidates := []int{minTier, 4 * 1024, 16 * 1024, 32 * 1024, 64 * 1024, 128 * 1024, 1024 * 1024}
 	// Exact tiers for a raw transport-buffer read (with in-place protobuf
 	// header reserve) and for a framed payload chunk so neither Get falls
 	// into the 1MB slab.
 	buf := transport.GetBufferSize()
-	sizes = append(sizes, buf, buf+maxProtobufBytesHeader, buf+MessageFramingOverhead)
+	candidates = append(candidates, buf, buf+maxProtobufBytesHeader, buf+MessageFramingOverhead)
+	sizes := make([]int, 0, len(candidates))
+	for _, s := range candidates {
+		if !mem.IsBelowBufferPoolingThreshold(s) {
+			sizes = append(sizes, s)
+		}
+	}
 	pool := newDirtyTieredPool(sizes...)
 	setBufferPool(pool)
 	return pool
 }
 
 var bufferPool atomic.Value // mem.BufferPool
+
+func init() {
+	payloadBufferPool()
+}
 
 func setBufferPool(pool mem.BufferPool) {
 	bufferPool.Store(pool)

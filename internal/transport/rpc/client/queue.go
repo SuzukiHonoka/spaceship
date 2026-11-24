@@ -288,9 +288,9 @@ retry:
 	}
 
 	if !el.surplus {
-		return el, onceError(el.Done), nil
+		return el, (&wrapperRelease{w: el}).call, nil
 	}
-	return el, onceError(func() error { return q.release(el) }), nil
+	return el, (&wrapperRelease{w: el, q: q}).call, nil
 }
 
 func (q *ConnQueue) nextIDLocked() int {
@@ -448,9 +448,7 @@ func (q *ConnQueue) GetClient() (proxy.ProxyClient, func() error, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	// Use dynamic proxy client for configurable service names
-	dynamicClient := NewDynamicProxyClient(conn)
-	return dynamicClient, done, nil
+	return conn.proxyClient(), done, nil
 }
 
 // replaceConn replaces a shutdown connection with a new one in the pool.
