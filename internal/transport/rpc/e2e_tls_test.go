@@ -269,3 +269,97 @@ func TestEndToEnd_TLSRejectsUntrustedCertificate(t *testing.T) {
 		t.Fatal("RPC neither completed nor failed against an untrusted certificate")
 	}
 }
+
+// TestEndToEnd_TLSFingerprints verifies every supported uTLS browser preset
+// (and the "none" Go stdlib fallback) completes a full TLS 1.3 + HTTP/2 gRPC
+// tunnel round-trip against the server.
+func TestEndToEnd_TLSFingerprints(t *testing.T) {
+	routeAllDirect(t)
+	certPath, keyPath := generateTestCert(t)
+	serverAddr := startTLSProxyServer(t, certPath, keyPath)
+
+	fingerprints := []string{
+		"",
+		"chrome",
+		"firefox",
+		"safari",
+		"edge",
+		"ios",
+		"randomized",
+		"none",
+	}
+
+	for _, fp := range fingerprints {
+		name := fp
+		if name == "" {
+			name = "default"
+		}
+		t.Run(name, func(t *testing.T) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("tcp echo listen: %v", err)
+			}
+			defer func() { _ = ln.Close() }()
+
+			payload := []byte("hello via " + name)
+			go func() {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				defer func() { _ = conn.Close() }()
+				buf := make([]byte, len(payload))
+				if _, err := io.ReadFull(conn, buf); err != nil {
+					return
+				}
+				_, _ = conn.Write(buf)
+			}()
+
+			client.SetUUID(testUUID)
+			if err := client.Init(serverAddr, testTLSHost, true, 1, []string{certPath}, fp); err != nil {
+				t.Fatalf("client.Init(%q) error = %v", fp, err)
+			}
+			defer client.Destroy()
+
+			c, err := client.New()
+			if err != nil {
+				t.Fatalf("client.New() error = %v", err)
+			}
+			defer func() { _ = c.Close() }()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			srcReader, srcWriter := io.Pipe()
+			received := make(chan []byte, 1)
+			dst := &signalWriter{want: len(payload), done: received}
+
+			proxyErr := make(chan error, 1)
+			go func() {
+				proxyErr <- c.Proxy(ctx, ln.Addr().String(), make(chan string, 1), dst, srcReader)
+			}()
+
+			if _, err := srcWriter.Write(payload); err != nil {
+				t.Fatalf("writing payload: %v", err)
+			}
+
+			select {
+			case got := <-received:
+				if !bytes.Equal(got, payload) {
+					t.Errorf("proxied payload = %q, want %q", got, payload)
+				}
+			case err := <-proxyErr:
+				t.Fatalf("Proxy() failed for fingerprint %q: %v", name, err)
+			case <-time.After(30 * time.Second):
+				t.Fatalf("timed out waiting for round-trip with fingerprint %q", name)
+			}
+
+			_ = srcWriter.Close()
+			select {
+			case <-proxyErr:
+			case <-time.After(10 * time.Second):
+				t.Errorf("Proxy() did not return after close for fingerprint %q", name)
+			}
+		})
+	}
+}

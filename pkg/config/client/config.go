@@ -22,7 +22,11 @@ type Client struct {
 	// enabled, in which case Apply selects a safe persistent minimum.
 	Mux       uint8         `json:"mux"`
 	EnableTLS bool          `json:"tls"`
-	Routes    router.Routes `json:"route,omitempty"`
+	// TLSFingerprint selects the uTLS ClientHello fingerprint used when TLS is
+	// enabled: "chrome" (default), "firefox", "safari", "edge", "ios",
+	// "randomized", or "none"/"golang" for Go's standard crypto/tls.
+	TLSFingerprint string        `json:"tls_fingerprint,omitempty"`
+	Routes         router.Routes `json:"route,omitempty"`
 	// IdleTimeout is gRPC connection idle timeout in seconds.
 	// For decoded JSON, omission keeps the transport default and explicit 0
 	// disables the timeout. The int type is retained for source compatibility.

@@ -32,6 +32,24 @@ func BenchmarkEndToEnd_TCPStreamTLS(b *testing.B) {
 	benchmarkTCPStream(b, true)
 }
 
+func BenchmarkEndToEnd_TCPStreamTLSFingerprint(b *testing.B) {
+	for _, fp := range []string{"none", "chrome", "firefox"} {
+		b.Run(fp, func(b *testing.B) {
+			quietLogs(b)
+			routeAllDirect(b)
+			echoAddr := startTCPEcho(b)
+			cert, key := generateTestCert(b)
+			serverAddr := startTLSProxyServer(b, cert, key)
+			client.SetUUID(testUUID)
+			if err := client.Init(serverAddr, testTLSHost, true, 1, []string{cert}, fp); err != nil {
+				b.Fatalf("client.Init(%q): %v", fp, err)
+			}
+			b.Cleanup(client.Destroy)
+			benchtest.Stream(b, benchClient(b), echoAddr)
+		})
+	}
+}
+
 func benchmarkTCPStream(b *testing.B, useTLS bool) {
 	quietLogs(b)
 	routeAllDirect(b)

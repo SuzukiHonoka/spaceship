@@ -122,7 +122,7 @@ func (l *Launcher) launchClient(ctx context.Context, cfg *config.MixedConfig) er
 	defer client.Destroy()
 
 	// initialize pool
-	if err := client.Init(cfg.ServerAddr, cfg.Host, cfg.EnableTLS, cfg.Mux, cfg.CAs); err != nil {
+	if err := client.Init(cfg.ServerAddr, cfg.Host, cfg.EnableTLS, cfg.Mux, cfg.CAs, cfg.TLSFingerprint); err != nil {
 		return fmt.Errorf("init client failed: %w", err)
 	}
 

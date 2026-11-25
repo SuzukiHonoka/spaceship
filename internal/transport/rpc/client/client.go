@@ -21,6 +21,7 @@ import (
 	rpcutils "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/utils"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"github.com/miekg/dns"
+	utls "github.com/refraction-networking/utls"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -59,9 +60,14 @@ func getQueue() *ConnQueue {
 	return queuePtr.Load()
 }
 
-func setupGrpcCredential(tls bool, hostName string, customCA ...string) (credentials.TransportCredentials, error) {
+func setupGrpcCredential(tls bool, hostName, tlsFingerprint string, customCA ...string) (credentials.TransportCredentials, error) {
 	if !tls {
 		return insecure.NewCredentials(), nil
+	}
+
+	spec, err := parseTLSFingerprintSpec(tlsFingerprint)
+	if err != nil {
+		return nil, err
 	}
 
 	pool, err := x509.SystemCertPool()
@@ -76,6 +82,11 @@ func setupGrpcCredential(tls bool, hostName string, customCA ...string) (credent
 	// load custom cas if exist
 	if err = loadCertificateAuthorities(pool, customCA); err != nil {
 		return nil, fmt.Errorf("load custom ca failed: %w", err)
+	}
+
+	if spec.useUTLS {
+		utlsConfig := buildClientUTLSConfig(pool, hostName)
+		return newUTLSCredentials(utlsConfig, spec), nil
 	}
 
 	tlsConfig, err := buildClientTLSConfig(pool, hostName)
@@ -116,8 +127,22 @@ func buildClientTLSConfig(cp *x509.CertPool, serverNameOverride string) (*tls.Co
 	return tlsConfig, nil
 }
 
-func Init(server, hostName string, tls bool, mux uint8, cas []string) error {
-	credential, err := setupGrpcCredential(tls, hostName, cas...)
+func buildClientUTLSConfig(cp *x509.CertPool, serverNameOverride string) *utls.Config {
+	return &utls.Config{
+		ServerName:         serverNameOverride,
+		RootCAs:            cp,
+		ClientSessionCache: utls.NewLRUClientSessionCache(128),
+		MinVersion:         utls.VersionTLS12,
+		NextProtos:         []string{alpnH2, "http/1.1"},
+	}
+}
+
+func Init(server, hostName string, tls bool, mux uint8, cas []string, tlsFingerprint ...string) error {
+	var fp string
+	if len(tlsFingerprint) > 0 {
+		fp = tlsFingerprint[0]
+	}
+	credential, err := setupGrpcCredential(tls, hostName, fp, cas...)
 	if err != nil {
 		return fmt.Errorf("setup grpc credential failed: %w", err)
 	}

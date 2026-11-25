@@ -73,6 +73,7 @@ const (
 )
 
 var DefaultCurvePreferences = []tls.CurveID{
+	tls.X25519MLKEM768,
 	tls.X25519,
 	tls.CurveP256,
 }

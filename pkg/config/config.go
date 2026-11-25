@@ -399,6 +399,14 @@ func (c *MixedConfig) Apply() error {
 			return errors.New("client uuid empty")
 		}
 	}
+	if c.TLSFingerprint != "" {
+		if c.Role != RoleClient {
+			return errors.New("tls_fingerprint is only valid for the client role")
+		}
+		if err := rpcClient.ValidateTLSFingerprint(c.TLSFingerprint); err != nil {
+			return err
+		}
+	}
 
 	// Forward proxy. Apply this unconditionally so a later Apply that drops the
 	// setting does not retain a stale process-global dialer from the old config.
