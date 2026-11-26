@@ -2,9 +2,74 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
+	"net/netip"
+	"time"
 )
+
+// PacketFiltering selects RFC 4787 NAT filtering behavior for unconnected UDP
+// sessions.
+type PacketFiltering uint8
+
+const (
+	// PacketFilteringEIF allows replies from any remote IP:port (Full Cone /
+	// Endpoint-Independent Filtering).
+	PacketFilteringEIF PacketFiltering = iota
+	// PacketFilteringAD allows replies only from remote IPs the session has
+	// previously sent to (Address-Dependent Filtering).
+	PacketFilteringAD
+	// PacketFilteringAPD allows replies only from remote IP:port pairs the
+	// session has previously sent to (Address-and-Port-Dependent Filtering).
+	PacketFilteringAPD
+)
+
+func (f PacketFiltering) String() string {
+	switch f {
+	case PacketFilteringEIF:
+		return "eif"
+	case PacketFilteringAD:
+		return "ad"
+	case PacketFilteringAPD:
+		return "apd"
+	default:
+		return "unknown"
+	}
+}
+
+// ErrPacketSessionUnsupported indicates that a transport or remote peer does
+// not support multiplexed unconnected UDP sessions (for example an older
+// Spaceship server that predates ProxyPacket).
+var ErrPacketSessionUnsupported = errors.New("transport: packet session unsupported")
+
+// PacketTarget identifies a destination or source peer for a datagram in a
+// MultiPacketConn session. Either Addr (IP:port) is valid, or Host + Port are
+// supplied for remote DNS resolution.
+type PacketTarget struct {
+	Addr netip.AddrPort
+	Host string
+	Port uint16
+}
+
+// MultiPacketConn is a multiplexed unconnected UDP session (RFC 4787 EIM) that
+// preserves a single outbound socket across multiple remote peers.
+type MultiPacketConn interface {
+	ReadPacketFrom() (payload []byte, peer netip.AddrPort, err error)
+	WritePacketTo(payload []byte, dst PacketTarget) error
+	LocalAddr() net.Addr
+	SetDeadline(t time.Time) error
+	SetReadDeadline(t time.Time) error
+	SetWriteDeadline(t time.Time) error
+	Close() error
+}
+
+// PacketSessionDialer is an optional interface implemented by transports that
+// support Endpoint-Independent Mapping (full-cone / restricted-cone) UDP
+// sessions.
+type PacketSessionDialer interface {
+	DialPacketSession(ctx context.Context, network string, filtering PacketFiltering) (MultiPacketConn, error)
+}
 
 type Transport interface {
 	String() string

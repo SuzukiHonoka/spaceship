@@ -221,7 +221,11 @@ func tlsServerName(record []byte) string {
 	if !ok {
 		return ""
 	}
-	if _, ok = offeredTLSVersion(legacy, exts); !ok {
+	return extractTLSServerName(legacy, exts)
+}
+
+func extractTLSServerName(legacy uint16, exts []byte) string {
+	if _, ok := offeredTLSVersion(legacy, exts); !ok {
 		return ""
 	}
 	if serverNameEncrypted(exts) {
@@ -247,7 +251,13 @@ func clientHelloExtensions(record []byte) (legacy uint16, exts []byte, ok bool) 
 	if !ok || len(record) < size {
 		return 0, nil, false
 	}
-	hs := record[5:size]
+	return clientHelloHandshakeExtensions(record[5:size])
+}
+
+// clientHelloHandshakeExtensions parses a raw TLS ClientHello handshake message
+// (without the 5-byte TLS record header), shared by TLS-over-TCP and QUIC
+// CRYPTO frame sniffing.
+func clientHelloHandshakeExtensions(hs []byte) (legacy uint16, exts []byte, ok bool) {
 	if len(hs) < 4 || hs[0] != tlsClientHello {
 		return 0, nil, false
 	}

@@ -15,12 +15,59 @@ import (
 const DefaultBypassMark uint32 = 0x5350
 
 var (
-	bypassMark       atomic.Uint32
-	outboundResolver atomic.Pointer[net.Resolver]
+	bypassMark            atomic.Uint32
+	outboundIfIndex       atomic.Uint32
+	outboundIfName        atomic.Pointer[string]
+	outboundResolver      atomic.Pointer[net.Resolver]
 	// outboundProtector is optional. Nil means outbound sockets get no extra
 	// protection beyond the bypass mark.
 	outboundProtector atomic.Pointer[socketProtector]
 )
+
+// SetOutboundInterfaceIndex binds Spaceship-created outbound sockets to the
+// physical interface index idx on platforms that use interface-based loop
+// prevention (macOS IP_BOUND_IF, Windows IP_UNICAST_IF). Zero disables binding.
+func SetOutboundInterfaceIndex(idx uint32) {
+	outboundIfIndex.Store(idx)
+	if idx == 0 {
+		outboundIfName.Store(nil)
+	}
+}
+
+// OutboundInterfaceIndex returns the currently configured outbound interface index.
+func OutboundInterfaceIndex() uint32 {
+	return outboundIfIndex.Load()
+}
+
+// SetOutboundInterface resolves name to an interface index and installs both
+// the index (macOS/Windows) and name (Linux SO_BINDTODEVICE). An empty name
+// clears outbound interface binding.
+func SetOutboundInterface(name string) error {
+	if name == "" {
+		outboundIfIndex.Store(0)
+		outboundIfName.Store(nil)
+		return nil
+	}
+	iface, err := net.InterfaceByName(name)
+	if err != nil {
+		return fmt.Errorf("transport: lookup outbound interface %q: %w", name, err)
+	}
+	if iface.Index <= 0 {
+		return fmt.Errorf("transport: invalid interface index %d for %q", iface.Index, name)
+	}
+	n := iface.Name
+	outboundIfName.Store(&n)
+	outboundIfIndex.Store(uint32(iface.Index))
+	return nil
+}
+
+// OutboundInterfaceName returns the configured outbound interface name, or "".
+func OutboundInterfaceName() string {
+	if p := outboundIfName.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
 
 // socketProtector is stored by pointer so SetSocketProtector can swap it
 // atomically. The function runs on Spaceship-created outbound sockets.
@@ -104,6 +151,15 @@ func NewOutboundDialer(timeout time.Duration) *net.Dialer {
 		Timeout:  timeout,
 		Resolver: OutboundResolver(),
 		Control:  outboundSocketControl,
+	}
+}
+
+// NewOutboundListenConfig returns a net.ListenConfig whose sockets apply the
+// process-wide outbound bypass policy (SO_MARK / IP_BOUND_IF / IP_UNICAST_IF /
+// socket protector). Used for unconnected direct UDP sessions (EIM NAT).
+func NewOutboundListenConfig() *net.ListenConfig {
+	return &net.ListenConfig{
+		Control: outboundSocketControl,
 	}
 }
 

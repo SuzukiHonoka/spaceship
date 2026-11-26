@@ -3,6 +3,7 @@ package tun
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"runtime"
 	"strings"
 	"time"
@@ -11,6 +12,35 @@ import (
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	clientConfig "github.com/SuzukiHonoka/spaceship/v2/pkg/config/client"
 )
+
+// UDPMappingMode selects RFC 4787 UDP NAT mapping behavior.
+type UDPMappingMode string
+
+const (
+	UDPMappingEIM UDPMappingMode = "eim"
+	UDPMappingAD  UDPMappingMode = "ad"
+	UDPMappingAPD UDPMappingMode = "apd"
+)
+
+// UDPFilteringMode selects RFC 4787 UDP NAT filtering behavior.
+type UDPFilteringMode string
+
+const (
+	UDPFilteringEIF UDPFilteringMode = "eif"
+	UDPFilteringAD  UDPFilteringMode = "ad"
+	UDPFilteringAPD UDPFilteringMode = "apd"
+)
+
+func (m UDPFilteringMode) transportFiltering() transport.PacketFiltering {
+	switch m {
+	case UDPFilteringAD:
+		return transport.PacketFilteringAD
+	case UDPFilteringAPD:
+		return transport.PacketFilteringAPD
+	default:
+		return transport.PacketFilteringEIF
+	}
+}
 
 const (
 	DefaultName                     = "spaceship0"
@@ -39,7 +69,7 @@ const (
 	maxDNSInFlightLimit = 1024
 )
 
-var ErrUnsupported = errors.New("TUN is only supported on Linux and Android")
+var ErrUnsupported = errors.New("TUN is only supported on Linux, Android, macOS/iOS, and Windows")
 
 // DNSConfig controls classic DNS interception on TCP and UDP destination port
 // 53. It intentionally has no resolver address: every accepted query goes
@@ -52,6 +82,7 @@ type DNSConfig struct {
 	// being something other than DNS.
 	Enabled        bool
 	BlockIPv6      bool
+	Addresses      []netip.Addr
 	QueryTimeout   time.Duration
 	TCPIdleTimeout time.Duration
 	MaxInFlight    int
@@ -103,7 +134,25 @@ type Config struct {
 	// UDPIdleTimeout closes a general UDP session after this long without a
 	// datagram in either direction. Zero selects DefaultUDPIdleTimeout.
 	UDPIdleTimeout time.Duration
-	DNS            DNSConfig
+	// UDPMapping selects RFC 4787 NAT mapping ("eim", "ad", "apd"). Empty
+	// defaults to "eim" (Full Cone / Endpoint-Independent Mapping).
+	UDPMapping UDPMappingMode
+	// UDPFiltering selects RFC 4787 NAT filtering ("eif", "ad", "apd"). Empty
+	// defaults to "eif" (Full Cone / Endpoint-Independent Filtering).
+	UDPFiltering UDPFilteringMode
+	// Address lists interface CIDRs for route_mode "auto".
+	Address []netip.Prefix
+	// RouteExcludeAddress lists CIDRs excluded from auto routing.
+	RouteExcludeAddress []netip.Prefix
+	// OutboundInterface optionally overrides the physical egress interface.
+	OutboundInterface string
+	// AutoRedirect enables Linux nftables transparent TCP redirect acceleration.
+	AutoRedirect bool
+	// AutoRedirectIncludeForward enables PREROUTING capture for LAN forwarding.
+	AutoRedirectIncludeForward bool
+	// WintunPath optionally locates wintun.dll on Windows.
+	WintunPath string
+	DNS        DNSConfig
 
 	// ResolveRoute overrides the process-global router when non-nil. It must be
 	// supplied to New rather than assigned on Service afterwards: CreateNIC
@@ -140,8 +189,33 @@ func NormalizeConfig(cfg Config) (Config, error) {
 	if cfg.RouteMode == "" {
 		cfg.RouteMode = "manual"
 	}
-	if cfg.RouteMode != "manual" {
-		return Config{}, fmt.Errorf("tun: unsupported route mode %q", cfg.RouteMode)
+	if cfg.RouteMode != "manual" && cfg.RouteMode != "auto" {
+		return Config{}, fmt.Errorf("tun: unsupported route mode %q (want \"manual\" or \"auto\")", cfg.RouteMode)
+	}
+	if cfg.RouteMode == "auto" {
+		if runtime.GOOS == "android" || runtime.GOOS == "ios" {
+			return Config{}, fmt.Errorf("tun: route_mode \"auto\" is not supported on %s (OS VPN service owns routes)", runtime.GOOS)
+		}
+		if cfg.FileDescriptor != nil {
+			return Config{}, errors.New("tun: route_mode \"auto\" cannot be combined with an external file_descriptor")
+		}
+		if len(cfg.Address) == 0 {
+			cfg.Address = []netip.Prefix{
+				netip.MustParsePrefix("198.18.0.1/30"),
+				netip.MustParsePrefix("fdfe:dcba:9876::1/126"),
+			}
+		}
+	}
+	if cfg.AutoRedirect {
+		if runtime.GOOS != "linux" {
+			return Config{}, errors.New("tun: auto_redirect is only supported on Linux")
+		}
+		if cfg.RouteMode != "auto" {
+			return Config{}, errors.New("tun: auto_redirect requires route_mode \"auto\"")
+		}
+	}
+	if cfg.AutoRedirectIncludeForward && !cfg.AutoRedirect {
+		return Config{}, errors.New("tun: auto_redirect_include_forward requires auto_redirect")
 	}
 	cfg.BypassMark, cfg.BypassMarkRequired = normalizeBypassMark(runtime.GOOS, cfg.BypassMark)
 	if cfg.UDPIdleTimeout == 0 {
@@ -149,6 +223,22 @@ func NormalizeConfig(cfg Config) (Config, error) {
 	}
 	if cfg.UDPIdleTimeout < 0 {
 		return Config{}, fmt.Errorf("tun: udp idle timeout must be positive: %s", cfg.UDPIdleTimeout)
+	}
+	if cfg.UDPMapping == "" {
+		cfg.UDPMapping = UDPMappingEIM
+	}
+	switch cfg.UDPMapping {
+	case UDPMappingEIM, UDPMappingAD, UDPMappingAPD:
+	default:
+		return Config{}, fmt.Errorf("tun: unsupported udp_mapping %q", cfg.UDPMapping)
+	}
+	if cfg.UDPFiltering == "" {
+		cfg.UDPFiltering = UDPFilteringEIF
+	}
+	switch cfg.UDPFiltering {
+	case UDPFilteringEIF, UDPFilteringAD, UDPFilteringAPD:
+	default:
+		return Config{}, fmt.Errorf("tun: unsupported udp_filtering %q", cfg.UDPFiltering)
 	}
 
 	var err error
@@ -222,20 +312,21 @@ func NormalizeConfig(cfg Config) (Config, error) {
 }
 
 // normalizeBypassMark distinguishes an omitted or explicit zero mark from a
-// requested one. Linux TUN, including an external fd, still defaults a zero
-// to the built-in mark and requires it: policy routing would otherwise
-// recapture Spaceship's own egress. Android VpnService excludes the app or
-// protects sockets, so zero installs nothing and is not verified. An explicit
-// non-zero mark is installed on both and fails startup if it cannot be set.
+// requested one. Linux TUN (non-Android) defaults a zero to the built-in mark
+// and requires it: policy routing would otherwise recapture Spaceship's own
+// egress. Android (VpnService), macOS/iOS (IP_BOUND_IF / NEPacketTunnelProvider),
+// and Windows (IP_UNICAST_IF) do not use Linux SO_MARK, so zero installs
+// nothing and is not required there. An explicit non-zero mark is always
+// treated as required and fails startup if the platform cannot set it.
 func normalizeBypassMark(goos string, mark uint32) (effective uint32, required bool) {
-	if goos == "android" {
+	if goos == "linux" {
 		if mark == 0 {
-			return 0, false
+			return DefaultBypassMark, true
 		}
 		return mark, true
 	}
 	if mark == 0 {
-		return DefaultBypassMark, true
+		return 0, false
 	}
 	return mark, true
 }
@@ -252,17 +343,54 @@ func FromClientConfig(raw *clientConfig.TUN, blockIPv6 bool) (Config, error) {
 	if raw.BypassMark != nil {
 		bypassMark = *raw.BypassMark
 	}
+	udpIdleTimeout, err := secondsDuration("udp_idle_timeout_seconds", raw.UDPIdleTimeoutSeconds)
+	if err != nil {
+		return Config{}, err
+	}
+	var addresses []netip.Prefix
+	for _, s := range raw.Address {
+		p, parseErr := netip.ParsePrefix(strings.TrimSpace(s))
+		if parseErr != nil {
+			return Config{}, fmt.Errorf("tun: invalid address %q: %w", s, parseErr)
+		}
+		addresses = append(addresses, p)
+	}
+	var excludeAddresses []netip.Prefix
+	for _, s := range raw.RouteExcludeAddress {
+		p, parseErr := netip.ParsePrefix(strings.TrimSpace(s))
+		if parseErr != nil {
+			return Config{}, fmt.Errorf("tun: invalid route_exclude_address %q: %w", s, parseErr)
+		}
+		excludeAddresses = append(excludeAddresses, p)
+	}
 	cfg := Config{
-		Name:                  raw.Name,
-		MTU:                   raw.MTU,
-		FileDescriptor:        raw.FileDescriptor,
-		RouteMode:             raw.RouteMode,
-		BypassMark:            bypassMark,
-		MaxConnections:        raw.MaxConnections,
-		MaxPendingConnections: raw.MaxPendingConnections,
-		MaxUDPSessions:        raw.MaxUDPSessions,
+		Name:                       raw.Name,
+		MTU:                        raw.MTU,
+		FileDescriptor:             raw.FileDescriptor,
+		RouteMode:                  raw.RouteMode,
+		Address:                    addresses,
+		RouteExcludeAddress:        excludeAddresses,
+		OutboundInterface:          strings.TrimSpace(raw.OutboundInterface),
+		AutoRedirect:               raw.AutoRedirect,
+		AutoRedirectIncludeForward: raw.AutoRedirectIncludeForward,
+		WintunPath:                 strings.TrimSpace(raw.WintunPath),
+		BypassMark:                 bypassMark,
+		MaxConnections:             raw.MaxConnections,
+		MaxPendingConnections:      raw.MaxPendingConnections,
+		MaxUDPSessions:             raw.MaxUDPSessions,
+		UDPIdleTimeout:             udpIdleTimeout,
+		UDPMapping:                 UDPMappingMode(strings.ToLower(strings.TrimSpace(raw.UDPMapping))),
+		UDPFiltering:               UDPFilteringMode(strings.ToLower(strings.TrimSpace(raw.UDPFiltering))),
 	}
 	if raw.DNSHijack != nil {
+		var dnsAddrs []netip.Addr
+		for _, s := range raw.DNSHijack.Addresses {
+			addr, parseErr := netip.ParseAddr(strings.TrimSpace(s))
+			if parseErr != nil {
+				return Config{}, fmt.Errorf("tun: invalid dns_hijack.addresses entry %q: %w", s, parseErr)
+			}
+			dnsAddrs = append(dnsAddrs, addr.Unmap())
+		}
 		queryTimeout, err := secondsDuration(
 			"dns_hijack.query_timeout_seconds",
 			raw.DNSHijack.QueryTimeoutSeconds,
@@ -280,6 +408,7 @@ func FromClientConfig(raw *clientConfig.TUN, blockIPv6 bool) (Config, error) {
 		cfg.DNS = DNSConfig{
 			Enabled:                  raw.DNSHijack.Enabled,
 			BlockIPv6:                blockIPv6,
+			Addresses:                dnsAddrs,
 			QueryTimeout:             queryTimeout,
 			TCPIdleTimeout:           tcpIdleTimeout,
 			MaxInFlight:              raw.DNSHijack.MaxInFlight,

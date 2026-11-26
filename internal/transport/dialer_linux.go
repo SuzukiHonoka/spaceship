@@ -40,9 +40,10 @@ func verifyBypassMark(mark uint32) error {
 
 func outboundSocketControl(_, _ string, raw syscall.RawConn) error {
 	mark := bypassMark.Load()
+	ifName := OutboundInterfaceName()
 	// The protector runs even when the mark is 0. Android VPN apps use it to
 	// call VpnService.protect, which is unrelated to SO_MARK.
-	if mark == 0 && socketProtectorHook() == nil {
+	if mark == 0 && ifName == "" && socketProtectorHook() == nil {
 		return nil
 	}
 
@@ -51,6 +52,12 @@ func outboundSocketControl(_, _ string, raw syscall.RawConn) error {
 		if err := protectOutboundSocket(int(fd)); err != nil {
 			socketErr = err
 			return
+		}
+		if ifName != "" {
+			if err := unix.SetsockoptString(int(fd), unix.SOL_SOCKET, unix.SO_BINDTODEVICE, ifName); err != nil {
+				socketErr = fmt.Errorf("set outbound SO_BINDTODEVICE %q: %w", ifName, err)
+				return
+			}
 		}
 		if mark == 0 {
 			return

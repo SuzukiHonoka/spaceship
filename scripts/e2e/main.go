@@ -271,6 +271,10 @@ func runSuite(bin, workDir string, useTLS bool) {
 	// UDP associate.
 	err = udpRoundTrip(s.socks, s.udp)
 	checkf(label+"/socks5 udp associate", err, "datagram echoed")
+
+	// Full-cone (EIM + EIF) UDP associate over ProxyPacket RPC.
+	err = udpFullConeRoundTrip(s.socks)
+	checkf(label+"/socks5 udp full-cone EIM", err, "unsolicited peer reply received with true peer addr")
 }
 
 // runAuthSuite proves basic_auth is enforced on the SOCKS front end in both
@@ -490,6 +494,81 @@ func udpRoundTrip(socksAddr, udpTarget string) error {
 	}
 	if !bytes.Equal(got, payload) {
 		return fmt.Errorf("datagram mismatch: got %q want %q", got, payload)
+	}
+	return nil
+}
+
+// udpFullConeRoundTrip proves RFC 4787 Full-Cone (EIM + EIF) across real client
+// and server binaries: the client sends a datagram to peerA through SOCKS5 UDP
+// ASSOCIATE, peerA observes the server's mapped egress socket, and an
+// uncontacted peerB replies to that mapped socket. The client must receive
+// peerB's payload tagged with peerB's actual IP:port.
+func udpFullConeRoundTrip(socksAddr string) error {
+	peerA, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = peerA.Close() }()
+
+	peerB, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = peerB.Close() }()
+
+	ctrl, relay, err := socks5UDPAssociate(socksAddr)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = ctrl.Close() }()
+
+	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = pc.Close() }()
+
+	relayAddr, err := net.ResolveUDPAddr("udp4", relay)
+	if err != nil {
+		return err
+	}
+
+	probe := []byte("eim-probe-a")
+	pkt, err := encapsulateUDP(peerA.LocalAddr().String(), probe)
+	if err != nil {
+		return err
+	}
+	if _, err := pc.WriteTo(pkt, relayAddr); err != nil {
+		return err
+	}
+
+	buf := make([]byte, 256)
+	_ = peerA.SetReadDeadline(time.Now().Add(10 * time.Second))
+	n, mappedAddr, err := peerA.ReadFromUDPAddrPort(buf)
+	if err != nil {
+		return fmt.Errorf("peerA read: %w", err)
+	}
+	if !bytes.Equal(buf[:n], probe) {
+		return fmt.Errorf("peerA got %q, want %q", buf[:n], probe)
+	}
+
+	// Uncontacted peerB sends directly to the mapped server socket.
+	reply := []byte("eim-fullcone-from-b")
+	if _, err := peerB.WriteToUDPAddrPort(reply, mappedAddr); err != nil {
+		return fmt.Errorf("peerB write: %w", err)
+	}
+
+	_ = pc.SetReadDeadline(time.Now().Add(10 * time.Second))
+	n, _, err = pc.ReadFrom(buf)
+	if err != nil {
+		return fmt.Errorf("client read full-cone reply: %w", err)
+	}
+	got, err := decapsulateUDP(buf[:n])
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(got, reply) {
+		return fmt.Errorf("full-cone payload = %q, want %q", got, reply)
 	}
 	return nil
 }

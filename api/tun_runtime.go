@@ -134,3 +134,15 @@ func (l *Launcher) StopTUN() {
 	_ = session.service.Close()
 	<-session.done
 }
+
+// ResetTUNNetwork flushes active UDP NAT sessions on a dynamically attached
+// TUN device after a host network transition (for example Wi-Fi <-> cellular
+// reported by Android ConnectivityManager or iOS NWPathMonitor).
+func (l *Launcher) ResetTUNNetwork() {
+	l.tunMu.Lock()
+	session := l.tunSess
+	l.tunMu.Unlock()
+	if session != nil && session.service != nil {
+		session.service.ResetNetwork()
+	}
+}

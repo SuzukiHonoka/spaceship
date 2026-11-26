@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v7.36.2
-// source: proxy.proto
+// source: internal/transport/rpc/proto/proxy.proto
 
 package proxy
 
@@ -22,6 +22,7 @@ const (
 	Proxy_DnsResolve_FullMethodName  = "/proxy.Proxy/DnsResolve"
 	Proxy_DnsExchange_FullMethodName = "/proxy.Proxy/DnsExchange"
 	Proxy_Proxy_FullMethodName       = "/proxy.Proxy/Proxy"
+	Proxy_ProxyPacket_FullMethodName = "/proxy.Proxy/ProxyPacket"
 )
 
 // ProxyClient is the client API for Proxy service.
@@ -36,6 +37,12 @@ type ProxyClient interface {
 	// DNSSEC, authority/additional sections, flags, and truncation.
 	DnsExchange(ctx context.Context, in *DnsExchangeRequest, opts ...grpc.CallOption) (*DnsExchangeResponse, error)
 	Proxy(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ProxySRC, ProxyDST], error)
+	// ProxyPacket carries a multiplexed unconnected UDP session (RFC 4787
+	// Endpoint-Independent Mapping). A single server-side UDP socket is preserved
+	// across multiple remote peers so full-cone/restricted-cone replies reach the
+	// client with their true source IP:port. Separate from Proxy for full wire
+	// backward compatibility with older clients and servers.
+	ProxyPacket(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[PacketFrame, PacketFrame], error)
 }
 
 type proxyClient struct {
@@ -79,6 +86,19 @@ func (c *proxyClient) Proxy(ctx context.Context, opts ...grpc.CallOption) (grpc.
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Proxy_ProxyClient = grpc.BidiStreamingClient[ProxySRC, ProxyDST]
 
+func (c *proxyClient) ProxyPacket(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[PacketFrame, PacketFrame], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Proxy_ServiceDesc.Streams[1], Proxy_ProxyPacket_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[PacketFrame, PacketFrame]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Proxy_ProxyPacketClient = grpc.BidiStreamingClient[PacketFrame, PacketFrame]
+
 // ProxyServer is the server API for Proxy service.
 // All implementations must embed UnimplementedProxyServer
 // for forward compatibility.
@@ -91,6 +111,12 @@ type ProxyServer interface {
 	// DNSSEC, authority/additional sections, flags, and truncation.
 	DnsExchange(context.Context, *DnsExchangeRequest) (*DnsExchangeResponse, error)
 	Proxy(grpc.BidiStreamingServer[ProxySRC, ProxyDST]) error
+	// ProxyPacket carries a multiplexed unconnected UDP session (RFC 4787
+	// Endpoint-Independent Mapping). A single server-side UDP socket is preserved
+	// across multiple remote peers so full-cone/restricted-cone replies reach the
+	// client with their true source IP:port. Separate from Proxy for full wire
+	// backward compatibility with older clients and servers.
+	ProxyPacket(grpc.BidiStreamingServer[PacketFrame, PacketFrame]) error
 	mustEmbedUnimplementedProxyServer()
 }
 
@@ -109,6 +135,9 @@ func (UnimplementedProxyServer) DnsExchange(context.Context, *DnsExchangeRequest
 }
 func (UnimplementedProxyServer) Proxy(grpc.BidiStreamingServer[ProxySRC, ProxyDST]) error {
 	return status.Error(codes.Unimplemented, "method Proxy not implemented")
+}
+func (UnimplementedProxyServer) ProxyPacket(grpc.BidiStreamingServer[PacketFrame, PacketFrame]) error {
+	return status.Error(codes.Unimplemented, "method ProxyPacket not implemented")
 }
 func (UnimplementedProxyServer) mustEmbedUnimplementedProxyServer() {}
 func (UnimplementedProxyServer) testEmbeddedByValue()               {}
@@ -174,6 +203,13 @@ func _Proxy_Proxy_Handler(srv interface{}, stream grpc.ServerStream) error {
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Proxy_ProxyServer = grpc.BidiStreamingServer[ProxySRC, ProxyDST]
 
+func _Proxy_ProxyPacket_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ProxyServer).ProxyPacket(&grpc.GenericServerStream[PacketFrame, PacketFrame]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Proxy_ProxyPacketServer = grpc.BidiStreamingServer[PacketFrame, PacketFrame]
+
 // Proxy_ServiceDesc is the grpc.ServiceDesc for Proxy service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -197,6 +233,12 @@ var Proxy_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 			ClientStreams: true,
 		},
+		{
+			StreamName:    "ProxyPacket",
+			Handler:       _Proxy_ProxyPacket_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
 	},
-	Metadata: "proxy.proto",
+	Metadata: "internal/transport/rpc/proto/proxy.proto",
 }

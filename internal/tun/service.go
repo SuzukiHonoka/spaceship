@@ -1,11 +1,15 @@
 package tun
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net/netip"
+	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,9 +47,10 @@ type Service struct {
 	cancel    context.CancelFunc
 	cfg       Config
 
-	stack  *stack.Stack
-	nicID  tcpip.NICID
-	device openedDevice
+	stack     *stack.Stack
+	nicID     tcpip.NICID
+	device    openedDevice
+	routeCtrl routeController
 
 	// hooksMu guards resolveRoute and exchanger so tests can replace them after
 	// New without racing gVisor packet goroutines started by CreateNIC.
@@ -71,12 +76,16 @@ type Service struct {
 	// udpSessionSlots is the MaxUDPSessions budget for general UDP. Each
 	// session also holds a flowSlots slot, so TCP keeps the remainder.
 	udpSessionSlots chan struct{}
-	// udpFlows maps each general UDP 4-tuple to its live session. DNS hijack
-	// sessions are not entered here.
+	// udpFlows maps each legacy 4-tuple UDP session. DNS hijack sessions are
+	// not entered here.
 	udpMu    sync.Mutex
 	udpFlows map[stack.TransportEndpointID]*udpSession
-	// dnsClients counts live DNS-over-TCP connections and DNS-over-UDP
-	// sessions so the DNS pool can be shared fairly between them. See
+	udpLRU   *list.List
+	// udpNAT handles packet-level RFC 4787 EIM/AD UDP sessions (Full Cone /
+	// Restricted Cone) without allocating gVisor UDP endpoints.
+	udpNAT *udpNATManager
+	// dnsClients counts live DNS-over-TCP connections and in-flight DNS-over-UDP
+	// exchanges so the DNS pool can be shared fairly between them. See
 	// fairDNSShare.
 	dnsClients atomic.Int64
 
@@ -129,6 +138,16 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		}
 		return nil, err
 	}
+	if normalized.RouteMode == "auto" {
+		routeCtrl, routeErr := setupPlatformAutoRoute(service.ctx, normalized, device.name, service)
+		if routeErr != nil {
+			if closeErr := service.Close(); closeErr != nil {
+				routeErr = errors.Join(routeErr, closeErr)
+			}
+			return nil, routeErr
+		}
+		service.routeCtrl = routeCtrl
+	}
 	return service, nil
 }
 
@@ -149,9 +168,11 @@ func newService(ctx context.Context, cfg Config, device openedDevice, linkErrors
 		udpSlots:        make(chan struct{}, min(cfg.MaxConnections, cfg.DNS.MaxInFlight)),
 		udpSessionSlots: make(chan struct{}, cfg.MaxUDPSessions),
 		udpFlows:        make(map[stack.TransportEndpointID]*udpSession),
+		udpLRU:          list.New(),
 		closeDone:       make(chan struct{}),
 		runDone:         make(chan struct{}),
 	}
+	s.udpNAT = newUDPNATManager(s)
 	if cfg.ResolveRoute != nil {
 		s.resolveRoute = cfg.ResolveRoute
 		s.customRoute = true
@@ -222,8 +243,75 @@ func newService(ctx context.Context, cfg Config, device openedDevice, linkErrors
 		{Destination: header.IPv4EmptySubnet, NIC: s.nicID},
 		{Destination: header.IPv6EmptySubnet, NIC: s.nicID},
 	})
+	configureGVisorTCP(netstack)
 
 	return s, nil
+}
+
+// configureGVisorTCP applies production TCP tunings (SACK, receive-buffer
+// auto-moderation, and explicit buffer bounds) modeled after sing-tun.
+func configureGVisorTCP(netstack *stack.Stack) {
+	sackOpt := tcpip.TCPSACKEnabled(true)
+	_ = netstack.SetTransportProtocolOption(tcp.ProtocolNumber, &sackOpt)
+
+	moderateOpt := tcpip.TCPModerateReceiveBufferOption(true)
+	_ = netstack.SetTransportProtocolOption(tcp.ProtocolNumber, &moderateOpt)
+
+	const (
+		tcpMinBuf     = 4 << 10
+		desktopDefBuf = 64 << 10
+		desktopMaxBuf = 4 << 20
+		compactDefBuf = 32 << 10
+		compactMaxBuf = 128 << 10
+	)
+	defBuf, maxBuf := desktopDefBuf, desktopMaxBuf
+	if runtime.GOOS == "ios" {
+		defBuf, maxBuf = compactDefBuf, compactMaxBuf
+	}
+	rxOpt := tcpip.TCPReceiveBufferSizeRangeOption{Min: tcpMinBuf, Default: defBuf, Max: maxBuf}
+	_ = netstack.SetTransportProtocolOption(tcp.ProtocolNumber, &rxOpt)
+	txOpt := tcpip.TCPSendBufferSizeRangeOption{Min: tcpMinBuf, Default: defBuf, Max: maxBuf}
+	_ = netstack.SetTransportProtocolOption(tcp.ProtocolNumber, &txOpt)
+}
+
+// ResetNetwork cancels and clears active UDP NAT sessions so stale sockets are
+// dropped immediately when the host switches networks (for example Wi-Fi to
+// cellular). TCP flows and the TUN interface itself remain intact.
+func (s *Service) ResetNetwork() {
+	if s == nil {
+		return
+	}
+	if s.udpNAT != nil {
+		s.udpNAT.resetAll()
+	}
+	s.udpMu.Lock()
+	var legacy []*udpSession
+	for _, sess := range s.udpFlows {
+		legacy = append(legacy, sess)
+	}
+	s.udpMu.Unlock()
+	for _, sess := range legacy {
+		sess.cancel()
+	}
+}
+
+// isDNSHijackDestination reports whether packets addressed to (addr, port)
+// should be intercepted by the authenticated DNS RPC when DNS hijacking is on.
+func (s *Service) isDNSHijackDestination(addr tcpip.Address, port uint16) bool {
+	if !s.cfg.DNS.Enabled {
+		return false
+	}
+	if port == 53 {
+		return true
+	}
+	if len(s.cfg.DNS.Addresses) == 0 {
+		return false
+	}
+	ip, ok := netip.AddrFromSlice(addr.AsSlice())
+	if !ok {
+		return false
+	}
+	return slices.Contains(s.cfg.DNS.Addresses, ip.Unmap())
 }
 
 // Run blocks until ctx is canceled or the underlying link endpoint fails.
@@ -283,6 +371,14 @@ func (s *Service) Close() error {
 
 		log.Println("tun: shutting down")
 		s.cancel()
+		if s.routeCtrl != nil {
+			if err := s.routeCtrl.Close(); err != nil {
+				s.closeErr = errors.Join(s.closeErr, fmt.Errorf("tun: close auto-route: %w", err))
+			}
+		}
+		if s.udpNAT != nil {
+			s.udpNAT.resetAll()
+		}
 
 		if s.stack != nil {
 			if err := s.stack.RemoveNIC(s.nicID); err != nil {

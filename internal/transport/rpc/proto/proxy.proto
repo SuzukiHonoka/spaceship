@@ -13,6 +13,41 @@ service Proxy{
   // DNSSEC, authority/additional sections, flags, and truncation.
   rpc DnsExchange(DnsExchangeRequest) returns (DnsExchangeResponse) {};
   rpc Proxy(stream ProxySRC) returns (stream ProxyDST) {};
+  // ProxyPacket carries a multiplexed unconnected UDP session (RFC 4787
+  // Endpoint-Independent Mapping). A single server-side UDP socket is preserved
+  // across multiple remote peers so full-cone/restricted-cone replies reach the
+  // client with their true source IP:port. Separate from Proxy for full wire
+  // backward compatibility with older clients and servers.
+  rpc ProxyPacket(stream PacketFrame) returns (stream PacketFrame) {};
+}
+
+enum PacketStatus {
+  PacketSession = 0;
+  PacketAccepted = 1;
+  PacketError = 2;
+}
+
+enum PacketFiltering {
+  PacketFilteringEIF = 0;
+  PacketFilteringAD = 1;
+  PacketFilteringAPD = 2;
+}
+
+message PacketInit {
+  // "udp4" or "udp6" (empty defaults to "udp4").
+  string family = 1;
+  PacketFiltering filtering = 2;
+}
+
+message PacketFrame {
+  PacketStatus status = 1;
+  PacketInit init = 2;
+  // Raw 4-byte IPv4 or 16-byte IPv6 peer address.
+  bytes ip = 3;
+  uint32 port = 4;
+  // Optional unresolved hostname (used when sending to a domain target).
+  string host = 5;
+  bytes payload = 6;
 }
 
 // Network selects the transport for the proxied connection.

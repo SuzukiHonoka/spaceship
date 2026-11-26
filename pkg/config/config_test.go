@@ -387,8 +387,8 @@ func TestApply_RestoresRedirectBypassMarkAfterLaterFailure(t *testing.T) {
 // whether or not inheritance worked: the mark a redirect listener defaults to
 // happened to equal the one it was supposed to inherit.
 func TestApply_RedirectBypassMarkAgreesWithTUN(t *testing.T) {
-	if !tun.Supported() {
-		t.Skipf("TUN is unsupported on this platform")
+	if !tun.Supported() || !redirect.Supported() {
+		t.Skipf("TUN + redirect mark coordination requires both TUN and redirect support")
 	}
 	tunMark := transport.DefaultBypassMark ^ 0x1111
 	if tunMark == transport.DefaultBypassMark || tunMark == 0 {
@@ -475,8 +475,8 @@ func TestApply_RedirectBypassMarkAgreesWithTUN(t *testing.T) {
 // a different value. Linux TUN cannot run unmarked, so an explicit redirect 0
 // must be reported rather than silently overridden by the mark TUN needs.
 func TestApply_RedirectBypassMarkZeroConflictsWithTUN(t *testing.T) {
-	if !tun.Supported() {
-		t.Skipf("TUN is unsupported on this platform")
+	if !tun.Supported() || !redirect.Supported() {
+		t.Skipf("TUN + redirect mark coordination requires both TUN and redirect support")
 	}
 	oldMark := transport.BypassMark()
 	oldResolver := transport.OutboundResolver()

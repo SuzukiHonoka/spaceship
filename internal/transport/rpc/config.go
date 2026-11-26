@@ -14,6 +14,7 @@ type serviceSnapshot struct {
 	dnsResolve  string
 	dnsExchange string
 	proxy       string
+	proxyPacket string
 }
 
 func newServiceSnapshot(name string, epoch uint64) *serviceSnapshot {
@@ -26,6 +27,7 @@ func newServiceSnapshot(name string, epoch uint64) *serviceSnapshot {
 		dnsResolve:  "/" + name + "/DnsResolve",
 		dnsExchange: "/" + name + "/DnsExchange",
 		proxy:       "/" + name + "/Proxy",
+		proxyPacket: "/" + name + "/ProxyPacket",
 	}
 }
 
@@ -79,6 +81,8 @@ func GetMethodName(method string) string {
 		return snap.dnsExchange
 	case "Proxy":
 		return snap.proxy
+	case "ProxyPacket":
+		return snap.proxyPacket
 	default:
 		return fmt.Sprintf("/%s/%s", snap.serviceName, method)
 	}
@@ -97,4 +101,9 @@ func GetDnsExchangeMethodName() string {
 // GetProxyMethodName returns the full method name for Proxy.
 func GetProxyMethodName() string {
 	return serviceCfg.Load().proxy
+}
+
+// GetProxyPacketMethodName returns the full method name for ProxyPacket.
+func GetProxyPacketMethodName() string {
+	return serviceCfg.Load().proxyPacket
 }

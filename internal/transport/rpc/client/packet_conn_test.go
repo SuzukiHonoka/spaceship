@@ -476,6 +476,10 @@ func (m *mockProxyClient2) DnsExchange(context.Context, *proto.DnsExchangeReques
 	return nil, nil
 }
 
+func (m *mockProxyClient2) ProxyPacket(context.Context, ...grpc.CallOption) (grpc.BidiStreamingClient[proto.PacketFrame, proto.PacketFrame], error) {
+	return nil, nil
+}
+
 func TestClient_DialPacket_Success(t *testing.T) {
 	m := &mockProxyClient2{}
 	c := &Client{ProxyClient: m}

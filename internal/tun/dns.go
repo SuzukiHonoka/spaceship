@@ -11,93 +11,73 @@ import (
 
 	"github.com/SuzukiHonoka/spaceship/v2/internal/dnswire"
 	proto "github.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto"
-	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"github.com/miekg/dns"
-	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
-	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
-	"gvisor.dev/gvisor/pkg/waiter"
 )
 
-// handleUDPDNSPacket admits destination port 53 into the DNS hijack path.
-// The protocol handler is handleUDPPacket, which sends every other datagram
-// to the general UDP forwarder. This function still ignores non-53 traffic so
-// a direct call cannot capture it.
+// handleUDPDNSPacket intercepts DNS-over-UDP datagrams statelessly without
+// creating a gVisor UDP endpoint or a long-lived 64 KiB session goroutine.
+// Queries are validated, bounded by MaxInFlight, exchanged asynchronously, and
+// written directly back through writeUDPBack.
 func (s *Service) handleUDPDNSPacket(id stack.TransportEndpointID, pkt *stack.PacketBuffer) bool {
-	if id.LocalPort != 53 || !s.cfg.DNS.Enabled || pkt == nil {
+	if pkt == nil || !s.isDNSHijackDestination(id.LocalAddress, id.LocalPort) {
 		return false
 	}
-	cloned := pkt.Clone()
-	handled := s.handleUDPRequest(udp.NewForwarderRequest(s.stack, id, cloned))
-	// CreateEndpoint clones again into the endpoint receive queue and never
-	// takes ownership of the ForwarderRequest packet; rejected paths never
-	// touch it. Release our clone in both cases.
-	cloned.DecRef()
-	return handled
-}
-
-func (s *Service) handleUDPRequest(request *udp.ForwarderRequest) bool {
-	if request == nil || request.ID().LocalPort != 53 || !s.cfg.DNS.Enabled {
+	if s.stack == nil {
 		return false
+	}
+
+	wireQuery := pkt.Data().AsRange().ToSlice()
+	netProto := pkt.NetworkProtocolNumber
+
+	query, rcode := validateDNSQuery(wireQuery)
+	if query == nil {
+		resp := packDNSFailure(wireQuery, nil, rcode)
+		_ = s.writeUDPBack(id.LocalAddress, id.LocalPort, id.RemoteAddress, id.RemotePort, netProto, resp)
+		return true
 	}
 	if !s.beginFlow() {
-		return false
+		resp := packDNSFailure(wireQuery, query, dns.RcodeServerFailure)
+		_ = s.writeUDPBack(id.LocalAddress, id.LocalPort, id.RemoteAddress, id.RemotePort, netProto, resp)
+		return true
 	}
-	if !s.acquireUDPFlow() {
+	if !s.acquireDNS() {
 		s.endFlow()
-		return false
+		resp := packDNSFailure(wireQuery, query, dns.RcodeServerFailure)
+		_ = s.writeUDPBack(id.LocalAddress, id.LocalPort, id.RemoteAddress, id.RemotePort, netProto, resp)
+		return true
 	}
 
-	var waitQueue waiter.Queue
-	endpoint, udpErr := request.CreateEndpoint(&waitQueue)
-	if udpErr != nil {
-		s.releaseUDPFlow()
-		s.endFlow()
-		return false
-	}
-
-	conn := gonet.NewUDPConn(&waitQueue, endpoint)
+	// Copy wireQuery so the async exchange never aliases gVisor's packet buffer.
+	ownedQuery := append([]byte(nil), wireQuery...)
 	go func() {
 		defer s.endFlow()
-		defer s.releaseUDPFlow()
-		defer utils.Close(conn)
-		s.serveUDPDNS(conn)
+		defer s.releaseDNS()
+		s.dnsClients.Add(1)
+		defer s.dnsClients.Add(-1)
+
+		wireResponse := s.exchangeDNS(ownedQuery, query, proto.Network_UDP)
+		if len(wireResponse) == 0 || s.ctx.Err() != nil {
+			return
+		}
+		_ = s.writeUDPBack(id.LocalAddress, id.LocalPort, id.RemoteAddress, id.RemotePort, netProto, wireResponse)
 	}()
 	return true
 }
 
-func (s *Service) serveUDPDNS(conn net.Conn) {
-	// Counted with TCP DNS clients so UDP sessions shrink every client's fair
-	// share of the shared pool instead of monopolising it unseen.
-	s.dnsClients.Add(1)
-	defer s.dnsClients.Add(-1)
-
-	buffer := make([]byte, dnswire.MaxMessageSize)
-	for {
-		_ = conn.SetReadDeadline(time.Now().Add(DefaultDNSUDPIdleTimeout))
-		n, err := conn.Read(buffer)
-		if err != nil {
-			return
-		}
-
-		wireQuery := append([]byte(nil), buffer[:n]...)
-		query, rcode := validateDNSQuery(wireQuery)
-		var wireResponse []byte
-		if query == nil {
-			wireResponse = packDNSFailure(wireQuery, nil, rcode)
-		} else if !s.acquireDNS() {
-			wireResponse = packDNSFailure(wireQuery, query, dns.RcodeServerFailure)
-		} else {
-			wireResponse = s.exchangeDNS(wireQuery, query, proto.Network_UDP)
-			s.releaseDNS()
-		}
-
-		_ = conn.SetWriteDeadline(time.Now().Add(s.cfg.DNS.QueryTimeout))
-		n, err = conn.Write(wireResponse)
-		if err != nil || n != len(wireResponse) {
-			return
-		}
+// ServeTCPDNS serves RFC 1035/7766 DNS-over-TCP on conn using the service's
+// authenticated DNS RPC and fair-share concurrency bounds. Exported so Linux
+// auto_redirect can hijack TCP/53 through the exact same pipeline as TUN.
+func (s *Service) ServeTCPDNS(conn net.Conn) {
+	if s == nil || conn == nil {
+		return
 	}
+	if !s.beginFlow() {
+		_ = conn.Close()
+		return
+	}
+	defer s.endFlow()
+	s.serveTCPDNS(conn)
 }
 
 func (s *Service) serveTCPDNS(conn net.Conn) {

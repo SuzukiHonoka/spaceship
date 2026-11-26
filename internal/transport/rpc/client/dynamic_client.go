@@ -15,14 +15,20 @@ var (
 		ServerStreams: true,
 		ClientStreams: true,
 	}
+	proxyPacketStreamDesc = grpc.StreamDesc{
+		StreamName:    "ProxyPacket",
+		ServerStreams: true,
+		ClientStreams: true,
+	}
 )
 
 // DynamicProxyClient wraps a gRPC connection to use configurable service names.
 type DynamicProxyClient struct {
-	conn            grpc.ClientConnInterface
-	dnsResolveName  string
-	dnsExchangeName string
-	proxyMethodName string
+	conn                  grpc.ClientConnInterface
+	dnsResolveName        string
+	dnsExchangeName       string
+	proxyMethodName       string
+	proxyPacketMethodName string
 }
 
 // Ensure DynamicProxyClient implements proto.ProxyClient interface
@@ -32,10 +38,11 @@ var _ proto.ProxyClient = (*DynamicProxyClient)(nil)
 // Method names are resolved once at construction time to avoid per-call overhead.
 func NewDynamicProxyClient(conn grpc.ClientConnInterface) *DynamicProxyClient {
 	return &DynamicProxyClient{
-		conn:            conn,
-		dnsResolveName:  rpc.GetDnsResolveMethodName(),
-		dnsExchangeName: rpc.GetDnsExchangeMethodName(),
-		proxyMethodName: rpc.GetProxyMethodName(),
+		conn:                  conn,
+		dnsResolveName:        rpc.GetDnsResolveMethodName(),
+		dnsExchangeName:       rpc.GetDnsExchangeMethodName(),
+		proxyMethodName:       rpc.GetProxyMethodName(),
+		proxyPacketMethodName: rpc.GetProxyPacketMethodName(),
 	}
 }
 
@@ -77,4 +84,18 @@ func (c *DynamicProxyClient) Proxy(ctx context.Context, opts ...grpc.CallOption)
 	}
 
 	return &grpc.GenericClientStream[proto.ProxySRC, proto.ProxyDST]{ClientStream: stream}, nil
+}
+
+// ProxyPacket calls ProxyPacket using the configured service name.
+func (c *DynamicProxyClient) ProxyPacket(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[proto.PacketFrame, proto.PacketFrame], error) {
+	methodName := c.proxyPacketMethodName
+	if methodName == "" {
+		methodName = rpc.GetProxyPacketMethodName()
+	}
+	stream, err := c.conn.NewStream(ctx, &proxyPacketStreamDesc, methodName, withStaticMethod(opts)...)
+	if err != nil {
+		return nil, err
+	}
+
+	return &grpc.GenericClientStream[proto.PacketFrame, proto.PacketFrame]{ClientStream: stream}, nil
 }

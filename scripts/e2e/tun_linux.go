@@ -153,6 +153,66 @@ func runTUNChecks(bin, workDir string) {
 		fail("interface outlived the process: %v", err)
 	}
 	fmt.Println("  tun child: interface removed when the process stopped")
+
+	// Second check: route_mode "auto" + auto_redirect (nftables inet spaceship
+	// table + policy routes) must install cleanly and tear down completely on
+	// SIGTERM.
+	const autoIfName = "ss-auto0"
+	autoClientCfg := fmt.Sprintf(`{
+  "role": "client",
+  "server_addr": %q,
+  "uuid": %q,
+  "tun": {
+    "name": %q,
+    "mtu": 1400,
+    "address": ["198.18.0.1/30"],
+    "route_mode": "auto",
+    "auto_redirect": true,
+    "udp_mapping": "eim",
+    "udp_filtering": "eif",
+    "max_connections": 32,
+    "max_pending_connections": 8,
+    "dns_hijack": {"enabled": true, "max_in_flight": 8}
+  }
+}`, rpcAddr, uuid, autoIfName)
+	autoClientPath := workDir + "/client-auto.json"
+	if err := os.WriteFile(autoClientPath, []byte(autoClientCfg), 0o600); err != nil {
+		fail("write auto client config: %v", err)
+	}
+
+	autoClient, err := startSpaceship(bin, "tun-auto-client", autoClientPath, workDir)
+	if err != nil {
+		fail("start auto client: %v", err)
+	}
+	if err := waitInterface(autoIfName, 15*time.Second); err != nil {
+		autoClient.kill()
+		fail("auto interface never appeared: %v\nclient log:\n%s", err, autoClient.tail(25))
+	}
+	addrOut, err := exec.Command("ip", "-o", "addr", "show", "dev", autoIfName).Output()
+	if err != nil || !strings.Contains(string(addrOut), "198.18.0.1/30") {
+		autoClient.kill()
+		fail("expected 198.18.0.1/30 on %s, got %q (err=%v)", autoIfName, strings.TrimSpace(string(addrOut)), err)
+	}
+	if _, nftErr := exec.LookPath("nft"); nftErr == nil {
+		if nftOut, err := exec.Command("nft", "list", "table", "inet", "spaceship").CombinedOutput(); err != nil {
+			autoClient.kill()
+			fail("expected nftables table inet spaceship while running: %v\n%s", err, string(nftOut))
+		}
+	}
+	fmt.Println("  tun child: auto_route + auto_redirect installed interface address and nftables table")
+
+	if _, err := autoClient.stop(10 * time.Second); err != nil {
+		fail("auto client did not stop: %v\n%s", err, autoClient.tail(25))
+	}
+	if err := waitInterfaceGone(autoIfName, 10*time.Second); err != nil {
+		fail("auto interface outlived the process: %v", err)
+	}
+	if _, nftErr := exec.LookPath("nft"); nftErr == nil {
+		if err := exec.Command("nft", "list", "table", "inet", "spaceship").Run(); err == nil {
+			fail("nftables table inet spaceship outlived the process")
+		}
+	}
+	fmt.Println("  tun child: auto_route + auto_redirect cleaned up interface and nftables table on stop")
 }
 
 func waitInterface(name string, timeout time.Duration) error {

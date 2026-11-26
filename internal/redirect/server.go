@@ -7,6 +7,8 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/netip"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -54,6 +56,12 @@ type Config struct {
 	// MaxConnections bounds accepted sessions and their proxy goroutines.
 	// Zero selects DefaultMaxConnections.
 	MaxConnections int
+	// TCPDNSHandler, when non-nil, intercepts redirected TCP connections whose
+	// original destination matches DNSHijackPort (default 53 when enabled) or
+	// DNSHijackAddresses. Used by Linux TUN auto_redirect so TCP/53 stays on
+	// the authenticated Spaceship DNS RPC.
+	TCPDNSHandler      func(net.Conn)
+	DNSHijackAddresses []netip.Addr
 }
 
 // ValidateMaxConnections reports whether limit is an acceptable session bound.
@@ -75,6 +83,8 @@ type Server struct {
 
 	resolveDestination destinationResolver
 	resolveRoute       routeResolver
+	tcpDNSHandler      func(net.Conn)
+	dnsHijackAddresses []netip.Addr
 
 	mu       sync.Mutex
 	listener net.Listener
@@ -96,6 +106,8 @@ func New(ctx context.Context, cfg *Config) (*Server, error) {
 		ctx = context.Background()
 	}
 	maxConnections := DefaultMaxConnections
+	var tcpDNSHandler func(net.Conn)
+	var dnsHijackAddresses []netip.Addr
 	if cfg != nil {
 		if err := ValidateMaxConnections(cfg.MaxConnections); err != nil {
 			return nil, err
@@ -103,6 +115,8 @@ func New(ctx context.Context, cfg *Config) (*Server, error) {
 		if cfg.MaxConnections > 0 {
 			maxConnections = cfg.MaxConnections
 		}
+		tcpDNSHandler = cfg.TCPDNSHandler
+		dnsHijackAddresses = slices.Clone(cfg.DNSHijackAddresses)
 	}
 	// #nosec G118 -- cancel is retained by Server and invoked by Close.
 	serverCtx, cancel := context.WithCancel(ctx)
@@ -112,6 +126,8 @@ func New(ctx context.Context, cfg *Config) (*Server, error) {
 		cancel:             cancel,
 		resolveDestination: originalDestination,
 		resolveRoute:       router.GetRoute,
+		tcpDNSHandler:      tcpDNSHandler,
+		dnsHijackAddresses: dnsHijackAddresses,
 		conns:              make(map[net.Conn]struct{}),
 		slots:              semaphore.NewWeighted(int64(maxConnections)),
 		maxConnections:     maxConnections,
@@ -128,6 +144,16 @@ func (s *Server) ListenAndServe(addr string) error {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", addr, err)
+	}
+	return s.serve(listener)
+}
+
+// Serve accepts redirected TCP connections on an already-bound listener.
+// Callers such as Linux TUN auto_redirect use this to bind an ephemeral port
+// and install nftables rules before accepting traffic.
+func (s *Server) Serve(listener net.Listener) error {
+	if !Supported() {
+		return ErrUnsupported
 	}
 	return s.serve(listener)
 }
@@ -294,6 +320,11 @@ func (s *Server) ServeConn(conn net.Conn) error {
 		return fmt.Errorf("%w: %s", ErrRedirectLoop, dst)
 	}
 
+	if s.tcpDNSHandler != nil && s.isDNSHijackDestination(dst) {
+		s.tcpDNSHandler(client)
+		return nil
+	}
+
 	host := dst.IP.String()
 	// Recover a name before choosing a route when it can still change the
 	// egress or the dial host. Direct and blackhole dial the original IP.
@@ -343,6 +374,23 @@ func (s *Server) lookupRoute(ip, name string) (transport.Transport, error) {
 		return router.GetRouteObserved(ip, name)
 	}
 	return s.resolveRoute(ip)
+}
+
+func (s *Server) isDNSHijackDestination(dst *net.TCPAddr) bool {
+	if dst == nil {
+		return false
+	}
+	if dst.Port == 53 {
+		return true
+	}
+	if len(s.dnsHijackAddresses) == 0 {
+		return false
+	}
+	addr, ok := netip.AddrFromSlice(dst.IP)
+	if !ok {
+		return false
+	}
+	return slices.Contains(s.dnsHijackAddresses, addr.Unmap())
 }
 
 func validateDestination(dst *net.TCPAddr) error {

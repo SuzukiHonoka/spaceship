@@ -44,6 +44,7 @@ type Client struct {
 // Egress.SupportsUDP claims this for EgressProxy without being able to construct
 // one cheaply, so the assertion lives here.
 var _ transport.PacketDialer = (*Client)(nil)
+var _ transport.PacketSessionDialer = (*Client)(nil)
 
 func SetUUID(uid string) {
 	uuidPtr.Store(&uid)
@@ -167,6 +168,7 @@ func Init(server, hostName string, tls bool, mux uint8, cas []string, tlsFingerp
 		old.Destroy()
 	}
 	resetEarlyAdmitLegacy()
+	resetPacketSessionLegacy()
 	return nil
 }
 
@@ -178,6 +180,7 @@ func Destroy() {
 		q.Destroy()
 	}
 	resetEarlyAdmitLegacy()
+	resetPacketSessionLegacy()
 }
 
 // GetConnectionStatus returns the current connection pool status

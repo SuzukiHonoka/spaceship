@@ -43,6 +43,12 @@ func (s *DynamicProxyServer) RegisterWithGRPC(grpcServer *grpc.Server) {
 				ServerStreams: true,
 				ClientStreams: true,
 			},
+			{
+				StreamName:    "ProxyPacket",
+				Handler:       s.createProxyPacketHandler(),
+				ServerStreams: true,
+				ClientStreams: true,
+			},
 		},
 		Metadata: "proxy.proto",
 	}
@@ -96,5 +102,12 @@ func (s *DynamicProxyServer) createDnsResolveHandler() grpc.MethodHandler {
 func (s *DynamicProxyServer) createProxyHandler() grpc.StreamHandler {
 	return func(srv any, stream grpc.ServerStream) error {
 		return srv.(proto.ProxyServer).Proxy(&grpc.GenericServerStream[proto.ProxySRC, proto.ProxyDST]{ServerStream: stream})
+	}
+}
+
+// createProxyPacketHandler creates a handler for ProxyPacket method.
+func (s *DynamicProxyServer) createProxyPacketHandler() grpc.StreamHandler {
+	return func(srv any, stream grpc.ServerStream) error {
+		return srv.(proto.ProxyServer).ProxyPacket(&grpc.GenericServerStream[proto.PacketFrame, proto.PacketFrame]{ServerStream: stream})
 	}
 }

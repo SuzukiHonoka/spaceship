@@ -52,12 +52,11 @@ func TestCheckInstalledBypassMark(t *testing.T) {
 	}
 }
 
-// The default TUN mark is required everywhere but Android. A client launched
-// without a tun section installs no mark, so attaching a TUN later must fail
-// before any device is opened.
+// The default TUN mark is required only on Linux (non-Android). On Android,
+// macOS/iOS, and Windows, SO_MARK does not apply by default.
 func TestServeTUNRefusesRequiredMarkTheClientDidNotInstall(t *testing.T) {
-	if runtime.GOOS == "android" {
-		t.Skip("Android TUN needs no mark by default")
+	if runtime.GOOS != "linux" {
+		t.Skip("Only Linux TUN requires SO_MARK by default")
 	}
 	original := transport.BypassMark()
 	t.Cleanup(func() { transport.SetBypassMark(original) })
@@ -98,8 +97,8 @@ func TestServeTUNRefusesExplicitMarkMismatch(t *testing.T) {
 // A mark the client already installed lets ServeTUN proceed to opening the
 // device, so the refusal above is specific to the mark.
 func TestServeTUNAcceptsInstalledMark(t *testing.T) {
-	if runtime.GOOS == "android" {
-		t.Skip("Android TUN needs no mark by default")
+	if runtime.GOOS != "linux" {
+		t.Skip("Only Linux TUN requires SO_MARK by default")
 	}
 	original := transport.BypassMark()
 	t.Cleanup(func() { transport.SetBypassMark(original) })

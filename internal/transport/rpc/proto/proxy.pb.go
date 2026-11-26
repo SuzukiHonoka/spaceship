@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.12
 // 	protoc        v7.36.2
-// source: proxy.proto
+// source: internal/transport/rpc/proto/proxy.proto
 
 package proxy
 
@@ -20,6 +20,104 @@ const (
 	// Verify that runtime/protoimpl is sufficiently up-to-date.
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
+
+type PacketStatus int32
+
+const (
+	PacketStatus_PacketSession  PacketStatus = 0
+	PacketStatus_PacketAccepted PacketStatus = 1
+	PacketStatus_PacketError    PacketStatus = 2
+)
+
+// Enum value maps for PacketStatus.
+var (
+	PacketStatus_name = map[int32]string{
+		0: "PacketSession",
+		1: "PacketAccepted",
+		2: "PacketError",
+	}
+	PacketStatus_value = map[string]int32{
+		"PacketSession":  0,
+		"PacketAccepted": 1,
+		"PacketError":    2,
+	}
+)
+
+func (x PacketStatus) Enum() *PacketStatus {
+	p := new(PacketStatus)
+	*p = x
+	return p
+}
+
+func (x PacketStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PacketStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_internal_transport_rpc_proto_proxy_proto_enumTypes[0].Descriptor()
+}
+
+func (PacketStatus) Type() protoreflect.EnumType {
+	return &file_internal_transport_rpc_proto_proxy_proto_enumTypes[0]
+}
+
+func (x PacketStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PacketStatus.Descriptor instead.
+func (PacketStatus) EnumDescriptor() ([]byte, []int) {
+	return file_internal_transport_rpc_proto_proxy_proto_rawDescGZIP(), []int{0}
+}
+
+type PacketFiltering int32
+
+const (
+	PacketFiltering_PacketFilteringEIF PacketFiltering = 0
+	PacketFiltering_PacketFilteringAD  PacketFiltering = 1
+	PacketFiltering_PacketFilteringAPD PacketFiltering = 2
+)
+
+// Enum value maps for PacketFiltering.
+var (
+	PacketFiltering_name = map[int32]string{
+		0: "PacketFilteringEIF",
+		1: "PacketFilteringAD",
+		2: "PacketFilteringAPD",
+	}
+	PacketFiltering_value = map[string]int32{
+		"PacketFilteringEIF": 0,
+		"PacketFilteringAD":  1,
+		"PacketFilteringAPD": 2,
+	}
+)
+
+func (x PacketFiltering) Enum() *PacketFiltering {
+	p := new(PacketFiltering)
+	*p = x
+	return p
+}
+
+func (x PacketFiltering) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PacketFiltering) Descriptor() protoreflect.EnumDescriptor {
+	return file_internal_transport_rpc_proto_proxy_proto_enumTypes[1].Descriptor()
+}
+
+func (PacketFiltering) Type() protoreflect.EnumType {
+	return &file_internal_transport_rpc_proto_proxy_proto_enumTypes[1]
+}
+
+func (x PacketFiltering) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PacketFiltering.Descriptor instead.
+func (PacketFiltering) EnumDescriptor() ([]byte, []int) {
+	return file_internal_transport_rpc_proto_proxy_proto_rawDescGZIP(), []int{1}
+}
 
 // Network selects the transport for the proxied connection.
 // TCP is the zero value so that an unset field (and pre-2.1.5 clients that omit
@@ -54,11 +152,11 @@ func (x Network) String() string {
 }
 
 func (Network) Descriptor() protoreflect.EnumDescriptor {
-	return file_proxy_proto_enumTypes[0].Descriptor()
+	return file_internal_transport_rpc_proto_proxy_proto_enumTypes[2].Descriptor()
 }
 
 func (Network) Type() protoreflect.EnumType {
-	return &file_proxy_proto_enumTypes[0]
+	return &file_internal_transport_rpc_proto_proxy_proto_enumTypes[2]
 }
 
 func (x Network) Number() protoreflect.EnumNumber {
@@ -67,7 +165,7 @@ func (x Network) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Network.Descriptor instead.
 func (Network) EnumDescriptor() ([]byte, []int) {
-	return file_proxy_proto_rawDescGZIP(), []int{0}
+	return file_internal_transport_rpc_proto_proxy_proto_rawDescGZIP(), []int{2}
 }
 
 type ProxyStatus int32
@@ -106,11 +204,11 @@ func (x ProxyStatus) String() string {
 }
 
 func (ProxyStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_proxy_proto_enumTypes[1].Descriptor()
+	return file_internal_transport_rpc_proto_proxy_proto_enumTypes[3].Descriptor()
 }
 
 func (ProxyStatus) Type() protoreflect.EnumType {
-	return &file_proxy_proto_enumTypes[1]
+	return &file_internal_transport_rpc_proto_proxy_proto_enumTypes[3]
 }
 
 func (x ProxyStatus) Number() protoreflect.EnumNumber {
@@ -119,7 +217,146 @@ func (x ProxyStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ProxyStatus.Descriptor instead.
 func (ProxyStatus) EnumDescriptor() ([]byte, []int) {
-	return file_proxy_proto_rawDescGZIP(), []int{1}
+	return file_internal_transport_rpc_proto_proxy_proto_rawDescGZIP(), []int{3}
+}
+
+type PacketInit struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// "udp4" or "udp6" (empty defaults to "udp4").
+	Family        string          `protobuf:"bytes,1,opt,name=family,proto3" json:"family,omitempty"`
+	Filtering     PacketFiltering `protobuf:"varint,2,opt,name=filtering,proto3,enum=proxy.PacketFiltering" json:"filtering,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PacketInit) Reset() {
+	*x = PacketInit{}
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PacketInit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PacketInit) ProtoMessage() {}
+
+func (x *PacketInit) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PacketInit.ProtoReflect.Descriptor instead.
+func (*PacketInit) Descriptor() ([]byte, []int) {
+	return file_internal_transport_rpc_proto_proxy_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *PacketInit) GetFamily() string {
+	if x != nil {
+		return x.Family
+	}
+	return ""
+}
+
+func (x *PacketInit) GetFiltering() PacketFiltering {
+	if x != nil {
+		return x.Filtering
+	}
+	return PacketFiltering_PacketFilteringEIF
+}
+
+type PacketFrame struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Status PacketStatus           `protobuf:"varint,1,opt,name=status,proto3,enum=proxy.PacketStatus" json:"status,omitempty"`
+	Init   *PacketInit            `protobuf:"bytes,2,opt,name=init,proto3" json:"init,omitempty"`
+	// Raw 4-byte IPv4 or 16-byte IPv6 peer address.
+	Ip   []byte `protobuf:"bytes,3,opt,name=ip,proto3" json:"ip,omitempty"`
+	Port uint32 `protobuf:"varint,4,opt,name=port,proto3" json:"port,omitempty"`
+	// Optional unresolved hostname (used when sending to a domain target).
+	Host          string `protobuf:"bytes,5,opt,name=host,proto3" json:"host,omitempty"`
+	Payload       []byte `protobuf:"bytes,6,opt,name=payload,proto3" json:"payload,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PacketFrame) Reset() {
+	*x = PacketFrame{}
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PacketFrame) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PacketFrame) ProtoMessage() {}
+
+func (x *PacketFrame) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PacketFrame.ProtoReflect.Descriptor instead.
+func (*PacketFrame) Descriptor() ([]byte, []int) {
+	return file_internal_transport_rpc_proto_proxy_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *PacketFrame) GetStatus() PacketStatus {
+	if x != nil {
+		return x.Status
+	}
+	return PacketStatus_PacketSession
+}
+
+func (x *PacketFrame) GetInit() *PacketInit {
+	if x != nil {
+		return x.Init
+	}
+	return nil
+}
+
+func (x *PacketFrame) GetIp() []byte {
+	if x != nil {
+		return x.Ip
+	}
+	return nil
+}
+
+func (x *PacketFrame) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *PacketFrame) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *PacketFrame) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
 }
 
 type ProxySRC struct {
@@ -135,7 +372,7 @@ type ProxySRC struct {
 
 func (x *ProxySRC) Reset() {
 	*x = ProxySRC{}
-	mi := &file_proxy_proto_msgTypes[0]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -147,7 +384,7 @@ func (x *ProxySRC) String() string {
 func (*ProxySRC) ProtoMessage() {}
 
 func (x *ProxySRC) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proto_msgTypes[0]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -160,7 +397,7 @@ func (x *ProxySRC) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProxySRC.ProtoReflect.Descriptor instead.
 func (*ProxySRC) Descriptor() ([]byte, []int) {
-	return file_proxy_proto_rawDescGZIP(), []int{0}
+	return file_internal_transport_rpc_proto_proxy_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ProxySRC) GetHeaderOrPayload() isProxySRC_HeaderOrPayload {
@@ -218,7 +455,7 @@ type ProxyDST struct {
 
 func (x *ProxyDST) Reset() {
 	*x = ProxyDST{}
-	mi := &file_proxy_proto_msgTypes[1]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -230,7 +467,7 @@ func (x *ProxyDST) String() string {
 func (*ProxyDST) ProtoMessage() {}
 
 func (x *ProxyDST) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proto_msgTypes[1]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -243,7 +480,7 @@ func (x *ProxyDST) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProxyDST.ProtoReflect.Descriptor instead.
 func (*ProxyDST) Descriptor() ([]byte, []int) {
-	return file_proxy_proto_rawDescGZIP(), []int{1}
+	return file_internal_transport_rpc_proto_proxy_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ProxyDST) GetStatus() ProxyStatus {
@@ -305,7 +542,7 @@ type DnsRequestItem struct {
 
 func (x *DnsRequestItem) Reset() {
 	*x = DnsRequestItem{}
-	mi := &file_proxy_proto_msgTypes[2]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -317,7 +554,7 @@ func (x *DnsRequestItem) String() string {
 func (*DnsRequestItem) ProtoMessage() {}
 
 func (x *DnsRequestItem) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proto_msgTypes[2]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -330,7 +567,7 @@ func (x *DnsRequestItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DnsRequestItem.ProtoReflect.Descriptor instead.
 func (*DnsRequestItem) Descriptor() ([]byte, []int) {
-	return file_proxy_proto_rawDescGZIP(), []int{2}
+	return file_internal_transport_rpc_proto_proxy_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *DnsRequestItem) GetFqdn() string {
@@ -370,7 +607,7 @@ type RR_Record struct {
 
 func (x *RR_Record) Reset() {
 	*x = RR_Record{}
-	mi := &file_proxy_proto_msgTypes[3]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -382,7 +619,7 @@ func (x *RR_Record) String() string {
 func (*RR_Record) ProtoMessage() {}
 
 func (x *RR_Record) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proto_msgTypes[3]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -395,7 +632,7 @@ func (x *RR_Record) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RR_Record.ProtoReflect.Descriptor instead.
 func (*RR_Record) Descriptor() ([]byte, []int) {
-	return file_proxy_proto_rawDescGZIP(), []int{3}
+	return file_internal_transport_rpc_proto_proxy_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *RR_Record) GetWireData() []byte {
@@ -445,7 +682,7 @@ type DnsRequest struct {
 
 func (x *DnsRequest) Reset() {
 	*x = DnsRequest{}
-	mi := &file_proxy_proto_msgTypes[4]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -457,7 +694,7 @@ func (x *DnsRequest) String() string {
 func (*DnsRequest) ProtoMessage() {}
 
 func (x *DnsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proto_msgTypes[4]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -470,7 +707,7 @@ func (x *DnsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DnsRequest.ProtoReflect.Descriptor instead.
 func (*DnsRequest) Descriptor() ([]byte, []int) {
-	return file_proxy_proto_rawDescGZIP(), []int{4}
+	return file_internal_transport_rpc_proto_proxy_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *DnsRequest) GetId() string {
@@ -501,7 +738,7 @@ type DnsResult struct {
 
 func (x *DnsResult) Reset() {
 	*x = DnsResult{}
-	mi := &file_proxy_proto_msgTypes[5]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -513,7 +750,7 @@ func (x *DnsResult) String() string {
 func (*DnsResult) ProtoMessage() {}
 
 func (x *DnsResult) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proto_msgTypes[5]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -526,7 +763,7 @@ func (x *DnsResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DnsResult.ProtoReflect.Descriptor instead.
 func (*DnsResult) Descriptor() ([]byte, []int) {
-	return file_proxy_proto_rawDescGZIP(), []int{5}
+	return file_internal_transport_rpc_proto_proxy_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *DnsResult) GetFqdn() string {
@@ -560,7 +797,7 @@ type DnsResponse struct {
 
 func (x *DnsResponse) Reset() {
 	*x = DnsResponse{}
-	mi := &file_proxy_proto_msgTypes[6]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -572,7 +809,7 @@ func (x *DnsResponse) String() string {
 func (*DnsResponse) ProtoMessage() {}
 
 func (x *DnsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proto_msgTypes[6]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -585,7 +822,7 @@ func (x *DnsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DnsResponse.ProtoReflect.Descriptor instead.
 func (*DnsResponse) Descriptor() ([]byte, []int) {
-	return file_proxy_proto_rawDescGZIP(), []int{6}
+	return file_internal_transport_rpc_proto_proxy_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *DnsResponse) GetResult() []*DnsResult {
@@ -611,7 +848,7 @@ type DnsExchangeRequest struct {
 
 func (x *DnsExchangeRequest) Reset() {
 	*x = DnsExchangeRequest{}
-	mi := &file_proxy_proto_msgTypes[7]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -623,7 +860,7 @@ func (x *DnsExchangeRequest) String() string {
 func (*DnsExchangeRequest) ProtoMessage() {}
 
 func (x *DnsExchangeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proto_msgTypes[7]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -636,7 +873,7 @@ func (x *DnsExchangeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DnsExchangeRequest.ProtoReflect.Descriptor instead.
 func (*DnsExchangeRequest) Descriptor() ([]byte, []int) {
-	return file_proxy_proto_rawDescGZIP(), []int{7}
+	return file_internal_transport_rpc_proto_proxy_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *DnsExchangeRequest) GetWireQuery() []byte {
@@ -670,7 +907,7 @@ type DnsExchangeResponse struct {
 
 func (x *DnsExchangeResponse) Reset() {
 	*x = DnsExchangeResponse{}
-	mi := &file_proxy_proto_msgTypes[8]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -682,7 +919,7 @@ func (x *DnsExchangeResponse) String() string {
 func (*DnsExchangeResponse) ProtoMessage() {}
 
 func (x *DnsExchangeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proto_msgTypes[8]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -695,7 +932,7 @@ func (x *DnsExchangeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DnsExchangeResponse.ProtoReflect.Descriptor instead.
 func (*DnsExchangeResponse) Descriptor() ([]byte, []int) {
-	return file_proxy_proto_rawDescGZIP(), []int{8}
+	return file_internal_transport_rpc_proto_proxy_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *DnsExchangeResponse) GetWireResponse() []byte {
@@ -717,7 +954,7 @@ type ProxySRC_ProxyHeader struct {
 
 func (x *ProxySRC_ProxyHeader) Reset() {
 	*x = ProxySRC_ProxyHeader{}
-	mi := &file_proxy_proto_msgTypes[9]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -729,7 +966,7 @@ func (x *ProxySRC_ProxyHeader) String() string {
 func (*ProxySRC_ProxyHeader) ProtoMessage() {}
 
 func (x *ProxySRC_ProxyHeader) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proto_msgTypes[9]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -742,7 +979,7 @@ func (x *ProxySRC_ProxyHeader) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProxySRC_ProxyHeader.ProtoReflect.Descriptor instead.
 func (*ProxySRC_ProxyHeader) Descriptor() ([]byte, []int) {
-	return file_proxy_proto_rawDescGZIP(), []int{0, 0}
+	return file_internal_transport_rpc_proto_proxy_proto_rawDescGZIP(), []int{2, 0}
 }
 
 func (x *ProxySRC_ProxyHeader) GetAddr() string {
@@ -768,7 +1005,7 @@ type ProxyDST_ProxyHeader struct {
 
 func (x *ProxyDST_ProxyHeader) Reset() {
 	*x = ProxyDST_ProxyHeader{}
-	mi := &file_proxy_proto_msgTypes[10]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -780,7 +1017,7 @@ func (x *ProxyDST_ProxyHeader) String() string {
 func (*ProxyDST_ProxyHeader) ProtoMessage() {}
 
 func (x *ProxyDST_ProxyHeader) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proto_msgTypes[10]
+	mi := &file_internal_transport_rpc_proto_proxy_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -793,7 +1030,7 @@ func (x *ProxyDST_ProxyHeader) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProxyDST_ProxyHeader.ProtoReflect.Descriptor instead.
 func (*ProxyDST_ProxyHeader) Descriptor() ([]byte, []int) {
-	return file_proxy_proto_rawDescGZIP(), []int{1, 0}
+	return file_internal_transport_rpc_proto_proxy_proto_rawDescGZIP(), []int{3, 0}
 }
 
 func (x *ProxyDST_ProxyHeader) GetAddr() string {
@@ -803,11 +1040,22 @@ func (x *ProxyDST_ProxyHeader) GetAddr() string {
 	return ""
 }
 
-var File_proxy_proto protoreflect.FileDescriptor
+var File_internal_transport_rpc_proto_proxy_proto protoreflect.FileDescriptor
 
-const file_proxy_proto_rawDesc = "" +
+const file_internal_transport_rpc_proto_proxy_proto_rawDesc = "" +
 	"\n" +
-	"\vproxy.proto\x12\x05proxy\"\xbf\x01\n" +
+	"(internal/transport/rpc/proto/proxy.proto\x12\x05proxy\"Z\n" +
+	"\n" +
+	"PacketInit\x12\x16\n" +
+	"\x06family\x18\x01 \x01(\tR\x06family\x124\n" +
+	"\tfiltering\x18\x02 \x01(\x0e2\x16.proxy.PacketFilteringR\tfiltering\"\xb3\x01\n" +
+	"\vPacketFrame\x12+\n" +
+	"\x06status\x18\x01 \x01(\x0e2\x13.proxy.PacketStatusR\x06status\x12%\n" +
+	"\x04init\x18\x02 \x01(\v2\x11.proxy.PacketInitR\x04init\x12\x0e\n" +
+	"\x02ip\x18\x03 \x01(\fR\x02ip\x12\x12\n" +
+	"\x04port\x18\x04 \x01(\rR\x04port\x12\x12\n" +
+	"\x04host\x18\x05 \x01(\tR\x04host\x12\x18\n" +
+	"\apayload\x18\x06 \x01(\fR\apayload\"\xbf\x01\n" +
 	"\bProxySRC\x125\n" +
 	"\x06header\x18\x01 \x01(\v2\x1b.proxy.ProxySRC.ProxyHeaderH\x00R\x06header\x12\x1a\n" +
 	"\apayload\x18\x02 \x01(\fH\x00R\apayload\x1aK\n" +
@@ -849,7 +1097,15 @@ const file_proxy_proto_rawDesc = "" +
 	"\n" +
 	"block_ipv6\x18\x03 \x01(\bR\tblockIpv6\":\n" +
 	"\x13DnsExchangeResponse\x12#\n" +
-	"\rwire_response\x18\x01 \x01(\fR\fwireResponse*\x1b\n" +
+	"\rwire_response\x18\x01 \x01(\fR\fwireResponse*F\n" +
+	"\fPacketStatus\x12\x11\n" +
+	"\rPacketSession\x10\x00\x12\x12\n" +
+	"\x0ePacketAccepted\x10\x01\x12\x0f\n" +
+	"\vPacketError\x10\x02*X\n" +
+	"\x0fPacketFiltering\x12\x16\n" +
+	"\x12PacketFilteringEIF\x10\x00\x12\x15\n" +
+	"\x11PacketFilteringAD\x10\x01\x12\x16\n" +
+	"\x12PacketFilteringAPD\x10\x02*\x1b\n" +
 	"\aNetwork\x12\a\n" +
 	"\x03TCP\x10\x00\x12\a\n" +
 	"\x03UDP\x10\x01*<\n" +
@@ -857,74 +1113,84 @@ const file_proxy_proto_rawDesc = "" +
 	"\aSession\x10\x00\x12\t\n" +
 	"\x05Error\x10\x01\x12\f\n" +
 	"\bAccepted\x10\x02\x12\a\n" +
-	"\x03EOF\x10\x032\xb7\x01\n" +
+	"\x03EOF\x10\x032\xf4\x01\n" +
 	"\x05Proxy\x125\n" +
 	"\n" +
 	"DnsResolve\x12\x11.proxy.DnsRequest\x1a\x12.proxy.DnsResponse\"\x00\x12F\n" +
 	"\vDnsExchange\x12\x19.proxy.DnsExchangeRequest\x1a\x1a.proxy.DnsExchangeResponse\"\x00\x12/\n" +
-	"\x05Proxy\x12\x0f.proxy.ProxySRC\x1a\x0f.proxy.ProxyDST\"\x00(\x010\x01BIZGgithub.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto;proxyb\x06proto3"
+	"\x05Proxy\x12\x0f.proxy.ProxySRC\x1a\x0f.proxy.ProxyDST\"\x00(\x010\x01\x12;\n" +
+	"\vProxyPacket\x12\x12.proxy.PacketFrame\x1a\x12.proxy.PacketFrame\"\x00(\x010\x01BIZGgithub.com/SuzukiHonoka/spaceship/v2/internal/transport/rpc/proto;proxyb\x06proto3"
 
 var (
-	file_proxy_proto_rawDescOnce sync.Once
-	file_proxy_proto_rawDescData []byte
+	file_internal_transport_rpc_proto_proxy_proto_rawDescOnce sync.Once
+	file_internal_transport_rpc_proto_proxy_proto_rawDescData []byte
 )
 
-func file_proxy_proto_rawDescGZIP() []byte {
-	file_proxy_proto_rawDescOnce.Do(func() {
-		file_proxy_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proxy_proto_rawDesc), len(file_proxy_proto_rawDesc)))
+func file_internal_transport_rpc_proto_proxy_proto_rawDescGZIP() []byte {
+	file_internal_transport_rpc_proto_proxy_proto_rawDescOnce.Do(func() {
+		file_internal_transport_rpc_proto_proxy_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_internal_transport_rpc_proto_proxy_proto_rawDesc), len(file_internal_transport_rpc_proto_proxy_proto_rawDesc)))
 	})
-	return file_proxy_proto_rawDescData
+	return file_internal_transport_rpc_proto_proxy_proto_rawDescData
 }
 
-var file_proxy_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_proxy_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
-var file_proxy_proto_goTypes = []any{
-	(Network)(0),                 // 0: proxy.Network
-	(ProxyStatus)(0),             // 1: proxy.ProxyStatus
-	(*ProxySRC)(nil),             // 2: proxy.ProxySRC
-	(*ProxyDST)(nil),             // 3: proxy.ProxyDST
-	(*DnsRequestItem)(nil),       // 4: proxy.DnsRequestItem
-	(*RR_Record)(nil),            // 5: proxy.RR_Record
-	(*DnsRequest)(nil),           // 6: proxy.DnsRequest
-	(*DnsResult)(nil),            // 7: proxy.DnsResult
-	(*DnsResponse)(nil),          // 8: proxy.DnsResponse
-	(*DnsExchangeRequest)(nil),   // 9: proxy.DnsExchangeRequest
-	(*DnsExchangeResponse)(nil),  // 10: proxy.DnsExchangeResponse
-	(*ProxySRC_ProxyHeader)(nil), // 11: proxy.ProxySRC.ProxyHeader
-	(*ProxyDST_ProxyHeader)(nil), // 12: proxy.ProxyDST.ProxyHeader
+var file_internal_transport_rpc_proto_proxy_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_internal_transport_rpc_proto_proxy_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_internal_transport_rpc_proto_proxy_proto_goTypes = []any{
+	(PacketStatus)(0),            // 0: proxy.PacketStatus
+	(PacketFiltering)(0),         // 1: proxy.PacketFiltering
+	(Network)(0),                 // 2: proxy.Network
+	(ProxyStatus)(0),             // 3: proxy.ProxyStatus
+	(*PacketInit)(nil),           // 4: proxy.PacketInit
+	(*PacketFrame)(nil),          // 5: proxy.PacketFrame
+	(*ProxySRC)(nil),             // 6: proxy.ProxySRC
+	(*ProxyDST)(nil),             // 7: proxy.ProxyDST
+	(*DnsRequestItem)(nil),       // 8: proxy.DnsRequestItem
+	(*RR_Record)(nil),            // 9: proxy.RR_Record
+	(*DnsRequest)(nil),           // 10: proxy.DnsRequest
+	(*DnsResult)(nil),            // 11: proxy.DnsResult
+	(*DnsResponse)(nil),          // 12: proxy.DnsResponse
+	(*DnsExchangeRequest)(nil),   // 13: proxy.DnsExchangeRequest
+	(*DnsExchangeResponse)(nil),  // 14: proxy.DnsExchangeResponse
+	(*ProxySRC_ProxyHeader)(nil), // 15: proxy.ProxySRC.ProxyHeader
+	(*ProxyDST_ProxyHeader)(nil), // 16: proxy.ProxyDST.ProxyHeader
 }
-var file_proxy_proto_depIdxs = []int32{
-	11, // 0: proxy.ProxySRC.header:type_name -> proxy.ProxySRC.ProxyHeader
-	1,  // 1: proxy.ProxyDST.status:type_name -> proxy.ProxyStatus
-	12, // 2: proxy.ProxyDST.header:type_name -> proxy.ProxyDST.ProxyHeader
-	4,  // 3: proxy.DnsRequest.items:type_name -> proxy.DnsRequestItem
-	5,  // 4: proxy.DnsResult.records:type_name -> proxy.RR_Record
-	7,  // 5: proxy.DnsResponse.result:type_name -> proxy.DnsResult
-	0,  // 6: proxy.DnsExchangeRequest.network:type_name -> proxy.Network
-	0,  // 7: proxy.ProxySRC.ProxyHeader.network:type_name -> proxy.Network
-	6,  // 8: proxy.Proxy.DnsResolve:input_type -> proxy.DnsRequest
-	9,  // 9: proxy.Proxy.DnsExchange:input_type -> proxy.DnsExchangeRequest
-	2,  // 10: proxy.Proxy.Proxy:input_type -> proxy.ProxySRC
-	8,  // 11: proxy.Proxy.DnsResolve:output_type -> proxy.DnsResponse
-	10, // 12: proxy.Proxy.DnsExchange:output_type -> proxy.DnsExchangeResponse
-	3,  // 13: proxy.Proxy.Proxy:output_type -> proxy.ProxyDST
-	11, // [11:14] is the sub-list for method output_type
-	8,  // [8:11] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+var file_internal_transport_rpc_proto_proxy_proto_depIdxs = []int32{
+	1,  // 0: proxy.PacketInit.filtering:type_name -> proxy.PacketFiltering
+	0,  // 1: proxy.PacketFrame.status:type_name -> proxy.PacketStatus
+	4,  // 2: proxy.PacketFrame.init:type_name -> proxy.PacketInit
+	15, // 3: proxy.ProxySRC.header:type_name -> proxy.ProxySRC.ProxyHeader
+	3,  // 4: proxy.ProxyDST.status:type_name -> proxy.ProxyStatus
+	16, // 5: proxy.ProxyDST.header:type_name -> proxy.ProxyDST.ProxyHeader
+	8,  // 6: proxy.DnsRequest.items:type_name -> proxy.DnsRequestItem
+	9,  // 7: proxy.DnsResult.records:type_name -> proxy.RR_Record
+	11, // 8: proxy.DnsResponse.result:type_name -> proxy.DnsResult
+	2,  // 9: proxy.DnsExchangeRequest.network:type_name -> proxy.Network
+	2,  // 10: proxy.ProxySRC.ProxyHeader.network:type_name -> proxy.Network
+	10, // 11: proxy.Proxy.DnsResolve:input_type -> proxy.DnsRequest
+	13, // 12: proxy.Proxy.DnsExchange:input_type -> proxy.DnsExchangeRequest
+	6,  // 13: proxy.Proxy.Proxy:input_type -> proxy.ProxySRC
+	5,  // 14: proxy.Proxy.ProxyPacket:input_type -> proxy.PacketFrame
+	12, // 15: proxy.Proxy.DnsResolve:output_type -> proxy.DnsResponse
+	14, // 16: proxy.Proxy.DnsExchange:output_type -> proxy.DnsExchangeResponse
+	7,  // 17: proxy.Proxy.Proxy:output_type -> proxy.ProxyDST
+	5,  // 18: proxy.Proxy.ProxyPacket:output_type -> proxy.PacketFrame
+	15, // [15:19] is the sub-list for method output_type
+	11, // [11:15] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
-func init() { file_proxy_proto_init() }
-func file_proxy_proto_init() {
-	if File_proxy_proto != nil {
+func init() { file_internal_transport_rpc_proto_proxy_proto_init() }
+func file_internal_transport_rpc_proto_proxy_proto_init() {
+	if File_internal_transport_rpc_proto_proxy_proto != nil {
 		return
 	}
-	file_proxy_proto_msgTypes[0].OneofWrappers = []any{
+	file_internal_transport_rpc_proto_proxy_proto_msgTypes[2].OneofWrappers = []any{
 		(*ProxySRC_Header)(nil),
 		(*ProxySRC_Payload)(nil),
 	}
-	file_proxy_proto_msgTypes[1].OneofWrappers = []any{
+	file_internal_transport_rpc_proto_proxy_proto_msgTypes[3].OneofWrappers = []any{
 		(*ProxyDST_Header)(nil),
 		(*ProxyDST_Payload)(nil),
 	}
@@ -932,18 +1198,18 @@ func file_proxy_proto_init() {
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proxy_proto_rawDesc), len(file_proxy_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   11,
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_transport_rpc_proto_proxy_proto_rawDesc), len(file_internal_transport_rpc_proto_proxy_proto_rawDesc)),
+			NumEnums:      4,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_proxy_proto_goTypes,
-		DependencyIndexes: file_proxy_proto_depIdxs,
-		EnumInfos:         file_proxy_proto_enumTypes,
-		MessageInfos:      file_proxy_proto_msgTypes,
+		GoTypes:           file_internal_transport_rpc_proto_proxy_proto_goTypes,
+		DependencyIndexes: file_internal_transport_rpc_proto_proxy_proto_depIdxs,
+		EnumInfos:         file_internal_transport_rpc_proto_proxy_proto_enumTypes,
+		MessageInfos:      file_internal_transport_rpc_proto_proxy_proto_msgTypes,
 	}.Build()
-	File_proxy_proto = out.File
-	file_proxy_proto_goTypes = nil
-	file_proxy_proto_depIdxs = nil
+	File_internal_transport_rpc_proto_proxy_proto = out.File
+	file_internal_transport_rpc_proto_proxy_proto_goTypes = nil
+	file_internal_transport_rpc_proto_proxy_proto_depIdxs = nil
 }

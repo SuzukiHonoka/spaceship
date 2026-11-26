@@ -22,10 +22,33 @@ type TUN struct {
 	// empty name stays a placeholder because the interface is often invisible
 	// to the app.
 	FileDescriptor *int `json:"file_descriptor,omitempty"`
-	// RouteMode is currently "manual": the operator owns policy routes while
-	// Spaceship creates and brings up the device. Android always uses an
-	// external descriptor, so Spaceship does not create the interface there.
+	// RouteMode selects how host routes are managed: "manual" (operator owns
+	// routes; default) or "auto" (Spaceship configures interface addresses,
+	// routes, and DNS automatically on Linux, macOS, and Windows). Android and
+	// iOS always use an external descriptor and manual routing.
 	RouteMode string `json:"route_mode,omitempty"`
+	// Address lists IPv4/IPv6 interface CIDRs assigned to the TUN device when
+	// route_mode is "auto" (for example ["198.18.0.1/30", "fdfe:dcba:9876::1/126"]).
+	Address []string `json:"address,omitempty"`
+	// RouteExcludeAddress lists CIDRs excluded from TUN capture when route_mode
+	// is "auto" (for example private LAN subnets).
+	RouteExcludeAddress []string `json:"route_exclude_address,omitempty"`
+	// OutboundInterface optionally overrides the physical egress interface used
+	// for loop prevention on macOS (IP_BOUND_IF), Windows (IP_UNICAST_IF), and
+	// Linux (SO_BINDTODEVICE). Empty auto-detects the default physical interface
+	// on macOS and Windows.
+	OutboundInterface string `json:"outbound_interface,omitempty"`
+	// AutoRedirect enables Linux nftables transparent TCP redirection into
+	// Spaceship's native redirect server while routing UDP to TUN. Requires
+	// route_mode "auto" and is supported only on Linux.
+	AutoRedirect bool `json:"auto_redirect,omitempty"`
+	// AutoRedirectIncludeForward also captures routed/LAN traffic in nftables
+	// PREROUTING chains when auto_redirect is enabled (for Linux routers).
+	AutoRedirectIncludeForward bool `json:"auto_redirect_include_forward,omitempty"`
+	// WintunPath optionally specifies the path to wintun.dll on Windows. When
+	// empty, Spaceship looks next to the executable and in standard DLL search
+	// paths.
+	WintunPath string `json:"wintun_path,omitempty"`
 	// BypassMark is applied with SO_MARK to Spaceship-created outbound sockets.
 	//
 	// On Linux, omitting the field or setting it to 0 selects the built-in
@@ -46,11 +69,23 @@ type TUN struct {
 	// MaxPendingConnections bounds TCP handshakes being completed by gVisor.
 	MaxPendingConnections int `json:"max_pending_connections,omitempty"`
 	// MaxUDPSessions caps general UDP sessions inside max_connections, so TCP
-	// always keeps the remainder. At the cap, a new UDP 4-tuple replaces the
+	// always keeps the remainder. At the cap, a new UDP flow replaces the
 	// least recently active session. Zero selects a quarter of
 	// max_connections, and at least one.
 	MaxUDPSessions int `json:"max_udp_sessions,omitempty"`
-	// DNSHijack intercepts classic DNS on TCP and UDP destination port 53.
+	// UDPIdleTimeoutSeconds closes an idle UDP NAT session after this many
+	// seconds without traffic in either direction. Zero selects 60s.
+	UDPIdleTimeoutSeconds int `json:"udp_idle_timeout_seconds,omitempty"`
+	// UDPMapping selects RFC 4787 UDP NAT mapping behavior: "eim" (default,
+	// Endpoint-Independent Mapping / Full Cone), "ad" (Address-Dependent), or
+	// "apd" (Address-and-Port-Dependent / 4-tuple).
+	UDPMapping string `json:"udp_mapping,omitempty"`
+	// UDPFiltering selects RFC 4787 UDP NAT filtering behavior: "eif" (default,
+	// Endpoint-Independent Filtering / Full Cone), "ad" (Address-Dependent), or
+	// "apd" (Address-and-Port-Dependent).
+	UDPFiltering string `json:"udp_filtering,omitempty"`
+	// DNSHijack intercepts classic DNS on TCP and UDP destination port 53
+	// (and any configured hijack addresses).
 	DNSHijack *DNSHijack `json:"dns_hijack,omitempty"`
 }
 
@@ -63,6 +98,10 @@ type DNSHijack struct {
 	// forwarded as an ordinary UDP flow instead of the Spaceship resolver, and
 	// config application logs a warning for that combination.
 	Enabled bool `json:"enabled,omitempty"`
+	// Addresses optionally lists virtual DNS IP addresses (for example the TUN
+	// peer IP "198.18.0.2") whose traffic on port 53 is hijacked in addition to
+	// destination port 53.
+	Addresses []string `json:"addresses,omitempty"`
 	// QueryTimeoutSeconds bounds each authenticated DNS exchange RPC.
 	QueryTimeoutSeconds int `json:"query_timeout_seconds,omitempty"`
 	// TCPIdleTimeoutSeconds bounds idle DNS-over-TCP sessions.

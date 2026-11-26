@@ -1,12 +1,12 @@
 package tun
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"net"
 	"net/netip"
 	"os"
@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/SuzukiHonoka/spaceship/v2/internal/router"
+	"github.com/SuzukiHonoka/spaceship/v2/internal/sniff"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/transport"
 	"github.com/SuzukiHonoka/spaceship/v2/internal/utils"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -43,6 +45,7 @@ type udpSession struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	activity atomic.Int64
+	lruElem  *list.Element
 }
 
 func (u *udpSession) touch() {
@@ -65,22 +68,78 @@ func (s *Service) handleUDPPacket(id stack.TransportEndpointID, pkt *stack.Packe
 	if pkt == nil {
 		return false
 	}
-	if s.cfg.DNS.Enabled && id.LocalPort == 53 {
+	if s.isDNSHijackDestination(id.LocalAddress, id.LocalPort) {
 		return s.handleUDPDNSPacket(id, pkt)
 	}
 	return s.handleGeneralUDPPacket(id, pkt)
 }
 
-// handleGeneralUDPPacket opens one session for id. Later datagrams for that
-// 4-tuple are delivered to the gVisor endpoint created here, not to this
-// function.
+// handleGeneralUDPPacket routes general UDP traffic. When RFC 4787 EIM/AD NAT
+// is enabled and the selected egress supports PacketSessionDialer (such as
+// direct or ProxyPacket RPC), packets are forwarded via packet-level udpNAT
+// without creating gVisor UDP endpoints. Otherwise (APD mode, forward proxy,
+// or legacy servers), it falls back to per-4-tuple gVisor UDP endpoints.
 func (s *Service) handleGeneralUDPPacket(id stack.TransportEndpointID, pkt *stack.PacketBuffer) bool {
 	if pkt == nil {
 		return false
 	}
-	if _, err := endpointAddress(id.LocalAddress, id.LocalPort); err != nil {
+	destination, err := endpointAddress(id.LocalAddress, id.LocalPort)
+	if err != nil {
 		return false
 	}
+
+	if s.udpNAT != nil && s.cfg.UDPMapping != UDPMappingAPD {
+		route, target, routeErr := s.resolveUDPRoute(destination, pkt.Data().AsRange().ToSlice())
+		if routeErr != nil {
+			return false
+		}
+		if handled, ok := s.udpNAT.handlePacket(id, pkt, destination, target, route, route.String()); handled {
+			return ok
+		}
+		// Route does not support PacketSessionDialer; close it and fall back to
+		// the 4-tuple path (which dials via PacketDialer).
+		_ = route.Close()
+	}
+
+	return s.handleLegacyUDPPacket(id, pkt)
+}
+
+func (s *Service) resolveUDPRoute(destination netip.AddrPort, payload []byte) (transport.Transport, transport.PacketTarget, error) {
+	ip := destination.Addr().String()
+	s.hooksMu.RLock()
+	custom := s.customRoute
+	s.hooksMu.RUnlock()
+
+	name := ""
+	if custom || router.IPNeedsSniff(ip) {
+		name = sniff.QUICServerName(payload)
+	}
+	var (
+		route transport.Transport
+		err   error
+	)
+	if name != "" && !custom {
+		route, err = router.GetRouteObserved(ip, name)
+	} else if name != "" {
+		route, err = s.routeUDP(name)
+	} else {
+		route, err = s.routeUDP(ip)
+	}
+	if err != nil {
+		return nil, transport.PacketTarget{}, err
+	}
+
+	targetHost := router.DialHost(route, ip, name)
+	if targetHost != ip && name != "" {
+		return route, transport.PacketTarget{Host: targetHost, Port: destination.Port()}, nil
+	}
+	return route, transport.PacketTarget{Addr: destination, Port: destination.Port()}, nil
+}
+
+// handleLegacyUDPPacket opens one 4-tuple session for id. Later datagrams for
+// that 4-tuple are delivered to the gVisor endpoint created here, not to this
+// function.
+func (s *Service) handleLegacyUDPPacket(id stack.TransportEndpointID, pkt *stack.PacketBuffer) bool {
 	session, admitted := s.admitUDPSession(id)
 	if !admitted {
 		return false
@@ -150,6 +209,10 @@ func (s *Service) newUDPSessionLocked(key stack.TransportEndpointID) *udpSession
 	ctx, cancel := context.WithCancel(s.ctx)
 	session := &udpSession{key: key, ctx: ctx, cancel: cancel}
 	session.touch()
+	if s.udpLRU == nil {
+		s.udpLRU = list.New()
+	}
+	session.lruElem = s.udpLRU.PushFront(session)
 	s.udpFlows[key] = session
 	return session
 }
@@ -160,17 +223,26 @@ func (s *Service) newUDPSessionLocked(key stack.TransportEndpointID) *udpSession
 // caller gets a WaitGroup entry of its own from adoptFlow.
 func (s *Service) replaceLRUUDPSessionLocked() bool {
 	var victim *udpSession
-	oldest := int64(math.MaxInt64)
-	for _, session := range s.udpFlows {
-		if at := session.activity.Load(); at < oldest {
-			oldest = at
-			victim = session
+	if s.udpLRU != nil {
+		if back := s.udpLRU.Back(); back != nil {
+			victim = back.Value.(*udpSession)
+		}
+	}
+	if victim == nil {
+		for _, session := range s.udpFlows {
+			if victim == nil || session.activity.Load() < victim.activity.Load() {
+				victim = session
+			}
 		}
 	}
 	if victim == nil || !s.adoptFlow() {
 		return false
 	}
 	delete(s.udpFlows, victim.key)
+	if s.udpLRU != nil && victim.lruElem != nil {
+		s.udpLRU.Remove(victim.lruElem)
+		victim.lruElem = nil
+	}
 	victim.cancel()
 	return true
 }
@@ -189,8 +261,21 @@ func (s *Service) finishUDPSession(session *udpSession) {
 		return
 	}
 	delete(s.udpFlows, session.key)
+	if s.udpLRU != nil && session.lruElem != nil {
+		s.udpLRU.Remove(session.lruElem)
+		session.lruElem = nil
+	}
 	releaseSlot(s.udpSessionSlots)
 	s.endFlow()
+}
+
+func (s *Service) touchUDPSession(session *udpSession) {
+	session.touch()
+	s.udpMu.Lock()
+	if s.udpLRU != nil && session.lruElem != nil {
+		s.udpLRU.MoveToFront(session.lruElem)
+	}
+	s.udpMu.Unlock()
 }
 
 func (s *Service) udpIdleTimeout() time.Duration {
@@ -347,11 +432,11 @@ func (s *Service) proxyUDP(session *udpSession, tun udpTUNSide, id stack.Transpo
 	}()
 	go func() {
 		errc <- s.pumpUDP(sessionCtx, session, routePacketReader(packet), func(payload []byte) error {
+			if len(payload) > 0 {
+				transport.GlobalStats.AddRx(uint64(len(payload)))
+			}
 			_ = tun.conn.SetWriteDeadline(time.Now().Add(s.udpIdleTimeout()))
 			n, writeErr := tun.conn.Write(payload)
-			if n > 0 {
-				transport.GlobalStats.AddRx(uint64(n))
-			}
 			if writeErr != nil {
 				return writeErr
 			}
@@ -407,7 +492,7 @@ func (s *Service) pumpUDP(
 			}
 			return err
 		}
-		session.touch()
+		s.touchUDPSession(session)
 		err = write(payload)
 		if release != nil {
 			release()

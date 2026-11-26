@@ -58,10 +58,11 @@ func (w *ConnWrapper) proxyClient() *DynamicProxyClient {
 	built := &cachedDynamicClient{
 		epoch: epoch,
 		client: &DynamicProxyClient{
-			conn:            w,
-			dnsResolveName:  dnsResolve,
-			dnsExchangeName: dnsExchange,
-			proxyMethodName: proxy,
+			conn:                  w,
+			dnsResolveName:        dnsResolve,
+			dnsExchangeName:       dnsExchange,
+			proxyMethodName:       proxy,
+			proxyPacketMethodName: rpc.GetProxyPacketMethodName(),
 		},
 	}
 	w.cachedClient.Store(built)

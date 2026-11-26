@@ -458,7 +458,8 @@ type UDPRelay struct {
 	cancel    context.CancelFunc
 	relay     net.PacketConn // client-facing UDP socket
 	clientIP  net.IP         // allowed client IP (from TCP auth)
-	natTable  natTable       // target addr → *natEntry
+	natTable  natTable       // target addr → *natEntry (legacy 4-tuple fallback)
+	eimTable  eimSessionTable // (clientAddr, egress, family) → *eimSessionEntry (full-cone EIM)
 	dialGroup singleflight.Group
 	jobs      chan udpPacket // reader → worker pool
 	done      chan struct{}  // closed when relay is shutting down
@@ -655,6 +656,9 @@ func (r *UDPRelay) handlePacket(job udpPacket) {
 	}
 
 	payload := buf[header.DataOffset:]
+	if r.tryHandlePacketEIM(header, payload, job.clientAddr) {
+		return
+	}
 	targetAddr := header.Addr.Address()
 
 	// Get or create outbound connection for this target.
@@ -955,6 +959,9 @@ func (r *UDPRelay) Close() error {
 
 		// Close all active NAT entries.
 		for _, entry := range r.natTable.Drain() {
+			entry.Close()
+		}
+		for _, entry := range r.eimTable.Drain() {
 			entry.Close()
 		}
 		if r.associationHeld {

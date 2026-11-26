@@ -25,13 +25,33 @@ func (s *Service) handleTCPRequest(request *tcp.ForwarderRequest) {
 	if request == nil {
 		return
 	}
+	id := request.ID()
+
+	// Validate destination and reject decisively blocked IPs before completing
+	// the gVisor TCP handshake, emitting an immediate SYN-RST with zero endpoint
+	// allocation.
+	destination, err := endpointAddress(id.LocalAddress, id.LocalPort)
+	if err != nil {
+		s.rejectTCPRequest(request)
+		return
+	}
+	isDNS := s.isDNSHijackDestination(id.LocalAddress, id.LocalPort)
+	if !isDNS {
+		s.hooksMu.RLock()
+		custom := s.customRoute
+		s.hooksMu.RUnlock()
+		if !custom && router.IPBlockDecisive(destination.Addr().String()) {
+			s.rejectTCPRequest(request)
+			return
+		}
+	}
+
 	if !s.beginFlow() {
 		s.rejectTCPRequest(request)
 		return
 	}
 	defer s.endFlow()
 
-	id := request.ID()
 	var waitQueue waiter.Queue
 	endpoint, tcpErr := request.CreateEndpoint(&waitQueue)
 	if tcpErr != nil {
@@ -39,11 +59,12 @@ func (s *Service) handleTCPRequest(request *tcp.ForwarderRequest) {
 		return
 	}
 	request.Complete(false)
+	endpoint.SocketOptions().SetKeepAlive(true)
 
 	conn := newTCPConn(gonet.NewTCPConn(&waitQueue, endpoint), endpoint)
 	defer utils.Close(conn)
 
-	if s.cfg.DNS.Enabled && id.LocalPort == 53 {
+	if isDNS {
 		s.serveTCPDNS(conn)
 		return
 	}
